@@ -30,10 +30,12 @@ async function main() {
   }
 
   await page.getByRole("button", { name: "Approve and price with LLM" }).click();
-  await page.getByText("$37,960.18", { exact: false }).waitFor({ timeout: 20000 });
+  await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsEngine").getByText("LLM-assisted", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsPage").getByText("$37,960.18", { exact: true }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "pricing.png"), fullPage: false });
 
-  const annualVisible = (await page.locator("#pricingSummary").textContent()).includes("$455,522.16");
+  const annualVisible = (await page.locator("#resultsPage").textContent()).includes("$455,522.16");
   if (!annualVisible) {
     throw new Error("Annual total was not visible after pricing.");
   }
@@ -48,7 +50,8 @@ async function main() {
   await mobile.getByText("Review uploaded data", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-review.png"), fullPage: false });
   await mobile.getByRole("button", { name: "Approve and price with LLM" }).click();
-  await mobile.getByText("$37,960.18", { exact: false }).waitFor({ timeout: 20000 });
+  await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: 20000 });
+  await mobile.locator("#resultsPage").getByText("$37,960.18", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-pricing.png"), fullPage: false });
 
   await browser.close();

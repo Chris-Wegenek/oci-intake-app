@@ -22,7 +22,7 @@
       </nav>
     </header>
 
-    <main class="layout">
+    <main id="intakePage" class="layout">
       <section class="workspace">
         <div id="uploadPanel" class="upload-panel">
           <div class="upload-copy">
@@ -101,6 +101,69 @@
           </div>
         </section>
       </aside>
+    </main>
+
+    <main id="resultsPage" class="results-page is-hidden">
+      <section class="results-hero">
+        <div>
+          <p class="page-kicker">LLM-assisted estimate</p>
+          <h2>OCI cost breakdown</h2>
+          <p id="resultsSubtitle">Pricing is ready for review.</p>
+        </div>
+        <div class="results-actions">
+          <button id="backToReview" class="ghost-button" type="button">Back to review</button>
+          <button id="rerunPricing" class="primary-button" type="button">Reprice with LLM</button>
+        </div>
+      </section>
+
+      <section id="resultsKpis" class="results-kpis" aria-label="Cost summary"></section>
+
+      <section class="results-grid">
+        <article class="insight-panel cost-mix-panel">
+          <div class="panel-heading">
+            <h3>Cost mix by SKU</h3>
+            <span>Monthly estimate</span>
+          </div>
+          <div class="cost-mix">
+            <div id="costDonut" class="cost-donut" aria-label="Cost mix chart"></div>
+            <div id="costLegend" class="cost-legend"></div>
+          </div>
+        </article>
+
+        <article class="insight-panel">
+          <div class="panel-heading">
+            <h3>Top workloads</h3>
+            <span>Highest monthly cost</span>
+          </div>
+          <div id="topWorkloads" class="bar-list"></div>
+        </article>
+
+        <article class="insight-panel">
+          <div class="panel-heading">
+            <h3>Resource footprint</h3>
+            <span>Approved rows</span>
+          </div>
+          <div id="resourceFootprint" class="resource-stack"></div>
+        </article>
+
+        <article class="insight-panel">
+          <div class="panel-heading">
+            <h3>LLM review notes</h3>
+            <span id="resultsEngine">Pending</span>
+          </div>
+          <div id="llmNotes" class="notes-list"></div>
+        </article>
+      </section>
+
+      <section class="insight-panel result-detail-panel">
+        <div class="panel-heading">
+          <h3>Application cost detail</h3>
+          <span id="resultRowCount">0 workloads</span>
+        </div>
+        <div class="result-detail-wrap">
+          <table id="resultsTable" class="detail-table"></table>
+        </div>
+      </section>
     </main>
 
     <template id="rateRowTemplate">
