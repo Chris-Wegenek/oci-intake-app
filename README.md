@@ -18,6 +18,19 @@ The pricing endpoint always performs deterministic SKU math from the supplied ra
 OPENAI_API_KEY=... OPENAI_MODEL=gpt-4o-mini /Users/gus/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 app.py
 ```
 
+For local development, copy `.env.example` to `.env.local` and put your real key there. `.env.local` is intentionally ignored by Git.
+
+## Vercel deployment
+
+This repo includes `vercel.json`, `api/index.py`, and `requirements.txt` so Vercel can run the Python backend as a serverless function.
+
+In Vercel, add these environment variables before deploying:
+
+- `OPENAI_API_KEY`: your OpenAI API key
+- `OPENAI_MODEL`: optional, defaults to `gpt-4.1-mini`
+
+Do not commit the real API key to GitHub. The app reads it from Vercel at runtime.
+
 ## Rate card
 
 - `B97384`: OCPU-hour rate, `OCPU x 730`

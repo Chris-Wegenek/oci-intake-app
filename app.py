@@ -21,7 +21,12 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
-UPLOAD_DIR = ROOT / "uploads"
+UPLOAD_DIR = Path(
+    os.environ.get(
+        "UPLOAD_DIR",
+        "/tmp/oci-intake-uploads" if os.environ.get("VERCEL") else str(ROOT / "uploads"),
+    ),
+)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 PORT = int(os.environ.get("PORT", "8787"))

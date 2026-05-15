@@ -92,6 +92,23 @@ function normalizeText(value) {
     .trim();
 }
 
+async function fetchJson(url, options = {}, timeoutMs = 60000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const payload = await response.json();
+    return { response, payload };
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("The request took too long. Please refresh and try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 function findField(rule) {
   const terms = rule.contains.map(normalizeText);
   const section = normalizeText(rule.section);
@@ -180,14 +197,18 @@ function headerCell(label) {
 async function uploadFile(file) {
   if (!file) return;
   els.uploadStatus.textContent = `Uploading ${file.name}...`;
+  els.uploadStatus.style.color = "var(--muted)";
   const body = new FormData();
   body.append("file", file);
 
-  const response = await fetch("/api/upload", {
-    method: "POST",
-    body,
-  });
-  const payload = await response.json();
+  const { response, payload } = await fetchJson(
+    "/api/upload",
+    {
+      method: "POST",
+      body,
+    },
+    45000,
+  );
   if (!response.ok) {
     throw new Error(payload.error || "Upload failed.");
   }
@@ -237,12 +258,15 @@ async function priceRows() {
   els.engineStatus.textContent = "Mapping SKUs";
 
   try {
-    const response = await fetch("/api/price", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields: state.fields, rows: state.rows }),
-    });
-    const payload = await response.json();
+    const { response, payload } = await fetchJson(
+      "/api/price",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: state.fields, rows: state.rows }),
+      },
+      70000,
+    );
     if (!response.ok) {
       throw new Error(payload.error || "Pricing failed.");
     }
