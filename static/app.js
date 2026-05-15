@@ -10,13 +10,13 @@ const state = {
 const PREVIEW_FIELD_RULES = [
   { label: "Application Name", contains: ["application name"] },
   { label: "Environment", contains: ["environment"] },
-  { label: "Application Details", contains: ["application type"], section: "Application Details" },
+  { label: "Application Details", containsAny: [["application details"], ["application type"], ["description"]] },
   { label: "Application Version", contains: ["application version"], section: "Application Details" },
-  { label: "Operating System", contains: ["operating system"], section: "Application Details" },
-  { label: "CPUs", contains: ["number of cpu cores per server"], section: "Application Details" },
-  { label: "RAM (GB)", contains: ["memory per server"], section: "Application Details" },
-  { label: "Chipset", contains: ["chipset"], section: "Application Details" },
-  { label: "Storage (GB)", contains: ["local storage"], section: "Application Details" },
+  { label: "Operating System", containsAny: [["operating system"], ["os version"], [" os "]], section: "Application Details" },
+  { label: "CPUs", containsAny: [["number of cpu cores per server"], ["number of cpus"], ["vcpu"], ["cpu cores"], ["cores"]], section: "Application Details" },
+  { label: "RAM (GB)", containsAny: [["memory per server"], ["memory"], ["ram"]], section: "Application Details" },
+  { label: "Chipset", containsAny: [["chipset"], ["processor family"], ["cpu type"], ["architecture"]], section: "Application Details" },
+  { label: "Storage (GB)", containsAny: [["local storage"], ["storage"], ["disk"]], section: "Application Details" },
 ];
 
 const els = {
@@ -149,12 +149,12 @@ async function fetchJson(url, options = {}, timeoutMs = 60000) {
 }
 
 function findField(rule) {
-  const terms = rule.contains.map(normalizeText);
+  const matchGroups = (rule.containsAny || [rule.contains || []]).map((group) => group.map(normalizeText));
   const section = normalizeText(rule.section);
   const match = state.fields.find((field) => {
-    const label = normalizeText(field.label);
-    if (section && !label.startsWith(section)) return false;
-    return terms.every((term) => label.includes(term));
+    const label = ` ${normalizeText(field.label)} `;
+    if (section && !label.trim().startsWith(section)) return false;
+    return matchGroups.some((terms) => terms.every((term) => label.includes(` ${term} `) || label.includes(term)));
   });
   return match ? { ...match, label: rule.label } : null;
 }
@@ -302,7 +302,7 @@ function headerCell(label) {
 
 async function uploadFile(file) {
   if (!file) return;
-  els.uploadStatus.textContent = `Uploading ${file.name}...`;
+  els.uploadStatus.textContent = `Uploading and analyzing ${file.name} with the LLM...`;
   els.uploadStatus.style.color = "var(--muted)";
   const body = new FormData();
   body.append("file", file);
@@ -313,7 +313,7 @@ async function uploadFile(file) {
       method: "POST",
       body,
     },
-    45000,
+    100000,
   );
   if (!response.ok) {
     throw new Error(payload.error || "Upload failed.");
@@ -330,16 +330,24 @@ async function uploadFile(file) {
   showIntakePage();
   els.uploadPanel.classList.add("is-hidden");
   els.reviewPanel.classList.remove("is-hidden");
-  els.sheetMeta.textContent = `${payload.fileName} • sheet "${payload.sheetName}" • data begins on row ${payload.metadata.dataStartRow}`;
+  const parserLabel = payload.metadata?.parser === "llm-assisted" ? "LLM normalized" : "Rule-based parse";
+  const grain = payload.metadata?.serverGrain && payload.metadata.serverGrain !== "unknown" ? ` • ${payload.metadata.serverGrain} grain` : "";
+  els.sheetMeta.textContent = `${payload.fileName} • sheet "${payload.sheetName}" • ${parserLabel}${grain} • data begins on row ${payload.metadata.dataStartRow}`;
   els.sheetName.textContent = payload.sheetName;
   renderRateCard();
   renderShapeChoices();
   renderShapeDetail();
   renderTable();
   setStep("review");
-  els.engineStatus.textContent = "Ready for approval";
+  els.engineStatus.textContent = payload.metadata?.parser === "llm-assisted" ? "LLM normalized upload" : "Ready for approval";
   els.pricingSummary.className = "empty-state";
-  els.pricingSummary.textContent = "Review the rows, make adjustments, then choose the OCI flex shape to price.";
+  const notes = payload.metadata?.extractionNotes || [];
+  const warning = payload.llmWarning ? `${payload.llmWarning} ` : "";
+  els.pricingSummary.textContent =
+    warning ||
+    (notes.length
+      ? `Review the normalized rows. ${notes.slice(0, 2).join(" ")}`
+      : "Review the rows, make adjustments, then choose the OCI flex shape to price.");
 }
 
 function setUploadingError(error) {

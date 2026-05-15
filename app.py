@@ -34,6 +34,130 @@ HOURS_PER_MONTH = 730
 
 DEFAULT_SHAPE_KEY = "e6-standard-ax"
 
+CANONICAL_INVENTORY_FIELDS = [
+    {
+        "key": "application_name",
+        "label": "Application Name",
+        "description": "Application, workload, server, VM, host, or inventory item name.",
+        "aliases": [
+            "application name",
+            "app name",
+            "name",
+            "product",
+            "workload",
+            "server name",
+            "hostname",
+            "host name",
+            "vm name",
+            "asset name",
+        ],
+    },
+    {
+        "key": "environment",
+        "label": "Environment",
+        "description": "Environment such as prod, dev, qa, test, uat, disaster recovery, or staging.",
+        "aliases": ["environment", "env", "tier", "stage", "lifecycle"],
+    },
+    {
+        "key": "application_details",
+        "label": "Application Details",
+        "description": "Application description, type, function, business role, or notes.",
+        "aliases": ["application details", "application type", "description", "business function", "app details", "role", "purpose"],
+    },
+    {
+        "key": "application_details_application_version",
+        "label": "Application Details: Application Version",
+        "description": "Application, product, or platform version.",
+        "aliases": ["application version", "app version", "version", "release"],
+    },
+    {
+        "key": "application_details_operating_system",
+        "label": "Application Details: Operating System",
+        "description": "Operating system name and version.",
+        "aliases": ["operating system", "os", "os version", "platform"],
+    },
+    {
+        "key": "application_details_number_of_servers",
+        "label": "Application Details: Number of Servers",
+        "description": "How many application servers, VMs, hosts, nodes, or instances this row represents.",
+        "aliases": ["number of servers", "server count", "servers", "instances", "nodes", "vm count", "quantity", "qty"],
+    },
+    {
+        "key": "application_details_number_of_cpu_cores_per_server",
+        "label": "Application Details: Number of CPU Cores per Server",
+        "description": "vCPU, CPU core, processor, or core count per server. 2 vCPU equals 1 OCPU.",
+        "aliases": ["number of cpu cores per server", "cpu", "cpus", "vcpu", "vcpus", "cores", "cpu cores", "processors"],
+    },
+    {
+        "key": "application_details_memory_per_server_gb",
+        "label": "Application Details: Memory per server (GB)",
+        "description": "RAM or memory per server in GB.",
+        "aliases": ["memory per server", "memory", "ram", "memory gb", "ram gb", "mem"],
+    },
+    {
+        "key": "application_details_chipset",
+        "label": "Application Details: Chipset",
+        "description": "CPU chipset, processor family, architecture, or platform family.",
+        "aliases": ["chipset", "processor family", "cpu type", "architecture", "processor", "hardware family"],
+    },
+    {
+        "key": "application_details_local_storage_gb",
+        "label": "Application Details: Local Storage (GB)",
+        "description": "Local VM disk, OS disk, data disk, or directly attached block storage in GB.",
+        "aliases": ["local storage", "storage", "disk", "disk gb", "allocated storage", "block storage", "data disk", "os disk"],
+    },
+    {
+        "key": "application_details_shared_storage_gb",
+        "label": "Application Details: Shared Storage (GB)",
+        "description": "Shared, NAS, NFS, SMB, ETL, or file storage in GB.",
+        "aliases": ["shared storage", "nas", "nfs", "file storage", "shared disk", "smb"],
+    },
+    {
+        "key": "database_details_number_of_database_servers",
+        "label": "Database Details: Number of Database Servers",
+        "description": "How many database servers, database nodes, or DB instances this row represents.",
+        "aliases": ["number of database servers", "database servers", "db servers", "db nodes", "database instances"],
+    },
+    {
+        "key": "database_details_number_of_cpu_cores_per_server",
+        "label": "Database Details: Number of CPU Cores per Server",
+        "description": "Database vCPU, CPU core, processor, or core count per DB server.",
+        "aliases": ["database cpu", "db cpu", "database cores", "db cores", "database vcpu", "db vcpu"],
+    },
+    {
+        "key": "database_details_memory_per_server_gb",
+        "label": "Database Details: Memory per server (GB)",
+        "description": "Database RAM or memory per DB server in GB.",
+        "aliases": ["database memory", "db memory", "database ram", "db ram"],
+    },
+    {
+        "key": "database_details_total_allocated_storage_gb",
+        "label": "Database Details: Total Allocated Storage (GB)",
+        "description": "Database storage, allocated DB storage, datafile size, or total database disk in GB.",
+        "aliases": ["total allocated storage", "database storage", "db storage", "database size", "db size", "total storage"],
+    },
+]
+
+CANONICAL_FIELD_BY_KEY = {field["key"]: field for field in CANONICAL_INVENTORY_FIELDS}
+NUMERIC_FIELD_KEYS = {
+    "application_details_number_of_servers",
+    "application_details_number_of_cpu_cores_per_server",
+    "application_details_memory_per_server_gb",
+    "application_details_local_storage_gb",
+    "application_details_shared_storage_gb",
+    "database_details_number_of_database_servers",
+    "database_details_number_of_cpu_cores_per_server",
+    "database_details_memory_per_server_gb",
+    "database_details_total_allocated_storage_gb",
+}
+SIZE_FIELD_KEYS = {
+    "application_details_memory_per_server_gb",
+    "application_details_local_storage_gb",
+    "application_details_shared_storage_gb",
+    "database_details_memory_per_server_gb",
+    "database_details_total_allocated_storage_gb",
+}
+
 SHAPE_DEFINITIONS = [
     {
         "key": "e4-standard",
@@ -159,6 +283,63 @@ def to_number(value, default=0.0):
     return float(match.group(0)) if match else default
 
 
+def to_gb(value, default=0.0):
+    number = to_number(value, default)
+    text = normalize(value)
+    if not text:
+        return default
+    if re.search(r"\btb\b|terabyte", text):
+        return number * 1024
+    if re.search(r"\bmb\b|megabyte", text):
+        return number / 1024
+    if re.search(r"\bkb\b|kilobyte", text):
+        return number / (1024 * 1024)
+    return number
+
+
+def compact_number(value):
+    if value == "":
+        return ""
+    number = float(value)
+    if number.is_integer():
+        return int(number)
+    return round(number, 4)
+
+
+def normalize_inventory_value(key, value):
+    if clean_text(value) == "":
+        return ""
+    if key in SIZE_FIELD_KEYS:
+        return compact_number(to_gb(value))
+    if key in NUMERIC_FIELD_KEYS:
+        return compact_number(to_number(value))
+    return clean_cell(value)
+
+
+def canonical_fields_payload():
+    return [
+        {
+            "key": field["key"],
+            "label": field["label"],
+            "sourceColumn": None,
+            "important": True,
+        }
+        for field in CANONICAL_INVENTORY_FIELDS
+    ]
+
+
+def canonical_field_prompt():
+    return [
+        {
+            "key": field["key"],
+            "label": field["label"],
+            "description": field["description"],
+            "aliases": field["aliases"],
+        }
+        for field in CANONICAL_INVENTORY_FIELDS
+    ]
+
+
 def resolve_shape(shape_key=None):
     return SHAPE_LOOKUP.get(shape_key or DEFAULT_SHAPE_KEY, SHAPE_LOOKUP[DEFAULT_SHAPE_KEY])
 
@@ -278,7 +459,7 @@ def build_fields(raw, group_row, header_row):
     return fields
 
 
-def parse_workbook(path):
+def parse_workbook_rule_based(path):
     excel_file = pd.ExcelFile(path)
     sheet = pick_sheet(excel_file)
     raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
@@ -310,8 +491,299 @@ def parse_workbook(path):
             "dataStartRow": data_start + 1,
             "rowCount": len(rows),
             "columnCount": len(fields),
+            "parser": "rule-based",
         },
     }
+
+
+def workbook_digest(path):
+    excel_file = pd.ExcelFile(path)
+    sheets = []
+    for sheet in excel_file.sheet_names:
+        raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
+        max_rows = min(45, len(raw.index))
+        max_cols = min(35, len(raw.columns))
+        sample_rows = []
+        row_density = []
+
+        for row_idx in range(min(100, len(raw.index))):
+            values = raw.iloc[row_idx].tolist()
+            non_blank = [clean_text(value) for value in values if clean_text(value)]
+            if non_blank:
+                row_density.append(
+                    {
+                        "row": row_idx + 1,
+                        "nonBlank": len(non_blank),
+                        "preview": non_blank[:12],
+                    }
+                )
+
+        for row_idx in range(max_rows):
+            cells = []
+            for col_idx in range(max_cols):
+                value = clean_text(raw.iat[row_idx, col_idx])
+                if value:
+                    cells.append({"column": col_idx + 1, "value": value[:140]})
+            if cells:
+                sample_rows.append({"row": row_idx + 1, "cells": cells[:24]})
+
+        sheets.append(
+            {
+                "name": sheet,
+                "rowCount": int(len(raw.index)),
+                "columnCount": int(len(raw.columns)),
+                "sampleRows": sample_rows,
+                "likelyHeaderRows": sorted(row_density, key=lambda item: item["nonBlank"], reverse=True)[:8],
+            }
+        )
+
+    return {"sheets": sheets}
+
+
+def header_label(raw, header_rows, col_idx):
+    parts = []
+    for row_number in header_rows:
+        row_idx = int(row_number) - 1
+        if 0 <= row_idx < len(raw.index):
+            part = clean_text(raw.iat[row_idx, col_idx])
+            if part and part not in parts:
+                parts.append(part)
+    return " ".join(parts)
+
+
+def alias_score(label, field):
+    label_norm = normalize(label)
+    if not label_norm:
+        return 0
+    aliases = [field["label"], *field["aliases"]]
+    score = 0
+    for alias in aliases:
+        alias_norm = normalize(alias)
+        if not alias_norm:
+            continue
+        if label_norm == alias_norm:
+            score = max(score, 100 + len(alias_norm))
+        elif alias_norm in label_norm:
+            score = max(score, 60 + len(alias_norm))
+        elif label_norm in alias_norm and len(label_norm) >= 4:
+            score = max(score, 30 + len(label_norm))
+
+    is_database = any(term in label_norm for term in ["database", "db ", " db", "sql", "oracle db"])
+    field_is_database = field["key"].startswith("database_details")
+    if is_database and field_is_database:
+        score += 14
+    elif is_database and not field_is_database:
+        score -= 12
+
+    is_shared = any(term in label_norm for term in ["shared", "nas", "nfs", "file"])
+    if is_shared and field["key"] == "application_details_shared_storage_gb":
+        score += 16
+    elif is_shared and field["key"] == "application_details_local_storage_gb":
+        score -= 10
+
+    return score
+
+
+def infer_column_mappings(raw, header_rows):
+    mappings = {}
+    for col_idx in range(len(raw.columns)):
+        label = header_label(raw, header_rows, col_idx)
+        best = None
+        best_score = 0
+        for field in CANONICAL_INVENTORY_FIELDS:
+            score = alias_score(label, field)
+            if score > best_score:
+                best = field
+                best_score = score
+        if best and best_score >= 45 and best["key"] not in mappings:
+            mappings[best["key"]] = {
+                "canonicalKey": best["key"],
+                "sourceColumn": col_idx + 1,
+                "sourceHeader": label,
+                "confidence": min(0.98, best_score / 130),
+            }
+    return mappings
+
+
+def validated_column_mappings(raw, header_rows, mappings):
+    validated = {}
+    for key, mapping in mappings.items():
+        field = CANONICAL_FIELD_BY_KEY.get(key)
+        if not field:
+            continue
+        source_column = int(to_number(mapping.get("sourceColumn"), 0))
+        if source_column <= 0:
+            continue
+        actual_header = header_label(raw, header_rows, source_column - 1) or clean_text(mapping.get("sourceHeader"))
+        if actual_header and alias_score(actual_header, field) < 35:
+            continue
+        validated[key] = {
+            **mapping,
+            "sourceHeader": actual_header,
+            "sourceColumn": source_column,
+        }
+    return validated
+
+
+def normalize_workbook_plan(plan, excel_file):
+    if not isinstance(plan, dict):
+        return None
+    sheet_name = clean_text(plan.get("sheetName"))
+    if sheet_name not in excel_file.sheet_names:
+        normalized_target = normalize(sheet_name)
+        matches = [name for name in excel_file.sheet_names if normalize(name) == normalized_target]
+        sheet_name = matches[0] if matches else ""
+    if not sheet_name:
+        return None
+
+    header_rows = plan.get("headerRows") or plan.get("headerRow") or []
+    if isinstance(header_rows, (str, int, float)):
+        header_rows = [header_rows]
+    header_rows = [int(to_number(item)) for item in header_rows if to_number(item)]
+    header_rows = sorted({row for row in header_rows if row > 0})
+
+    data_start = int(to_number(plan.get("dataStartRow"), 0))
+    if data_start <= 0 and header_rows:
+        data_start = max(header_rows) + 1
+    if data_start <= 0:
+        data_start = 2
+
+    data_end = int(to_number(plan.get("dataEndRow"), 0))
+    raw_mappings = plan.get("columnMappings", [])
+    if isinstance(raw_mappings, dict):
+        raw_mappings = [
+            {"canonicalKey": key, **value} if isinstance(value, dict) else {"canonicalKey": key, "sourceColumn": value}
+            for key, value in raw_mappings.items()
+        ]
+
+    mappings = {}
+    for item in raw_mappings:
+        if not isinstance(item, dict):
+            continue
+        key = clean_text(item.get("canonicalKey") or item.get("key"))
+        source_column = int(to_number(item.get("sourceColumn"), 0))
+        if key in CANONICAL_FIELD_BY_KEY and source_column > 0:
+            mappings[key] = {
+                "canonicalKey": key,
+                "sourceColumn": source_column,
+                "sourceHeader": clean_text(item.get("sourceHeader")),
+                "confidence": to_number(item.get("confidence"), 0),
+                "transform": clean_text(item.get("transform")),
+            }
+
+    return {
+        "sheetName": sheet_name,
+        "headerRows": header_rows,
+        "dataStartRow": data_start,
+        "dataEndRow": data_end or None,
+        "serverGrain": normalize(plan.get("serverGrain")) or "unknown",
+        "confidence": to_number(plan.get("confidence"), 0),
+        "columnMappings": mappings,
+        "notes": plan.get("notes", []),
+    }
+
+
+def should_keep_inventory_row(row):
+    identity = clean_text(row.get("application_name")) or clean_text(row.get("environment"))
+    resources = [
+        to_number(row.get("application_details_number_of_servers")),
+        to_number(row.get("application_details_number_of_cpu_cores_per_server")),
+        to_number(row.get("application_details_memory_per_server_gb")),
+        to_number(row.get("application_details_local_storage_gb")),
+        to_number(row.get("database_details_number_of_database_servers")),
+        to_number(row.get("database_details_number_of_cpu_cores_per_server")),
+        to_number(row.get("database_details_memory_per_server_gb")),
+        to_number(row.get("database_details_total_allocated_storage_gb")),
+    ]
+    return bool(identity and any(value for value in resources))
+
+
+def parse_workbook_from_plan(path, plan):
+    excel_file = pd.ExcelFile(path)
+    raw = pd.read_excel(path, sheet_name=plan["sheetName"], header=None, dtype=object)
+    header_rows = plan["headerRows"] or [max(1, plan["dataStartRow"] - 1)]
+    mappings = validated_column_mappings(raw, header_rows, dict(plan["columnMappings"]))
+    inferred = infer_column_mappings(raw, header_rows)
+    for key, mapping in inferred.items():
+        mappings.setdefault(key, mapping)
+
+    fields = canonical_fields_payload()
+    for field in fields:
+        mapping = mappings.get(field["key"])
+        if mapping:
+            field["sourceColumn"] = mapping["sourceColumn"]
+            field["sourceHeader"] = mapping.get("sourceHeader") or header_label(raw, header_rows, mapping["sourceColumn"] - 1)
+
+    rows = []
+    row_end = plan["dataEndRow"] or len(raw.index)
+    row_end = min(row_end, len(raw.index))
+    data_start_idx = max(0, plan["dataStartRow"] - 1)
+
+    for raw_idx in range(data_start_idx, row_end):
+        values = raw.iloc[raw_idx].tolist()
+        if not any(clean_text(value) for value in values):
+            continue
+
+        row = {"__id": f"row-{raw_idx + 1}", "__sourceRow": raw_idx + 1, "__approved": True}
+        for field in fields:
+            mapping = mappings.get(field["key"])
+            value = ""
+            if mapping:
+                col_idx = mapping["sourceColumn"] - 1
+                if 0 <= col_idx < len(values):
+                    value = values[col_idx]
+            row[field["key"]] = normalize_inventory_value(field["key"], value)
+
+        if plan["serverGrain"] in {"server", "vm", "host", "asset", "inventory row"}:
+            if not row.get("application_details_number_of_servers") and (
+                row.get("application_details_number_of_cpu_cores_per_server")
+                or row.get("application_details_memory_per_server_gb")
+                or row.get("application_details_local_storage_gb")
+            ):
+                row["application_details_number_of_servers"] = 1
+
+        if should_keep_inventory_row(row):
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("The LLM workbook plan did not produce inventory rows.")
+
+    return {
+        "fileName": Path(path).name,
+        "sheetName": plan["sheetName"],
+        "sheets": excel_file.sheet_names,
+        "fields": fields,
+        "rows": rows,
+        "rateCard": build_rate_card(DEFAULT_SHAPE_KEY),
+        "rateCards": all_shape_payloads(),
+        "selectedShape": shape_payload(DEFAULT_SHAPE_KEY),
+        "metadata": {
+            "headerRows": header_rows,
+            "dataStartRow": plan["dataStartRow"],
+            "dataEndRow": row_end,
+            "rowCount": len(rows),
+            "columnCount": len(fields),
+            "parser": "llm-assisted",
+            "confidence": plan.get("confidence", 0),
+            "serverGrain": plan.get("serverGrain", "unknown"),
+            "extractionNotes": plan.get("notes", []),
+        },
+    }
+
+
+def parse_workbook(path):
+    llm_warning = None
+    try:
+        plan, llm_warning = call_llm_workbook_plan(path)
+        if plan:
+            return parse_workbook_from_plan(path, plan)
+    except Exception as exc:
+        llm_warning = f"LLM workbook interpretation did not complete; used rule-based spreadsheet parsing. Detail: {exc}"
+
+    parsed = parse_workbook_rule_based(path)
+    if llm_warning:
+        parsed["llmWarning"] = llm_warning
+    return parsed
 
 
 def find_key(fields, contains, section=None):
@@ -572,28 +1044,18 @@ def describe_http_error(exc):
         return f"{exc} | {payload[:300]}"
 
 
-def call_llm_mapping(pricing):
+def call_openai_json(system_content, user_payload, max_output_tokens=1600, timeout=45):
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        return None, "OPENAI_API_KEY is not set; used deterministic SKU mapping."
+        return None, "OPENAI_API_KEY is not set."
 
     model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
-    prompt = compact_llm_summary(pricing)
     body = {
         "model": model,
-        "max_output_tokens": 1200,
+        "max_output_tokens": max_output_tokens,
         "input": [
-            {
-                "role": "system",
-                "content": (
-                    "You are an Oracle Cloud Infrastructure pricing mapper. "
-                    "Validate whether the SKU mapping rules and selected OCI flexible compute shape are appropriate "
-                    "for an uploaded infrastructure inventory. "
-                    "Return compact JSON only with keys globalAssumptions, mappingRules, and reviewNotes. "
-                    "Do not recalculate every row; validate the rules and call out mapping risks."
-                ),
-            },
-            {"role": "user", "content": json.dumps(prompt)},
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": json.dumps(user_payload)},
         ],
     }
     request = urllib.request.Request(
@@ -606,14 +1068,60 @@ def call_llm_mapping(pricing):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=45) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
         text = extract_response_text(payload)
         return parse_jsonish(text), None
     except urllib.error.HTTPError as exc:
-        return None, f"LLM call did not complete; used deterministic SKU mapping. Detail: {describe_http_error(exc)}"
+        return None, describe_http_error(exc)
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        return None, f"LLM call did not complete; used deterministic SKU mapping. Detail: {exc}"
+        return None, str(exc)
+
+
+def call_llm_workbook_plan(path):
+    digest = workbook_digest(path)
+    system = (
+        "You interpret Excel infrastructure inventory workbooks for an Oracle Cloud Infrastructure intake app. "
+        "Given workbook sheet samples, identify the sheet and row range that contain servers, applications, VMs, "
+        "hosts, databases, or other infrastructure inventory. Return compact JSON only. "
+        "Use 1-based row and column numbers. Do not invent missing columns. "
+        "Map source columns to the provided canonical fields when the source appears equivalent, even if headings use "
+        "terms like hostname, VM, instance, vCPU, RAM, disk, storage, OS, platform, environment, or application. "
+        "If each row is one server/VM/host, set serverGrain to 'server'. If each row is an application/workload "
+        "that may represent many servers, set serverGrain to 'application'. "
+        "Return this shape: {sheetName, headerRows, dataStartRow, dataEndRow, serverGrain, confidence, "
+        "columnMappings:[{canonicalKey, sourceColumn, sourceHeader, confidence, transform}], notes:[string]}. "
+        "For transform, briefly say unit conversions needed, such as TB to GB."
+    )
+    payload = {
+        "canonicalFields": canonical_field_prompt(),
+        "workbook": digest,
+    }
+    plan, warning = call_openai_json(system, payload, max_output_tokens=2800, timeout=45)
+    if warning:
+        return None, f"LLM workbook interpretation did not complete; used rule-based spreadsheet parsing. Detail: {warning}"
+    excel_file = pd.ExcelFile(path)
+    normalized = normalize_workbook_plan(plan, excel_file)
+    if not normalized:
+        return None, "LLM workbook interpretation did not identify a usable inventory table; used rule-based spreadsheet parsing."
+    return normalized, None
+
+
+def call_llm_mapping(pricing):
+    prompt = compact_llm_summary(pricing)
+    system = (
+        "You are an Oracle Cloud Infrastructure pricing mapper. "
+        "Validate whether the SKU mapping rules and selected OCI flexible compute shape are appropriate "
+        "for an uploaded infrastructure inventory. "
+        "Return compact JSON only with keys globalAssumptions, mappingRules, and reviewNotes. "
+        "Do not recalculate every row; validate the rules and call out mapping risks."
+    )
+    payload, warning = call_openai_json(system, prompt, max_output_tokens=1200, timeout=45)
+    if warning:
+        if warning == "OPENAI_API_KEY is not set.":
+            return None, "OPENAI_API_KEY is not set; used deterministic SKU mapping."
+        return None, f"LLM call did not complete; used deterministic SKU mapping. Detail: {warning}"
+    return payload, None
 
 
 def enrich_with_llm(pricing, llm_payload):

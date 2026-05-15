@@ -12,6 +12,8 @@ Then open `http://127.0.0.1:8787`.
 
 ## LLM mode
 
+The upload endpoint uses the OpenAI Responses API when `OPENAI_API_KEY` is present to inspect workbook sheets, identify the inventory table, and map messy spreadsheet columns into the app's canonical server/application fields. If the LLM call is unavailable, upload falls back to the original rule-based workbook parser.
+
 The pricing endpoint always performs deterministic SKU math from the supplied rate card so the app is testable locally. If `OPENAI_API_KEY` is present, `/api/price` also calls the OpenAI Responses API to validate/enrich the SKU mapping. Set `OPENAI_MODEL` to override the default model.
 
 ```bash
