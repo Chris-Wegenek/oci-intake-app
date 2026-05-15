@@ -40,6 +40,13 @@
             <strong>Choose spreadsheet</strong>
             <span>or drag the workbook onto this upload area</span>
           </label>
+          <div id="uploadProgress" class="upload-progress is-hidden" role="status" aria-live="polite">
+            <div class="loading-mark" aria-hidden="true"></div>
+            <div>
+              <strong>LLM data cleaning in progress</strong>
+              <p id="uploadProgressDetail">Reading workbook sheets and normalizing server inventory fields.</p>
+            </div>
+          </div>
           <p id="uploadStatus" class="status-text" role="status"></p>
         </div>
 
@@ -83,7 +90,7 @@
         </div>
       </section>
 
-      <aside class="pricing-rail">
+      <aside id="pricingRail" class="pricing-rail is-hidden">
         <section class="rail-section">
           <div class="rail-heading">
             <h2>Rate card</h2>

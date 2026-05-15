@@ -23,8 +23,11 @@ const els = {
   fileInput: document.querySelector("#fileInput"),
   dropZone: document.querySelector("#dropZone"),
   uploadStatus: document.querySelector("#uploadStatus"),
+  uploadProgress: document.querySelector("#uploadProgress"),
+  uploadProgressDetail: document.querySelector("#uploadProgressDetail"),
   uploadPanel: document.querySelector("#uploadPanel"),
   intakePage: document.querySelector("#intakePage"),
+  pricingRail: document.querySelector("#pricingRail"),
   shapePage: document.querySelector("#shapePage"),
   reviewPanel: document.querySelector("#reviewPanel"),
   resultsPage: document.querySelector("#resultsPage"),
@@ -179,6 +182,25 @@ function renderRateCard() {
   });
 }
 
+function syncIntakeLayout() {
+  const hasReviewData = state.rows.length > 0;
+  els.intakePage.classList.toggle("has-review", hasReviewData);
+  els.pricingRail.classList.toggle("is-hidden", !hasReviewData);
+}
+
+function setUploadLoading(isLoading, fileName = "") {
+  els.uploadPanel.classList.toggle("is-uploading", isLoading);
+  els.uploadProgress.classList.toggle("is-hidden", !isLoading);
+  els.fileInput.disabled = isLoading;
+  if (isLoading) {
+    els.uploadStatus.textContent = "";
+    els.uploadStatus.style.color = "var(--muted)";
+    els.uploadProgressDetail.textContent = fileName
+      ? `Inspecting ${fileName}, finding the inventory table, and cleaning CPU, RAM, storage, OS, and environment fields.`
+      : "Reading workbook sheets and normalizing server inventory fields.";
+  }
+}
+
 function renderShapeChoices() {
   if (!els.shapeGrid) return;
   els.shapeGrid.innerHTML = state.rateCards
@@ -302,52 +324,56 @@ function headerCell(label) {
 
 async function uploadFile(file) {
   if (!file) return;
-  els.uploadStatus.textContent = `Uploading and analyzing ${file.name} with the LLM...`;
-  els.uploadStatus.style.color = "var(--muted)";
+  setUploadLoading(true, file.name);
   const body = new FormData();
   body.append("file", file);
 
-  const { response, payload } = await fetchJson(
-    "/api/upload",
-    {
-      method: "POST",
-      body,
-    },
-    100000,
-  );
-  if (!response.ok) {
-    throw new Error(payload.error || "Upload failed.");
+  try {
+    const { response, payload } = await fetchJson(
+      "/api/upload",
+      {
+        method: "POST",
+        body,
+      },
+      100000,
+    );
+    if (!response.ok) {
+      throw new Error(payload.error || "Upload failed.");
+    }
+
+    state.fields = payload.fields;
+    state.rows = payload.rows;
+    state.rateCards = payload.rateCards || [];
+    state.selectedShape = payload.selectedShape?.key || state.selectedShape;
+    state.rateCard = selectedShape().rateCard || payload.rateCard || [];
+    state.pricing = null;
+
+    els.uploadStatus.textContent = "";
+    showIntakePage();
+    els.uploadPanel.classList.add("is-hidden");
+    els.reviewPanel.classList.remove("is-hidden");
+    const parserLabel = payload.metadata?.parser === "llm-assisted" ? "LLM normalized" : "Rule-based parse";
+    const grain = payload.metadata?.serverGrain && payload.metadata.serverGrain !== "unknown" ? ` • ${payload.metadata.serverGrain} grain` : "";
+    els.sheetMeta.textContent = `${payload.fileName} • sheet "${payload.sheetName}" • ${parserLabel}${grain} • data begins on row ${payload.metadata.dataStartRow}`;
+    els.sheetName.textContent = payload.sheetName;
+    renderRateCard();
+    renderShapeChoices();
+    renderShapeDetail();
+    renderTable();
+    syncIntakeLayout();
+    setStep("review");
+    els.engineStatus.textContent = payload.metadata?.parser === "llm-assisted" ? "LLM normalized upload" : "Ready for approval";
+    els.pricingSummary.className = "empty-state";
+    const notes = payload.metadata?.extractionNotes || [];
+    const warning = payload.llmWarning ? `${payload.llmWarning} ` : "";
+    els.pricingSummary.textContent =
+      warning ||
+      (notes.length
+        ? `Review the normalized rows. ${notes.slice(0, 2).join(" ")}`
+        : "Review the rows, make adjustments, then choose the OCI flex shape to price.");
+  } finally {
+    setUploadLoading(false);
   }
-
-  state.fields = payload.fields;
-  state.rows = payload.rows;
-  state.rateCards = payload.rateCards || [];
-  state.selectedShape = payload.selectedShape?.key || state.selectedShape;
-  state.rateCard = selectedShape().rateCard || payload.rateCard || [];
-  state.pricing = null;
-
-  els.uploadStatus.textContent = "";
-  showIntakePage();
-  els.uploadPanel.classList.add("is-hidden");
-  els.reviewPanel.classList.remove("is-hidden");
-  const parserLabel = payload.metadata?.parser === "llm-assisted" ? "LLM normalized" : "Rule-based parse";
-  const grain = payload.metadata?.serverGrain && payload.metadata.serverGrain !== "unknown" ? ` • ${payload.metadata.serverGrain} grain` : "";
-  els.sheetMeta.textContent = `${payload.fileName} • sheet "${payload.sheetName}" • ${parserLabel}${grain} • data begins on row ${payload.metadata.dataStartRow}`;
-  els.sheetName.textContent = payload.sheetName;
-  renderRateCard();
-  renderShapeChoices();
-  renderShapeDetail();
-  renderTable();
-  setStep("review");
-  els.engineStatus.textContent = payload.metadata?.parser === "llm-assisted" ? "LLM normalized upload" : "Ready for approval";
-  els.pricingSummary.className = "empty-state";
-  const notes = payload.metadata?.extractionNotes || [];
-  const warning = payload.llmWarning ? `${payload.llmWarning} ` : "";
-  els.pricingSummary.textContent =
-    warning ||
-    (notes.length
-      ? `Review the normalized rows. ${notes.slice(0, 2).join(" ")}`
-      : "Review the rows, make adjustments, then choose the OCI flex shape to price.");
 }
 
 function setUploadingError(error) {
@@ -451,6 +477,7 @@ function showIntakePage() {
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  syncIntakeLayout();
   if (state.rows.length) {
     setStep("review");
   } else {
