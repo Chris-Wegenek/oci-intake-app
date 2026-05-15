@@ -931,34 +931,42 @@ def parse_workbook_from_plan(path, plan):
             if mapping.get("jsonKey"):
                 field["sourceJsonKey"] = mapping["jsonKey"]
 
-    rows = []
-    row_end = plan.get("dataEndRow") or len(raw.index)
-    row_end = min(row_end, len(raw.index))
-    data_start_idx = max(0, plan["dataStartRow"] - 1)
+    def build_rows(data_start_row, data_end_row):
+        parsed_rows = []
+        row_end = min(data_end_row or len(raw.index), len(raw.index))
+        data_start_idx = max(0, data_start_row - 1)
 
-    for raw_idx in range(data_start_idx, row_end):
-        values = raw.iloc[raw_idx].tolist()
-        if not any(clean_text(value) for value in values):
-            continue
+        for raw_idx in range(data_start_idx, row_end):
+            values = raw.iloc[raw_idx].tolist()
+            if not any(clean_text(value) for value in values):
+                continue
 
-        row = {"__id": f"row-{raw_idx + 1}", "__sourceRow": raw_idx + 1, "__approved": True}
-        for field in fields:
-            mapping = mappings.get(field["key"])
-            value = ""
-            if mapping:
-                col_idx = mapping["sourceColumn"] - 1
-                if 0 <= col_idx < len(values):
-                    value = values[col_idx]
-                    if mapping.get("jsonKey") or mapping.get("jsonPath"):
-                        value = value_from_json_cell(value, mapping.get("jsonKey") or mapping.get("jsonPath"))
-            row[field["key"]] = normalize_inventory_value(field["key"], value)
+            row = {"__id": f"row-{raw_idx + 1}", "__sourceRow": raw_idx + 1, "__approved": True}
+            for field in fields:
+                mapping = mappings.get(field["key"])
+                value = ""
+                if mapping:
+                    col_idx = mapping["sourceColumn"] - 1
+                    if 0 <= col_idx < len(values):
+                        value = values[col_idx]
+                        if mapping.get("jsonKey") or mapping.get("jsonPath"):
+                            value = value_from_json_cell(value, mapping.get("jsonKey") or mapping.get("jsonPath"))
+                row[field["key"]] = normalize_inventory_value(field["key"], value)
 
-        if plan["serverGrain"] in {"server", "vm", "host", "asset", "inventory row"}:
-            if not row.get("application_details_number_of_servers") and clean_text(row.get("application_name")):
-                row["application_details_number_of_servers"] = 1
+            if plan["serverGrain"] in {"server", "vm", "host", "asset", "inventory row"}:
+                if not row.get("application_details_number_of_servers") and clean_text(row.get("application_name")):
+                    row["application_details_number_of_servers"] = 1
 
-        if should_keep_inventory_row(row):
-            rows.append(row)
+            if should_keep_inventory_row(row):
+                parsed_rows.append(row)
+        return parsed_rows, row_end
+
+    data_start_row = plan["dataStartRow"]
+    rows, row_end = build_rows(data_start_row, plan.get("dataEndRow"))
+    fallback_start_row = max(header_rows) + 1 if header_rows else 2
+    if not rows and data_start_row != fallback_start_row:
+        data_start_row = fallback_start_row
+        rows, row_end = build_rows(data_start_row, None)
 
     if not rows:
         raise ValueError("The LLM workbook plan did not produce inventory rows.")
@@ -974,7 +982,7 @@ def parse_workbook_from_plan(path, plan):
         "selectedShape": shape_payload(DEFAULT_SHAPE_KEY),
         "metadata": {
             "headerRows": header_rows,
-            "dataStartRow": plan["dataStartRow"],
+            "dataStartRow": data_start_row,
             "dataEndRow": row_end,
             "rowCount": len(rows),
             "columnCount": len(fields),
