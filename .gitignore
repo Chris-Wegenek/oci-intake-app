@@ -1,0 +1,6 @@
+__pycache__/
+.env.local
+node_modules
+qa/
+uploads/*
+!uploads/.gitkeep

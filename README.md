@@ -1,0 +1,28 @@
+# OCI Intake Application
+
+Full-stack local app for uploading an Oracle Cloud Infrastructure inventory workbook, reviewing/editing the normalized rows, approving the data, and mapping the specs to OCI rate-card SKUs.
+
+## Run
+
+```bash
+/Users/gus/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 app.py
+```
+
+Then open `http://127.0.0.1:8787`.
+
+## LLM mode
+
+The pricing endpoint always performs deterministic SKU math from the supplied rate card so the app is testable locally. If `OPENAI_API_KEY` is present, `/api/price` also calls the OpenAI Responses API to validate/enrich the SKU mapping. Set `OPENAI_MODEL` to override the default model.
+
+```bash
+OPENAI_API_KEY=... OPENAI_MODEL=gpt-4o-mini /Users/gus/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 app.py
+```
+
+## Rate card
+
+- `B97384`: OCPU-hour rate, `OCPU x 730`
+- `B97385`: Memory GB-hour rate, `GB x 730`
+- `B91961`: Block volume GB-month rate
+- `B89057`: File storage GB-month rate
+
+The app applies the user-provided conversion of `2 vCPU = 1 OCPU`.

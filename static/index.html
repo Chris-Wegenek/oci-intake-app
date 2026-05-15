@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OCI Intake</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">OCI</span>
+        <div>
+          <h1>Oracle Cloud Infrastructure Intake</h1>
+          <p>Spreadsheet review, SKU mapping, and rate-card pricing</p>
+        </div>
+      </div>
+      <nav class="steps" aria-label="Workflow progress">
+        <span class="step is-active" data-step="upload">1 Upload</span>
+        <span class="step" data-step="review">2 Review</span>
+        <span class="step" data-step="price">3 Price</span>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <section class="workspace">
+        <div id="uploadPanel" class="upload-panel">
+          <div class="upload-copy">
+            <h2>Upload inventory</h2>
+            <p>Drop an Excel workbook here. The app will default to the second tab, normalize the two-row headers, and prepare the rows for review.</p>
+          </div>
+          <label id="dropZone" class="drop-zone" for="fileInput">
+            <input id="fileInput" type="file" accept=".xlsx,.xls" />
+            <span class="upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3v11m0-11 4 4m-4-4-4 4M5 15v3a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-3" />
+              </svg>
+            </span>
+            <strong>Choose spreadsheet</strong>
+            <span>or drag the workbook onto this upload area</span>
+          </label>
+          <p id="uploadStatus" class="status-text" role="status"></p>
+        </div>
+
+        <div id="reviewPanel" class="review-panel is-hidden">
+          <div class="toolbar">
+            <div>
+              <h2>Review uploaded data</h2>
+              <p id="sheetMeta">No workbook loaded</p>
+            </div>
+            <div class="toolbar-actions">
+              <button id="priceButton" class="primary-button" type="button">Approve and price with LLM</button>
+            </div>
+          </div>
+
+          <div class="summary-strip" aria-label="Upload summary">
+            <div>
+              <span>Rows</span>
+              <strong id="rowCount">0</strong>
+            </div>
+            <div>
+              <span>Preview fields</span>
+              <strong id="columnCount">0</strong>
+            </div>
+            <div>
+              <span>Approved</span>
+              <strong id="approvedCount">0</strong>
+            </div>
+            <div>
+              <span>Default sheet</span>
+              <strong id="sheetName">-</strong>
+            </div>
+          </div>
+
+          <div class="table-wrap" aria-label="Editable inventory table">
+            <table id="reviewTable"></table>
+          </div>
+
+          <div class="table-footer">
+            <button id="addRow" class="ghost-button add-row-button" type="button">Add row</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="pricing-rail">
+        <section class="rail-section">
+          <div class="rail-heading">
+            <h2>Rate card</h2>
+            <span>E6 Standard Ax</span>
+          </div>
+          <div id="rateCard" class="rate-card"></div>
+        </section>
+
+        <section class="rail-section">
+          <div class="rail-heading">
+            <h2>SKU mapping</h2>
+            <span id="engineStatus">Waiting for upload</span>
+          </div>
+          <div id="pricingSummary" class="empty-state">
+            Upload and approve inventory rows to generate mapped OCI SKUs and monthly estimates.
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <template id="rateRowTemplate">
+      <div class="rate-row">
+        <strong></strong>
+        <span></span>
+        <em></em>
+      </div>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
