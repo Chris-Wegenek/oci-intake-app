@@ -18,7 +18,8 @@
       <nav class="steps" aria-label="Workflow progress">
         <span class="step is-active" data-step="upload">1 Upload</span>
         <span class="step" data-step="review">2 Review</span>
-        <span class="step" data-step="price">3 Price</span>
+        <span class="step" data-step="shape">3 Shape</span>
+        <span class="step" data-step="price">4 Price</span>
       </nav>
     </header>
 
@@ -49,7 +50,7 @@
               <p id="sheetMeta">No workbook loaded</p>
             </div>
             <div class="toolbar-actions">
-              <button id="priceButton" class="primary-button" type="button">Approve and price with LLM</button>
+              <button id="priceButton" class="primary-button" type="button">Continue to shape</button>
             </div>
           </div>
 
@@ -86,7 +87,7 @@
         <section class="rail-section">
           <div class="rail-heading">
             <h2>Rate card</h2>
-            <span>E6 Standard Ax</span>
+            <span id="rateCardShape">E6 Standard Ax</span>
           </div>
           <div id="rateCard" class="rate-card"></div>
         </section>
@@ -103,11 +104,39 @@
       </aside>
     </main>
 
+    <main id="shapePage" class="shape-page is-hidden">
+      <section class="shape-hero">
+        <div>
+          <p class="page-kicker">Flex shape selection</p>
+          <h2>Choose the OCI shape for this estimate</h2>
+          <p>Compute and memory rates change by flex shape. Storage rates stay constant across the options.</p>
+        </div>
+        <div class="shape-actions">
+          <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
+          <button id="priceShapeButton" class="primary-button" type="button">Price with LLM</button>
+        </div>
+      </section>
+
+      <section class="shape-grid" id="shapeGrid" aria-label="OCI flex shape choices"></section>
+
+      <section class="shape-detail">
+        <div class="shape-detail-copy">
+          <span id="shapeFamily">AMD flexible shape</span>
+          <h3 id="shapeDetailTitle">E6 Standard Ax</h3>
+          <p id="shapeDetailSummary">Selected shape rates will be applied to approved rows.</p>
+        </div>
+        <div class="shape-rate-wrap">
+          <table id="shapeRateTable" class="shape-rate-table"></table>
+        </div>
+      </section>
+    </main>
+
     <main id="resultsPage" class="results-page is-hidden">
       <section class="results-hero">
         <div>
           <p class="page-kicker">LLM-assisted estimate</p>
           <h2>OCI cost breakdown</h2>
+          <span id="resultsShape" class="shape-result-pill">E6 Standard Ax</span>
           <p id="resultsSubtitle">Pricing is ready for review.</p>
         </div>
         <div class="results-actions">

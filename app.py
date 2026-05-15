@@ -32,21 +32,44 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 PORT = int(os.environ.get("PORT", "8787"))
 HOURS_PER_MONTH = 730
 
-RATE_CARD = [
+DEFAULT_SHAPE_KEY = "e6-standard-ax"
+
+SHAPE_DEFINITIONS = [
     {
-        "sku": "B97384",
-        "description": "OCPU-hr rate (Compute)",
-        "unit": "OCPU-hour",
-        "rate": 0.0138,
-        "notes": "OCPU-hours x 730 hrs/mo",
+        "key": "e4-standard",
+        "label": "E4 Standard",
+        "shortLabel": "E4",
+        "family": "AMD flexible shape",
+        "computeRate": 0.0250,
+        "memoryRate": 0.0015,
+        "summary": "Lower memory rate with a mid-tier OCPU rate for steady general workloads.",
+        "accent": "#2f5d28",
     },
     {
-        "sku": "B97385",
-        "description": "Memory GB-hr rate",
-        "unit": "GB-hour",
-        "rate": 0.0108,
-        "notes": "GB-hours x 730 hrs/mo",
+        "key": "e5-standard",
+        "label": "E5 Standard",
+        "shortLabel": "E5",
+        "family": "AMD flexible shape",
+        "computeRate": 0.0300,
+        "memoryRate": 0.0020,
+        "summary": "Current generation AMD shape with identical E6 Standard compute and memory rates.",
+        "accent": "#365f1c",
     },
+    {
+        "key": DEFAULT_SHAPE_KEY,
+        "label": "E6 Standard Ax",
+        "shortLabel": "E6 Ax",
+        "family": "AMD Ax flexible shape",
+        "computeRate": 0.0138,
+        "memoryRate": 0.0108,
+        "summary": "Lower OCPU rate and higher memory rate; useful when compute-heavy rows dominate.",
+        "accent": "#164f68",
+    },
+]
+
+SHAPE_LOOKUP = {shape["key"]: shape for shape in SHAPE_DEFINITIONS}
+
+STORAGE_RATE_ITEMS = [
     {
         "sku": "B91961",
         "description": "Block Volume Storage (GB-mo)",
@@ -134,6 +157,51 @@ def to_number(value, default=0.0):
         return default
     match = re.search(r"-?\d+(?:\.\d+)?", text)
     return float(match.group(0)) if match else default
+
+
+def resolve_shape(shape_key=None):
+    return SHAPE_LOOKUP.get(shape_key or DEFAULT_SHAPE_KEY, SHAPE_LOOKUP[DEFAULT_SHAPE_KEY])
+
+
+def build_rate_card(shape_key=None):
+    shape = resolve_shape(shape_key)
+    return [
+        {
+            "sku": "B97384",
+            "description": "OCPU-hr rate (Compute)",
+            "unit": "OCPU-hour",
+            "rate": shape["computeRate"],
+            "notes": f"{shape['label']} OCPU-hours x 730 hrs/mo",
+        },
+        {
+            "sku": "B97385",
+            "description": "Memory GB-hr rate",
+            "unit": "GB-hour",
+            "rate": shape["memoryRate"],
+            "notes": f"{shape['label']} GB-hours x 730 hrs/mo",
+        },
+        *[item.copy() for item in STORAGE_RATE_ITEMS],
+    ]
+
+
+def shape_payload(shape_key=None):
+    shape = resolve_shape(shape_key)
+    return {
+        "key": shape["key"],
+        "label": shape["label"],
+        "shortLabel": shape["shortLabel"],
+        "family": shape["family"],
+        "summary": shape["summary"],
+        "accent": shape["accent"],
+        "computeRate": shape["computeRate"],
+        "memoryRate": shape["memoryRate"],
+        "hoursPerMonth": HOURS_PER_MONTH,
+        "rateCard": build_rate_card(shape["key"]),
+    }
+
+
+def all_shape_payloads():
+    return [shape_payload(shape["key"]) for shape in SHAPE_DEFINITIONS]
 
 
 def pick_sheet(excel_file):
@@ -233,7 +301,9 @@ def parse_workbook(path):
         "sheets": excel_file.sheet_names,
         "fields": fields,
         "rows": rows,
-        "rateCard": RATE_CARD,
+        "rateCard": build_rate_card(DEFAULT_SHAPE_KEY),
+        "rateCards": all_shape_payloads(),
+        "selectedShape": shape_payload(DEFAULT_SHAPE_KEY),
         "metadata": {
             "headerRow": header_row + 1,
             "groupRow": group_row + 1,
@@ -265,8 +335,8 @@ def text_for(row, fields, contains, section=None):
     return clean_text(row.get(key, "")) if key else ""
 
 
-def rate(sku):
-    for item in RATE_CARD:
+def rate(sku, rate_card):
+    for item in rate_card:
         if item["sku"] == sku:
             return item
     raise KeyError(sku)
@@ -276,7 +346,9 @@ def money(value):
     return round(float(value), 2)
 
 
-def calculate_pricing(fields, rows):
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY):
+    selected_shape = shape_payload(shape_key)
+    rate_card = selected_shape["rateCard"]
     keys = {
         "app_servers": find_key(fields, ["number of servers"], "Application Details"),
         "app_cpu": find_key(fields, ["number of cpu cores per server"], "Application Details"),
@@ -326,7 +398,7 @@ def calculate_pricing(fields, rows):
 
         line_items = []
         if ocpus:
-            rc = rate("B97384")
+            rc = rate("B97384", rate_card)
             qty = ocpus * HOURS_PER_MONTH
             line_items.append(
                 {
@@ -340,7 +412,7 @@ def calculate_pricing(fields, rows):
                 }
             )
         if memory_gb:
-            rc = rate("B97385")
+            rc = rate("B97385", rate_card)
             qty = memory_gb * HOURS_PER_MONTH
             line_items.append(
                 {
@@ -354,7 +426,7 @@ def calculate_pricing(fields, rows):
                 }
             )
         if block_storage_gb:
-            rc = rate("B91961")
+            rc = rate("B91961", rate_card)
             line_items.append(
                 {
                     "sku": rc["sku"],
@@ -367,7 +439,7 @@ def calculate_pricing(fields, rows):
                 }
             )
         if file_storage_gb:
-            rc = rate("B89057")
+            rc = rate("B89057", rate_card)
             line_items.append(
                 {
                     "sku": rc["sku"],
@@ -422,7 +494,9 @@ def calculate_pricing(fields, rows):
     return {
         "engine": "local-rule-engine",
         "hoursPerMonth": HOURS_PER_MONTH,
-        "rateCard": RATE_CARD,
+        "selectedShape": selected_shape,
+        "rateCard": rate_card,
+        "rateCards": all_shape_payloads(),
         "totals": totals,
         "rows": priced_rows,
         "fieldMap": keys,
@@ -465,10 +539,17 @@ def compact_llm_summary(pricing):
         "rowCount": len(pricing["rows"]),
         "totals": pricing["totals"],
         "sampleRows": sample_rows,
-        "rateCard": RATE_CARD,
+        "selectedShape": pricing.get("selectedShape", shape_payload(DEFAULT_SHAPE_KEY)),
+        "rateCard": pricing.get("rateCard", build_rate_card(DEFAULT_SHAPE_KEY)),
         "localMappingRules": [
-            {"sku": "B97384", "rule": "2 vCPU = 1 OCPU; OCPU-hours = OCPU x 730."},
-            {"sku": "B97385", "rule": "Memory GB-hours = memory GB x 730."},
+            {
+                "sku": "B97384",
+                "rule": "2 vCPU = 1 OCPU; OCPU-hours = OCPU x 730 using the selected flex shape rate.",
+            },
+            {
+                "sku": "B97385",
+                "rule": "Memory GB-hours = memory GB x 730 using the selected flex shape rate.",
+            },
             {"sku": "B91961", "rule": "VM local storage and database allocated storage use block volume GB-month."},
             {"sku": "B89057", "rule": "Shared/NAS storage uses file storage GB-month."},
         ],
@@ -506,7 +587,8 @@ def call_llm_mapping(pricing):
                 "role": "system",
                 "content": (
                     "You are an Oracle Cloud Infrastructure pricing mapper. "
-                    "Validate whether the SKU mapping rules are appropriate for an uploaded infrastructure inventory. "
+                    "Validate whether the SKU mapping rules and selected OCI flexible compute shape are appropriate "
+                    "for an uploaded infrastructure inventory. "
                     "Return compact JSON only with keys globalAssumptions, mappingRules, and reviewNotes. "
                     "Do not recalculate every row; validate the rules and call out mapping risks."
                 ),
@@ -569,7 +651,15 @@ class IntakeHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         if path == "/api/health":
-            self.send_json(200, {"ok": True, "rateCard": RATE_CARD})
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "rateCard": build_rate_card(DEFAULT_SHAPE_KEY),
+                    "rateCards": all_shape_payloads(),
+                    "selectedShape": shape_payload(DEFAULT_SHAPE_KEY),
+                },
+            )
             return
         if path == "/":
             self.serve_file(STATIC_DIR / "index.html")
@@ -647,10 +737,14 @@ class IntakeHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             fields = payload.get("fields", [])
             rows = payload.get("rows", [])
+            shape_key = payload.get("shape") or DEFAULT_SHAPE_KEY
+            if shape_key not in SHAPE_LOOKUP:
+                self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
+                return
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows)
+            pricing = calculate_pricing(fields, rows, shape_key)
             llm_payload, llm_warning = call_llm_mapping(pricing)
             pricing = enrich_with_llm(pricing, llm_payload)
             if llm_warning:

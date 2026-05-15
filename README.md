@@ -1,6 +1,6 @@
 # OCI Intake Application
 
-Full-stack local app for uploading an Oracle Cloud Infrastructure inventory workbook, reviewing/editing the normalized rows, approving the data, and mapping the specs to OCI rate-card SKUs.
+Full-stack local app for uploading an Oracle Cloud Infrastructure inventory workbook, reviewing/editing the normalized rows, selecting an OCI flexible compute shape, approving the data, and mapping the specs to OCI rate-card SKUs.
 
 ## Run
 
@@ -31,10 +31,11 @@ In Vercel, add these environment variables before deploying:
 
 Do not commit the real API key to GitHub. The app reads it from Vercel at runtime.
 
-## Rate card
+## Rate cards
 
-- `B97384`: OCPU-hour rate, `OCPU x 730`
-- `B97385`: Memory GB-hour rate, `GB x 730`
+- Shape choices: `E4 Standard`, `E5 Standard`, and `E6 Standard Ax`
+- `B97384`: OCPU-hour rate, `OCPU x 730`, varies by selected shape
+- `B97385`: Memory GB-hour rate, `GB x 730`, varies by selected shape
 - `B91961`: Block volume GB-month rate
 - `B89057`: File storage GB-month rate
 

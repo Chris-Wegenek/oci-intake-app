@@ -2,6 +2,8 @@ const state = {
   fields: [],
   rows: [],
   rateCard: [],
+  rateCards: [],
+  selectedShape: "e6-standard-ax",
   pricing: null,
 };
 
@@ -23,6 +25,7 @@ const els = {
   uploadStatus: document.querySelector("#uploadStatus"),
   uploadPanel: document.querySelector("#uploadPanel"),
   intakePage: document.querySelector("#intakePage"),
+  shapePage: document.querySelector("#shapePage"),
   reviewPanel: document.querySelector("#reviewPanel"),
   resultsPage: document.querySelector("#resultsPage"),
   reviewTable: document.querySelector("#reviewTable"),
@@ -33,11 +36,20 @@ const els = {
   sheetName: document.querySelector("#sheetName"),
   addRow: document.querySelector("#addRow"),
   priceButton: document.querySelector("#priceButton"),
+  priceShapeButton: document.querySelector("#priceShapeButton"),
+  backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
+  shapeGrid: document.querySelector("#shapeGrid"),
+  shapeRateTable: document.querySelector("#shapeRateTable"),
+  shapeFamily: document.querySelector("#shapeFamily"),
+  shapeDetailTitle: document.querySelector("#shapeDetailTitle"),
+  shapeDetailSummary: document.querySelector("#shapeDetailSummary"),
   rateCard: document.querySelector("#rateCard"),
+  rateCardShape: document.querySelector("#rateCardShape"),
   pricingSummary: document.querySelector("#pricingSummary"),
   engineStatus: document.querySelector("#engineStatus"),
   backToReview: document.querySelector("#backToReview"),
   rerunPricing: document.querySelector("#rerunPricing"),
+  resultsShape: document.querySelector("#resultsShape"),
   resultsSubtitle: document.querySelector("#resultsSubtitle"),
   resultsKpis: document.querySelector("#resultsKpis"),
   costDonut: document.querySelector("#costDonut"),
@@ -92,6 +104,33 @@ function normalizeText(value) {
     .trim();
 }
 
+function selectedShape() {
+  return (
+    state.rateCards.find((shape) => shape.key === state.selectedShape) ||
+    state.rateCards[0] || {
+      key: state.selectedShape,
+      label: "Selected shape",
+      family: "OCI flex shape",
+      summary: "Selected shape rates will be applied to approved rows.",
+      computeRate: 0,
+      memoryRate: 0,
+      rateCard: state.rateCard,
+    }
+  );
+}
+
+function setShape(shapeKey) {
+  const shape = state.rateCards.find((item) => item.key === shapeKey);
+  if (!shape) return;
+  state.selectedShape = shape.key;
+  state.rateCard = shape.rateCard || [];
+  state.pricing = null;
+  renderRateCard();
+  renderShapeChoices();
+  renderShapeDetail();
+  els.engineStatus.textContent = `${shape.label} selected`;
+}
+
 async function fetchJson(url, options = {}, timeoutMs = 60000) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -126,6 +165,8 @@ function previewFields() {
 
 function renderRateCard() {
   els.rateCard.innerHTML = "";
+  const shape = selectedShape();
+  els.rateCardShape.textContent = shape.label || "Selected shape";
   state.rateCard.forEach((item) => {
     const row = document.createElement("div");
     row.className = "rate-row";
@@ -136,6 +177,71 @@ function renderRateCard() {
     `;
     els.rateCard.append(row);
   });
+}
+
+function renderShapeChoices() {
+  if (!els.shapeGrid) return;
+  els.shapeGrid.innerHTML = state.rateCards
+    .map((shape) => {
+      const isSelected = shape.key === state.selectedShape;
+      return `
+        <button class="shape-card ${isSelected ? "is-selected" : ""}" type="button" data-shape="${escapeHtml(shape.key)}" style="--shape-accent:${escapeHtml(shape.accent || "#c74634")}">
+          <span class="shape-card-top">
+            <strong>${escapeHtml(shape.label)}</strong>
+            <em>${isSelected ? "Selected" : "Choose"}</em>
+          </span>
+          <span class="shape-family">${escapeHtml(shape.family || "OCI flex shape")}</span>
+          <span class="shape-summary">${escapeHtml(shape.summary || "")}</span>
+          <span class="shape-metrics">
+            <span><b>$${Number(shape.computeRate || 0).toFixed(4)}</b><small>OCPU/hr</small></span>
+            <span><b>$${Number(shape.memoryRate || 0).toFixed(4)}</b><small>GB/hr</small></span>
+          </span>
+        </button>
+      `;
+    })
+    .join("");
+
+  els.shapeGrid.querySelectorAll("[data-shape]").forEach((button) => {
+    button.addEventListener("click", () => setShape(button.dataset.shape));
+  });
+}
+
+function renderShapeDetail() {
+  const shape = selectedShape();
+  const rateCard = shape.rateCard || state.rateCard || [];
+  els.shapeFamily.textContent = shape.family || "OCI flex shape";
+  els.shapeDetailTitle.textContent = shape.label || "Selected shape";
+  els.shapeDetailSummary.textContent = shape.summary || "Selected shape rates will be applied to approved rows.";
+  els.shapeRateTable.innerHTML = `
+    <thead>
+      <tr>
+        <th>SKU</th>
+        <th>Description</th>
+        <th>Rate</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rateCard
+        .map(
+          (item) => `
+            <tr>
+              <td>${escapeHtml(item.sku)}</td>
+              <td>${escapeHtml(item.description)}</td>
+              <td>$${Number(item.rate || 0).toFixed(4)}</td>
+              <td>${escapeHtml(item.notes || item.unit || "")}</td>
+            </tr>
+          `,
+        )
+        .join("")}
+      <tr>
+        <td>-</td>
+        <td>Hours per month (constant)</td>
+        <td>${formatNumber(shape.hoursPerMonth || 730)}</td>
+        <td>Used in compute and memory calculations</td>
+      </tr>
+    </tbody>
+  `;
 }
 
 function renderStats(meta = {}) {
@@ -215,7 +321,9 @@ async function uploadFile(file) {
 
   state.fields = payload.fields;
   state.rows = payload.rows;
-  state.rateCard = payload.rateCard;
+  state.rateCards = payload.rateCards || [];
+  state.selectedShape = payload.selectedShape?.key || state.selectedShape;
+  state.rateCard = selectedShape().rateCard || payload.rateCard || [];
   state.pricing = null;
 
   els.uploadStatus.textContent = "";
@@ -225,11 +333,13 @@ async function uploadFile(file) {
   els.sheetMeta.textContent = `${payload.fileName} • sheet "${payload.sheetName}" • data begins on row ${payload.metadata.dataStartRow}`;
   els.sheetName.textContent = payload.sheetName;
   renderRateCard();
+  renderShapeChoices();
+  renderShapeDetail();
   renderTable();
   setStep("review");
   els.engineStatus.textContent = "Ready for approval";
   els.pricingSummary.className = "empty-state";
-  els.pricingSummary.textContent = "Review the rows, make adjustments, then approve and price.";
+  els.pricingSummary.textContent = "Review the rows, make adjustments, then choose the OCI flex shape to price.";
 }
 
 function setUploadingError(error) {
@@ -253,9 +363,11 @@ function addBlankRow() {
 async function priceRows() {
   els.priceButton.disabled = true;
   els.priceButton.textContent = "Pricing...";
+  els.priceShapeButton.disabled = true;
+  els.priceShapeButton.textContent = "Pricing...";
   els.rerunPricing.disabled = true;
   els.rerunPricing.textContent = "Pricing...";
-  els.engineStatus.textContent = "Mapping SKUs";
+  els.engineStatus.textContent = `Mapping SKUs for ${selectedShape().label}`;
 
   try {
     const { response, payload } = await fetchJson(
@@ -263,7 +375,7 @@ async function priceRows() {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields: state.fields, rows: state.rows }),
+        body: JSON.stringify({ fields: state.fields, rows: state.rows, shape: state.selectedShape }),
       },
       70000,
     );
@@ -281,14 +393,17 @@ async function priceRows() {
     els.pricingSummary.textContent = error.message;
   } finally {
     els.priceButton.disabled = false;
-    els.priceButton.textContent = "Approve and price with LLM";
+    els.priceButton.textContent = "Continue to shape";
+    els.priceShapeButton.disabled = false;
+    els.priceShapeButton.textContent = "Price with LLM";
     els.rerunPricing.disabled = false;
     els.rerunPricing.textContent = "Reprice with LLM";
   }
 }
 
 function renderPricing(pricing) {
-  els.engineStatus.textContent = pricing.engine === "llm-assisted" ? "LLM-assisted" : "Local mapping";
+  const shape = pricing.selectedShape || selectedShape();
+  els.engineStatus.textContent = `${shape.label}: ${pricing.engine === "llm-assisted" ? "LLM-assisted" : "Local mapping"}`;
   els.pricingSummary.className = "pricing-result";
 
   const warning = pricing.llmWarning ? `<p class="warning">${pricing.llmWarning}</p>` : "";
@@ -313,7 +428,7 @@ function renderPricing(pricing) {
       <div class="kpi"><span>Monthly</span><strong>${formatCurrency(pricing.totals.monthly)}</strong></div>
       <div class="kpi"><span>Annual</span><strong>${formatCurrency(pricing.totals.annual)}</strong></div>
       <div class="kpi"><span>OCPUs</span><strong>${formatNumber(pricing.totals.ocpus)}</strong></div>
-      <div class="kpi"><span>Memory GB</span><strong>${formatNumber(pricing.totals.memoryGb)}</strong></div>
+      <div class="kpi"><span>Shape</span><strong>${escapeHtml(shape.shortLabel || shape.label)}</strong></div>
     </div>
     <table class="result-table">
       <thead>
@@ -326,6 +441,7 @@ function renderPricing(pricing) {
 
 function showIntakePage() {
   els.intakePage.classList.remove("is-hidden");
+  els.shapePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   if (state.rows.length) {
     setStep("review");
@@ -334,8 +450,20 @@ function showIntakePage() {
   }
 }
 
+function showShapePage() {
+  if (!state.rows.length) return;
+  els.intakePage.classList.add("is-hidden");
+  els.shapePage.classList.remove("is-hidden");
+  els.resultsPage.classList.add("is-hidden");
+  renderShapeChoices();
+  renderShapeDetail();
+  setStep("shape");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function showResultsPage() {
   els.intakePage.classList.add("is-hidden");
+  els.shapePage.classList.add("is-hidden");
   els.resultsPage.classList.remove("is-hidden");
   setStep("price");
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -362,8 +490,10 @@ function renderResults(pricing) {
   const skuCosts = aggregateSkuCosts(pricing);
   const maxMonthly = topRows[0]?.monthly || 1;
   const engineLabel = pricing.engine === "llm-assisted" ? "LLM-assisted" : "Rule-based fallback";
+  const shape = pricing.selectedShape || selectedShape();
 
-  els.resultsSubtitle.textContent = `${pricing.rows.length} approved rows priced with ${engineLabel.toLowerCase()} SKU validation.`;
+  els.resultsShape.textContent = shape.label || "Selected shape";
+  els.resultsSubtitle.textContent = `${pricing.rows.length} approved rows priced on ${shape.label} with ${engineLabel.toLowerCase()} SKU validation.`;
   els.resultsEngine.textContent = engineLabel;
   els.resultRowCount.textContent = `${pricing.rows.length} workloads`;
 
@@ -374,6 +504,11 @@ function renderResults(pricing) {
       <em>${formatCurrency(pricing.totals.annual)} annualized</em>
     </div>
     <div class="result-kpi">
+      <span>Flex shape</span>
+      <strong>${escapeHtml(shape.shortLabel || shape.label)}</strong>
+      <em>$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr</em>
+    </div>
+    <div class="result-kpi">
       <span>Compute</span>
       <strong>${formatNumber(pricing.totals.ocpus)} OCPUs</strong>
       <em>2 vCPU = 1 OCPU</em>
@@ -382,11 +517,6 @@ function renderResults(pricing) {
       <span>Memory</span>
       <strong>${formatNumber(pricing.totals.memoryGb)} GB</strong>
       <em>GB-hours at 730 hrs/mo</em>
-    </div>
-    <div class="result-kpi">
-      <span>Storage</span>
-      <strong>${formatNumber(pricing.totals.blockStorageGb + pricing.totals.fileStorageGb)} GB</strong>
-      <em>Block and file storage</em>
     </div>
   `;
 
@@ -549,15 +679,21 @@ els.dropZone.addEventListener("drop", (event) => {
 });
 
 els.addRow.addEventListener("click", addBlankRow);
-els.priceButton.addEventListener("click", priceRows);
+els.priceButton.addEventListener("click", showShapePage);
+els.priceShapeButton.addEventListener("click", priceRows);
 els.rerunPricing.addEventListener("click", priceRows);
 els.backToReview.addEventListener("click", showIntakePage);
+els.backToReviewFromShape.addEventListener("click", showIntakePage);
 
 fetch("/api/health")
   .then((response) => response.json())
   .then((payload) => {
-    state.rateCard = payload.rateCard || [];
+    state.rateCards = payload.rateCards || [];
+    state.selectedShape = payload.selectedShape?.key || state.selectedShape;
+    state.rateCard = selectedShape().rateCard || payload.rateCard || [];
     renderRateCard();
+    renderShapeChoices();
+    renderShapeDetail();
   })
   .catch(() => {
     els.engineStatus.textContent = "Backend unavailable";
