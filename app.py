@@ -50,6 +50,11 @@ CANONICAL_INVENTORY_FIELDS = [
             "host name",
             "vm name",
             "asset name",
+            "resource id",
+            "resourceid",
+            "instance id",
+            "tags.name",
+            "tags.appid",
         ],
     },
     {
@@ -62,7 +67,19 @@ CANONICAL_INVENTORY_FIELDS = [
         "key": "application_details",
         "label": "Application Details",
         "description": "Application description, type, function, business role, or notes.",
-        "aliases": ["application details", "application type", "description", "business function", "app details", "role", "purpose"],
+        "aliases": [
+            "application details",
+            "application type",
+            "description",
+            "business function",
+            "app details",
+            "role",
+            "purpose",
+            "resource id",
+            "resourceid",
+            "private ip",
+            "configuration privateipaddress",
+        ],
     },
     {
         "key": "application_details_application_version",
@@ -74,7 +91,7 @@ CANONICAL_INVENTORY_FIELDS = [
         "key": "application_details_operating_system",
         "label": "Application Details: Operating System",
         "description": "Operating system name and version.",
-        "aliases": ["operating system", "os", "os version", "platform"],
+        "aliases": ["operating system", "os", "os version", "platform", "tags.os"],
     },
     {
         "key": "application_details_number_of_servers",
@@ -316,6 +333,109 @@ def normalize_inventory_value(key, value):
     return clean_cell(value)
 
 
+def parse_json_cell(value):
+    text = clean_text(value)
+    if not text or text[0] not in "[{":
+        return None
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def add_json_pair(pairs, key, value):
+    key_text = clean_text(key)
+    value_text = clean_cell(value)
+    if key_text and value_text != "":
+        pairs[key_text] = value_text
+
+
+def flatten_json_tags(value):
+    parsed = parse_json_cell(value)
+    if parsed is None:
+        return {}
+
+    pairs = {}
+
+    def visit(node, prefix=""):
+        if isinstance(node, dict):
+            tag_key = node.get("key") or node.get("Key") or node.get("tagKey")
+            tag_value = node.get("value") or node.get("Value") or node.get("tagValue")
+            tag_text = node.get("tag") or node.get("Tag")
+            if tag_key is not None and tag_value is not None:
+                add_json_pair(pairs, tag_key, tag_value)
+            if tag_text and "=" in clean_text(tag_text):
+                left, right = clean_text(tag_text).split("=", 1)
+                add_json_pair(pairs, left, tag_value if tag_value is not None else right)
+
+            for key, child in node.items():
+                child_key = clean_text(key)
+                path = f"{prefix}.{child_key}" if prefix else child_key
+                if isinstance(child, (dict, list)):
+                    visit(child, path)
+                elif child_key not in {"key", "Key", "value", "Value", "tag", "Tag"}:
+                    add_json_pair(pairs, path, child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child, prefix)
+
+    visit(parsed)
+    return pairs
+
+
+def json_key_match_score(candidate, target):
+    candidate_norm = normalize(candidate)
+    target_norm = normalize(target)
+    if not candidate_norm or not target_norm:
+        return 0
+    if candidate_norm == target_norm:
+        return 100
+    if candidate_norm.endswith(f" {target_norm}") or candidate_norm.endswith(target_norm):
+        return 80
+    if target_norm in candidate_norm:
+        return 60
+    if candidate_norm in target_norm and len(candidate_norm) >= 3:
+        return 40
+    return 0
+
+
+def value_from_json_cell(value, json_key):
+    target = clean_text(json_key)
+    if not target:
+        return ""
+    pairs = flatten_json_tags(value)
+    if not pairs:
+        return ""
+    best_key = ""
+    best_score = 0
+    for key in pairs:
+        score = json_key_match_score(key, target)
+        if score > best_score:
+            best_key = key
+            best_score = score
+    return pairs.get(best_key, "") if best_score >= 40 else ""
+
+
+def summarize_json_cell(value, max_items=8):
+    pairs = flatten_json_tags(value)
+    if not pairs:
+        return None
+    return {
+        "keys": list(pairs.keys())[:max_items],
+        "preview": {key: pairs[key] for key in list(pairs.keys())[:max_items]},
+    }
+
+
+def json_column_header(raw, col_idx):
+    parts = []
+    for row_idx in range(min(8, len(raw.index))):
+        value = raw.iat[row_idx, col_idx]
+        text = clean_text(value)
+        if text and parse_json_cell(value) is None and text not in parts:
+            parts.append(text)
+    return " ".join(parts[:3])
+
+
 def canonical_fields_payload():
     return [
         {
@@ -505,6 +625,7 @@ def workbook_digest(path):
         max_cols = min(35, len(raw.columns))
         sample_rows = []
         row_density = []
+        json_columns = {}
 
         for row_idx in range(min(100, len(raw.index))):
             values = raw.iloc[row_idx].tolist()
@@ -523,9 +644,42 @@ def workbook_digest(path):
             for col_idx in range(max_cols):
                 value = clean_text(raw.iat[row_idx, col_idx])
                 if value:
-                    cells.append({"column": col_idx + 1, "value": value[:140]})
+                    cell = {"column": col_idx + 1, "value": value[:140]}
+                    json_summary = summarize_json_cell(value)
+                    if json_summary:
+                        cell["jsonKeys"] = json_summary["keys"]
+                        cell["jsonPreview"] = json_summary["preview"]
+                        column_info = json_columns.setdefault(
+                            col_idx + 1,
+                            {
+                                "column": col_idx + 1,
+                                "sampleRows": [],
+                                "keys": {},
+                            },
+                        )
+                        column_info["sampleRows"].append(
+                            {
+                                "row": row_idx + 1,
+                                "preview": json_summary["preview"],
+                            }
+                        )
+                        for key, item in json_summary["preview"].items():
+                            column_info["keys"].setdefault(key, clean_text(item)[:80])
+                    cells.append(cell)
             if cells:
                 sample_rows.append({"row": row_idx + 1, "cells": cells[:24]})
+
+        json_column_summaries = []
+        for col_idx, info in json_columns.items():
+            json_column_summaries.append(
+                {
+                    "column": col_idx,
+                    "header": json_column_header(raw, col_idx - 1),
+                    "keys": list(info["keys"].keys())[:30],
+                    "sampleValues": dict(list(info["keys"].items())[:12]),
+                    "sampleRows": info["sampleRows"][:3],
+                }
+            )
 
         sheets.append(
             {
@@ -533,6 +687,7 @@ def workbook_digest(path):
                 "rowCount": int(len(raw.index)),
                 "columnCount": int(len(raw.columns)),
                 "sampleRows": sample_rows,
+                "jsonColumns": json_column_summaries,
                 "likelyHeaderRows": sorted(row_density, key=lambda item: item["nonBlank"], reverse=True)[:8],
             }
         )
@@ -605,6 +760,51 @@ def infer_column_mappings(raw, header_rows):
     return mappings
 
 
+JSON_TAG_FIELD_ALIASES = {
+    "application_name": ["Name", "name", "appName", "application", "applicationName", "appId", "appID"],
+    "environment": ["environment", "env", "stage", "lifecycle"],
+    "application_details": ["role", "description", "appId", "costCenter", "owner"],
+    "application_details_application_version": ["applicationVersion", "appVersion", "version", "release"],
+    "application_details_operating_system": ["os", "operatingSystem", "operating_system", "platform"],
+}
+
+
+def infer_json_mappings(raw, header_rows, data_start_row):
+    mappings = {}
+    start_idx = max(0, data_start_row - 1)
+    end_idx = min(len(raw.index), start_idx + 30)
+    for col_idx in range(len(raw.columns)):
+        label = header_label(raw, header_rows, col_idx)
+        column_pairs = {}
+        for row_idx in range(start_idx, end_idx):
+            for key, value in flatten_json_tags(raw.iat[row_idx, col_idx]).items():
+                column_pairs.setdefault(key, clean_text(value))
+        if not column_pairs:
+            continue
+
+        for canonical_key, aliases in JSON_TAG_FIELD_ALIASES.items():
+            if canonical_key in mappings:
+                continue
+            best_key = ""
+            best_score = 0
+            for candidate in column_pairs:
+                for alias in aliases:
+                    score = json_key_match_score(candidate, alias)
+                    if score > best_score:
+                        best_key = candidate
+                        best_score = score
+            if best_score >= 60:
+                mappings[canonical_key] = {
+                    "canonicalKey": canonical_key,
+                    "sourceColumn": col_idx + 1,
+                    "sourceHeader": label,
+                    "jsonKey": best_key,
+                    "confidence": min(0.95, best_score / 100),
+                    "transform": f"Read '{best_key}' from JSON/tag data.",
+                }
+    return mappings
+
+
 def validated_column_mappings(raw, header_rows, mappings):
     validated = {}
     for key, mapping in mappings.items():
@@ -615,7 +815,12 @@ def validated_column_mappings(raw, header_rows, mappings):
         if source_column <= 0:
             continue
         actual_header = header_label(raw, header_rows, source_column - 1) or clean_text(mapping.get("sourceHeader"))
-        if actual_header and alias_score(actual_header, field) < 35:
+        has_json_source = clean_text(mapping.get("jsonKey") or mapping.get("jsonPath"))
+        if has_json_source:
+            json_aliases = [field["label"], *field["aliases"], *JSON_TAG_FIELD_ALIASES.get(key, [])]
+            if max((json_key_match_score(has_json_source, alias) for alias in json_aliases), default=0) < 40:
+                continue
+        if actual_header and not has_json_source and alias_score(actual_header, field) < 35:
             continue
         validated[key] = {
             **mapping,
@@ -667,6 +872,8 @@ def normalize_workbook_plan(plan, excel_file):
                 "canonicalKey": key,
                 "sourceColumn": source_column,
                 "sourceHeader": clean_text(item.get("sourceHeader")),
+                "jsonKey": clean_text(item.get("jsonKey") or item.get("tagKey")),
+                "jsonPath": clean_text(item.get("jsonPath")),
                 "confidence": to_number(item.get("confidence"), 0),
                 "transform": clean_text(item.get("transform")),
             }
@@ -695,7 +902,12 @@ def should_keep_inventory_row(row):
         to_number(row.get("database_details_memory_per_server_gb")),
         to_number(row.get("database_details_total_allocated_storage_gb")),
     ]
-    return bool(identity and any(value for value in resources))
+    populated_fields = sum(
+        1
+        for field in CANONICAL_INVENTORY_FIELDS
+        if clean_text(row.get(field["key"])) not in {"", "0", "0.0"}
+    )
+    return bool(identity and (any(value for value in resources) or populated_fields >= 2))
 
 
 def parse_workbook_from_plan(path, plan):
@@ -703,6 +915,9 @@ def parse_workbook_from_plan(path, plan):
     raw = pd.read_excel(path, sheet_name=plan["sheetName"], header=None, dtype=object)
     header_rows = plan["headerRows"] or [max(1, plan["dataStartRow"] - 1)]
     mappings = validated_column_mappings(raw, header_rows, dict(plan["columnMappings"]))
+    inferred_json = infer_json_mappings(raw, header_rows, plan["dataStartRow"])
+    for key, mapping in inferred_json.items():
+        mappings.setdefault(key, mapping)
     inferred = infer_column_mappings(raw, header_rows)
     for key, mapping in inferred.items():
         mappings.setdefault(key, mapping)
@@ -713,9 +928,11 @@ def parse_workbook_from_plan(path, plan):
         if mapping:
             field["sourceColumn"] = mapping["sourceColumn"]
             field["sourceHeader"] = mapping.get("sourceHeader") or header_label(raw, header_rows, mapping["sourceColumn"] - 1)
+            if mapping.get("jsonKey"):
+                field["sourceJsonKey"] = mapping["jsonKey"]
 
     rows = []
-    row_end = plan["dataEndRow"] or len(raw.index)
+    row_end = plan.get("dataEndRow") or len(raw.index)
     row_end = min(row_end, len(raw.index))
     data_start_idx = max(0, plan["dataStartRow"] - 1)
 
@@ -732,14 +949,12 @@ def parse_workbook_from_plan(path, plan):
                 col_idx = mapping["sourceColumn"] - 1
                 if 0 <= col_idx < len(values):
                     value = values[col_idx]
+                    if mapping.get("jsonKey") or mapping.get("jsonPath"):
+                        value = value_from_json_cell(value, mapping.get("jsonKey") or mapping.get("jsonPath"))
             row[field["key"]] = normalize_inventory_value(field["key"], value)
 
         if plan["serverGrain"] in {"server", "vm", "host", "asset", "inventory row"}:
-            if not row.get("application_details_number_of_servers") and (
-                row.get("application_details_number_of_cpu_cores_per_server")
-                or row.get("application_details_memory_per_server_gb")
-                or row.get("application_details_local_storage_gb")
-            ):
+            if not row.get("application_details_number_of_servers") and clean_text(row.get("application_name")):
                 row["application_details_number_of_servers"] = 1
 
         if should_keep_inventory_row(row):
@@ -1087,10 +1302,16 @@ def call_llm_workbook_plan(path):
         "Use 1-based row and column numbers. Do not invent missing columns. "
         "Map source columns to the provided canonical fields when the source appears equivalent, even if headings use "
         "terms like hostname, VM, instance, vCPU, RAM, disk, storage, OS, platform, environment, or application. "
+        "Some workbooks, especially AWS billing or inventory exports, store tags as JSON strings in a cell. "
+        "When a JSON/tag column contains useful keys, map it with jsonKey. For example, map tag key 'Name' or 'appId' "
+        "to application_name, 'environment' to environment, and 'os' to application_details_operating_system. "
+        "For application_details, prefer resource-specific values such as tag key 'appId', 'role', 'owner', resourceId, "
+        "or private IP; avoid accountId or region unless nothing resource-specific exists. "
+        "Do not map the full JSON blob as plain text unless no useful key exists. "
         "If each row is one server/VM/host, set serverGrain to 'server'. If each row is an application/workload "
         "that may represent many servers, set serverGrain to 'application'. "
         "Return this shape: {sheetName, headerRows, dataStartRow, dataEndRow, serverGrain, confidence, "
-        "columnMappings:[{canonicalKey, sourceColumn, sourceHeader, confidence, transform}], notes:[string]}. "
+        "columnMappings:[{canonicalKey, sourceColumn, sourceHeader, jsonKey, confidence, transform}], notes:[string]}. "
         "For transform, briefly say unit conversions needed, such as TB to GB."
     )
     payload = {
