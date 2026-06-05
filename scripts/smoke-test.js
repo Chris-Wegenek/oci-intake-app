@@ -7,7 +7,7 @@ const QA_DIR = path.join(ROOT, "qa");
 const SAMPLE = process.env.SAMPLE_XLSX || "/Users/gus/Downloads/Current State Inventory (2).xlsx";
 const APP_URL = process.env.APP_URL || "http://127.0.0.1:8787";
 const UPLOAD_TIMEOUT_MS = Number(process.env.UPLOAD_TIMEOUT_MS || 100000);
-const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 100000);
+const PRICING_TIMEOUT_MS = Number(process.env.PRICING_TIMEOUT_MS || 100000);
 
 async function main() {
   await fs.mkdir(QA_DIR, { recursive: true });
@@ -39,8 +39,8 @@ async function main() {
   await page.locator("#shapeRateTable").getByRole("cell", { name: "$0.0300" }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "shape.png"), fullPage: false });
 
-  await page.getByRole("button", { name: "Price with LLM" }).click();
-  await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: LLM_TIMEOUT_MS });
+  await page.getByRole("button", { name: /Price (estimate|with OpenAI)/ }).click();
+  await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await page.locator("#resultsPage").getByText("E5 Standard", { exact: true }).waitFor({ timeout: 20000 });
   await page.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "pricing.png"), fullPage: false });
@@ -61,8 +61,8 @@ async function main() {
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-review.png"), fullPage: false });
   await mobile.getByRole("button", { name: "Continue to shape" }).click();
   await mobile.getByText("Choose the OCI shape for this estimate", { exact: true }).waitFor({ timeout: 20000 });
-  await mobile.getByRole("button", { name: "Price with LLM" }).click();
-  await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: LLM_TIMEOUT_MS });
+  await mobile.getByRole("button", { name: /Price (estimate|with OpenAI)/ }).click();
+  await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await mobile.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-pricing.png"), fullPage: false });
 

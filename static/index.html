@@ -30,7 +30,7 @@
           <div class="upload-copy">
             <span id="modeEyebrow" class="mode-eyebrow">On-prem inventory</span>
             <h2 id="uploadHeading">Upload inventory</h2>
-            <p id="uploadDescription">Drop an Excel workbook here. The LLM will inspect the workbook, choose the inventory table, and normalize server/application fields for review.</p>
+            <p id="uploadDescription">Drop an Excel workbook here. The local parser will choose the inventory table and normalize CPU, RAM, storage, environment, and application fields for review.</p>
             <div class="mode-selector" aria-label="Choose intake type">
               <button id="modeOnPrem" class="mode-card is-selected" type="button" data-mode="on_prem">
                 <strong>On-prem inventory</strong>
@@ -64,7 +64,7 @@
           <div id="uploadProgress" class="upload-progress is-hidden" role="status" aria-live="polite">
             <div class="loading-mark" aria-hidden="true"></div>
             <div>
-              <strong>LLM data cleaning in progress</strong>
+              <strong>Data cleaning in progress</strong>
               <p id="uploadProgressDetail">Reading workbook sheets and normalizing server inventory fields.</p>
             </div>
           </div>
@@ -158,7 +158,7 @@
         </div>
         <div class="shape-actions">
           <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
-          <button id="priceShapeButton" class="primary-button" type="button">Price with LLM</button>
+          <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
         </div>
       </section>
 
@@ -179,14 +179,14 @@
     <main id="resultsPage" class="results-page is-hidden">
       <section class="results-hero">
         <div>
-          <p class="page-kicker">LLM-assisted estimate</p>
+          <p class="page-kicker">OCI estimate</p>
           <h2>OCI cost breakdown</h2>
           <span id="resultsShape" class="shape-result-pill">E6 Standard Ax</span>
           <p id="resultsSubtitle">Pricing is ready for review.</p>
         </div>
         <div class="results-actions">
           <button id="backToReview" class="ghost-button" type="button">Back to review</button>
-          <button id="rerunPricing" class="primary-button" type="button">Reprice with LLM</button>
+          <button id="rerunPricing" class="primary-button" type="button">Reprice estimate</button>
         </div>
       </section>
 

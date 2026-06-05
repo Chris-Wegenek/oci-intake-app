@@ -37,6 +37,12 @@ DEFAULT_SHAPE_KEY = "e6-standard-ax"
 INTAKE_MODE_ON_PREM = "on_prem"
 INTAKE_MODE_CLOUD_BILL = "cloud_bill"
 PROVIDER_AUTO = "auto"
+LOW_COST_OPENAI_MODEL = "gpt-5.4-nano"
+OPENAI_DISABLED_MESSAGE = "OpenAI API calls are temporarily disabled."
+
+
+def openai_api_enabled():
+    return clean_text(os.environ.get("OPENAI_API_ENABLED")).lower() in {"1", "true", "yes", "on"}
 
 CANONICAL_INVENTORY_FIELDS = [
     {
@@ -1907,7 +1913,7 @@ def parse_workbook_from_plan(path, plan, full_service_beta=False, intake_mode=IN
         rows, row_end = build_rows(data_start_row, None)
 
     if not rows:
-        raise ValueError("The LLM workbook plan did not produce inventory rows.")
+        raise ValueError("The OpenAI workbook plan did not produce inventory rows.")
 
     return {
         "fileName": Path(path).name,
@@ -2965,7 +2971,7 @@ def call_llm_cloud_bill_mapping(parsed):
         timeout=90,
         model_env="OPENAI_BILL_MODEL",
         reasoning_effort_env="OPENAI_BILL_REASONING_EFFORT",
-        default_reasoning_effort="xhigh",
+        default_reasoning_effort="low",
     )
     metadata["llmBillMappingAttempted"] = True
     metadata["llmBillPatternCount"] = len(patterns)
@@ -2976,10 +2982,16 @@ def call_llm_cloud_bill_mapping(parsed):
         metadata["unmappedCount"] = max(0, len(parsed.get("rows", [])) - mapped_count)
         metadata["llmBillMappingWarning"] = warning
         metadata.setdefault("extractionNotes", []).append(
-            "Used deterministic OCI bill mapping because the OpenAI bill-mapping pass did not complete."
+            "Used deterministic OCI bill mapping because OpenAI API calls are disconnected."
+            if warning == OPENAI_DISABLED_MESSAGE
+            else "Used deterministic OCI bill mapping because the OpenAI bill-mapping pass did not complete."
         )
         if mapped_count == 0:
-            parsed["llmWarning"] = f"Cloud bill LLM mapping did not complete; used deterministic bill mapping. Detail: {warning}"
+            parsed["llmWarning"] = (
+                "OpenAI API calls are temporarily disabled; used deterministic bill mapping."
+                if warning == OPENAI_DISABLED_MESSAGE
+                else f"Cloud bill OpenAI mapping did not complete; used deterministic bill mapping. Detail: {warning}"
+            )
         return parsed
 
     applied, warnings_list = apply_cloud_bill_llm_mapping(parsed, llm_payload, pattern_rows)
@@ -3415,7 +3427,7 @@ def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PRE
         if plan:
             return parse_workbook_from_plan(path, plan, full_service_beta, intake_mode)
     except Exception as exc:
-        llm_warning = f"LLM workbook interpretation did not complete; used rule-based spreadsheet parsing. Detail: {exc}"
+        llm_warning = f"OpenAI workbook interpretation did not complete; used rule-based spreadsheet parsing. Detail: {exc}"
 
     parsed = parse_workbook_rule_based(path, full_service_beta)
     if llm_warning:
@@ -4339,11 +4351,14 @@ def call_openai_json(
     reasoning_effort_env=None,
     default_reasoning_effort=None,
 ):
+    if not openai_api_enabled():
+        return None, OPENAI_DISABLED_MESSAGE
+
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return None, "OPENAI_API_KEY is not set."
 
-    model = os.environ.get(model_env) or os.environ.get("OPENAI_MODEL", "gpt-5.5")
+    model = os.environ.get(model_env) or os.environ.get("OPENAI_MODEL", LOW_COST_OPENAI_MODEL)
     reasoning_effort = clean_text(os.environ.get(reasoning_effort_env)) if reasoning_effort_env else ""
     reasoning_effort = reasoning_effort or clean_text(default_reasoning_effort)
     body = {
@@ -4428,11 +4443,13 @@ def call_llm_workbook_plan(path, full_service_beta=False):
         model_env="OPENAI_UPLOAD_MODEL",
     )
     if warning:
-        return None, f"LLM workbook interpretation did not complete; used rule-based spreadsheet parsing. Detail: {warning}"
+        if warning == OPENAI_DISABLED_MESSAGE:
+            return None, "OpenAI API calls are temporarily disabled; used rule-based spreadsheet parsing."
+        return None, f"OpenAI workbook interpretation did not complete; used rule-based spreadsheet parsing. Detail: {warning}"
     excel_file = pd.ExcelFile(path)
     normalized = normalize_workbook_plan(plan, excel_file, full_service_beta)
     if not normalized:
-        return None, "LLM workbook interpretation did not identify a usable inventory table; used rule-based spreadsheet parsing."
+        return None, "OpenAI workbook interpretation did not identify a usable inventory table; used rule-based spreadsheet parsing."
     return normalized, None
 
 
@@ -4453,9 +4470,11 @@ def call_llm_mapping(pricing):
         model_env="OPENAI_PRICING_MODEL",
     )
     if warning:
+        if warning == OPENAI_DISABLED_MESSAGE:
+            return None, "OpenAI API calls are temporarily disabled; used deterministic SKU mapping."
         if warning == "OPENAI_API_KEY is not set.":
             return None, "OPENAI_API_KEY is not set; used deterministic SKU mapping."
-        return None, f"LLM call did not complete; used deterministic SKU mapping. Detail: {warning}"
+        return None, f"OpenAI call did not complete; used deterministic SKU mapping. Detail: {warning}"
     return payload, None
 
 
@@ -4519,9 +4538,11 @@ def call_llm_table_edit(fields, rows, instruction, full_service_beta=False):
         model_env="OPENAI_TABLE_EDIT_MODEL",
     )
     if warning:
+        if warning == OPENAI_DISABLED_MESSAGE:
+            return None, "OpenAI API calls are temporarily disabled; table assistant is unavailable."
         if warning == "OPENAI_API_KEY is not set.":
             return None, "OPENAI_API_KEY is not set; table assistant is unavailable."
-        return None, f"LLM table edit did not complete. Detail: {warning}"
+        return None, f"OpenAI table edit did not complete. Detail: {warning}"
     return result, None
 
 
@@ -4640,6 +4661,8 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
+                    "openaiApiEnabled": openai_api_enabled(),
+                    "openaiModel": os.environ.get("OPENAI_MODEL", LOW_COST_OPENAI_MODEL),
                     "rateCard": build_rate_card(DEFAULT_SHAPE_KEY),
                     "rateCards": all_shape_payloads(),
                     "selectedShape": shape_payload(DEFAULT_SHAPE_KEY),

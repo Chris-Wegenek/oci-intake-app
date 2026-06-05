@@ -11,6 +11,8 @@ const state = {
   uploadMetadata: {},
   fullServiceBeta: false,
   showMissingOnly: false,
+  openaiApiEnabled: false,
+  openaiModel: "",
   ramp: {
     months: 36,
     ceiling: 0,
@@ -325,6 +327,28 @@ function providerLabel(value = state.providerHint) {
   return labels[value] || "Auto-detect";
 }
 
+function pricingActionLabel(action = "price") {
+  if (action === "rerun") {
+    return state.openaiApiEnabled ? "Reprice with OpenAI" : "Reprice estimate";
+  }
+  return state.openaiApiEnabled ? "Price with OpenAI" : "Price estimate";
+}
+
+function syncApiUi() {
+  if (els.priceShapeButton && !els.priceShapeButton.disabled) {
+    els.priceShapeButton.textContent = pricingActionLabel("price");
+  }
+  if (els.rerunPricing && !els.rerunPricing.disabled) {
+    els.rerunPricing.textContent = pricingActionLabel("rerun");
+  }
+  syncModeUi();
+  if (!state.rows.length && els.engineStatus) {
+    els.engineStatus.textContent = state.openaiApiEnabled
+      ? `OpenAI enabled: ${state.openaiModel || "configured model"}`
+      : "OpenAI temporarily disconnected";
+  }
+}
+
 function setShape(shapeKey) {
   const shape = state.rateCards.find((item) => item.key === shapeKey);
   if (!shape) return;
@@ -402,7 +426,9 @@ function syncModeUi() {
   els.uploadHeading.textContent = cloudBill ? "Upload cloud bill" : "Upload inventory";
   els.uploadDescription.textContent = cloudBill
     ? "Upload an AWS, Azure, or GCP bill export. PDF invoices and CSV, TSV, or Excel exports are mapped to OCI-equivalent services and meters."
-    : "Drop an Excel workbook here. The LLM will inspect the workbook, choose the inventory table, and normalize server/application fields for review.";
+    : state.openaiApiEnabled
+    ? "Drop an Excel workbook here. OpenAI can inspect the workbook, choose the inventory table, and normalize server/application fields for review."
+    : "Drop an Excel workbook here. The local parser will choose the inventory table and normalize CPU, RAM, storage, environment, and application fields for review.";
   els.dropZone.querySelector("strong").textContent = cloudBill ? "Choose bill export" : "Choose spreadsheet";
   els.dropZoneHint.textContent = cloudBill
     ? "or drag a PDF, CSV, TSV, or Excel bill export onto this upload area"
@@ -457,8 +483,8 @@ function setUploadLoading(isLoading, fileName = "") {
     els.uploadStatus.style.color = "var(--muted)";
     els.uploadProgressDetail.textContent = fileName
       ? isCloudBillMode()
-        ? `Inspecting ${fileName}, detecting ${providerLabel().toLowerCase()} provider signals, and mapping bill-line meters to OCI services.`
-        : `Inspecting ${fileName}, finding the inventory table, and cleaning CPU, RAM, storage, OS, and environment fields.`
+        ? `Parsing ${fileName}, detecting ${providerLabel().toLowerCase()} provider signals, and mapping bill-line meters to OCI services.`
+        : `Parsing ${fileName}, finding the inventory table, and cleaning CPU, RAM, storage, OS, and environment fields.`
       : "Reading workbook sheets and normalizing server inventory fields.";
   }
 }
@@ -838,7 +864,7 @@ async function uploadFile(file) {
     els.reviewPanel.classList.remove("is-hidden");
     const parserLabel =
       payload.metadata?.parser === "llm-assisted"
-        ? "LLM normalized"
+        ? "OpenAI normalized"
         : payload.metadata?.parser === "cloud-bill-adapter"
           ? "Cloud bill parser"
           : payload.metadata?.parser === "cloud-bill-pdf"
@@ -861,7 +887,7 @@ async function uploadFile(file) {
     els.engineStatus.textContent = isCloudBillMode()
       ? `${detectedProvider || providerLabel()} bill upload`
       : payload.metadata?.parser === "llm-assisted"
-        ? "LLM normalized upload"
+        ? "OpenAI normalized upload"
         : "Ready for approval";
     els.pricingSummary.className = "empty-state";
     const notes = payload.metadata?.extractionNotes || [];
@@ -1041,7 +1067,7 @@ async function applyTableEdit() {
 
     state.rows = payload.rows || state.rows;
     renderTable();
-    resetPricingAfterTableChange("Table updated by LLM");
+    resetPricingAfterTableChange(state.openaiApiEnabled ? "Table updated by OpenAI" : "Table updated");
     els.tableEditPrompt.value = "";
 
     const warnings = Array.isArray(payload.warnings) ? payload.warnings.filter(Boolean) : [];
@@ -1098,9 +1124,9 @@ async function priceRows() {
     els.priceButton.disabled = false;
     els.priceButton.textContent = "Continue to shape";
     els.priceShapeButton.disabled = false;
-    els.priceShapeButton.textContent = "Price with LLM";
+    els.priceShapeButton.textContent = pricingActionLabel("price");
     els.rerunPricing.disabled = false;
-    els.rerunPricing.textContent = "Reprice with LLM";
+    els.rerunPricing.textContent = pricingActionLabel("rerun");
   }
 }
 
@@ -1108,7 +1134,7 @@ function renderPricing(pricing) {
   const shape = pricing.selectedShape || selectedShape();
   const cloudBill = pricing.intakeMode === "cloud_bill" || pricing.cloudBillMode;
   const modeLabel = cloudBill ? "Cloud bill" : pricing.fullServiceBeta ? "Full service" : shape.label;
-  els.engineStatus.textContent = `${modeLabel}: ${pricing.engine === "llm-assisted" ? "LLM-assisted" : "Local mapping"}`;
+  els.engineStatus.textContent = `${modeLabel}: ${pricing.engine === "llm-assisted" ? "OpenAI-assisted" : "Local mapping"}`;
   els.pricingSummary.className = "pricing-result";
 
   const warning = pricing.llmWarning ? `<p class="warning">${pricing.llmWarning}</p>` : "";
@@ -1648,7 +1674,7 @@ function renderResults(pricing) {
   const topRows = pricing.rows.slice().sort((a, b) => b.monthly - a.monthly);
   const skuCosts = aggregateSkuCosts(pricing);
   const maxMonthly = topRows[0]?.monthly || 1;
-  const engineLabel = pricing.engine === "llm-assisted" ? "LLM-assisted" : "Rule-based fallback";
+  const engineLabel = pricing.engine === "llm-assisted" ? "OpenAI-assisted" : "local deterministic";
   const shape = pricing.selectedShape || selectedShape();
   const cloudBill = pricing.intakeMode === "cloud_bill" || pricing.cloudBillMode;
   const serviceRows = pricing.totals.mappedServiceRows || 0;
@@ -1659,7 +1685,7 @@ function renderResults(pricing) {
     ? `${pricing.rows.length} source bill lines reviewed; ${serviceRows} mapped to OCI-equivalent products and ${reviewRows} need review before they affect totals.`
     : pricing.fullServiceBeta
     ? `${pricing.rows.length} approved items priced with OCI service mapping; ${serviceRows} service mappings priced and ${reviewRows} items need review.`
-    : `${pricing.rows.length} approved workloads priced on ${shape.label} with ${engineLabel.toLowerCase()} SKU validation.`;
+    : `${pricing.rows.length} approved workloads priced on ${shape.label} with ${engineLabel} SKU validation.`;
   els.topListHeading.textContent = cloudBill ? "Top source lines" : "Top workloads";
   els.detailHeading.textContent = cloudBill ? "Cloud bill mapping detail" : "Application cost detail";
   els.resultRowCount.textContent = cloudBill
@@ -2055,8 +2081,11 @@ fetch("/api/health")
   .then((payload) => {
     state.rateCards = payload.rateCards || [];
     state.fullServiceCatalog = payload.fullServiceCatalog || [];
+    state.openaiApiEnabled = Boolean(payload.openaiApiEnabled);
+    state.openaiModel = payload.openaiModel || "";
     state.selectedShape = payload.selectedShape?.key || state.selectedShape;
     state.rateCard = selectedShape().rateCard || payload.rateCard || [];
+    syncApiUi();
     renderRateCard();
     renderShapeChoices();
     renderShapeDetail();
