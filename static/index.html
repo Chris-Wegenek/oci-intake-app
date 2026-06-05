@@ -4,22 +4,23 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OCI Intake</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="app-header">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">OCI</span>
+        <span class="brand-mark" aria-hidden="true"></span>
         <div>
           <h1>Oracle Cloud Infrastructure Intake</h1>
-          <p>Spreadsheet review, SKU mapping, and rate-card pricing</p>
+          <p>Spreadsheet review, SKU mapping, and OCI estimates</p>
         </div>
       </div>
       <nav class="steps" aria-label="Workflow progress">
-        <span class="step is-active" data-step="upload">1 Upload</span>
-        <span class="step" data-step="review">2 Review</span>
-        <span class="step" data-step="shape">3 Shape</span>
-        <span class="step" data-step="price">4 Price</span>
+        <button class="step is-active" type="button" data-step="upload" aria-current="step">1 Upload</button>
+        <button class="step" type="button" data-step="review">2 Review</button>
+        <button class="step" type="button" data-step="shape">3 Shape</button>
+        <button class="step" type="button" data-step="price">4 Price</button>
       </nav>
     </header>
 
@@ -27,8 +28,28 @@
       <section class="workspace">
         <div id="uploadPanel" class="upload-panel">
           <div class="upload-copy">
-            <h2>Upload inventory</h2>
-            <p>Drop an Excel workbook here. The LLM will inspect the workbook, choose the inventory table, and normalize server/application fields for review.</p>
+            <span id="modeEyebrow" class="mode-eyebrow">On-prem inventory</span>
+            <h2 id="uploadHeading">Upload inventory</h2>
+            <p id="uploadDescription">Drop an Excel workbook here. The LLM will inspect the workbook, choose the inventory table, and normalize server/application fields for review.</p>
+            <div class="mode-selector" aria-label="Choose intake type">
+              <button id="modeOnPrem" class="mode-card is-selected" type="button" data-mode="on_prem">
+                <strong>On-prem inventory</strong>
+                <span>Server, VM, application, CPU, memory, and storage worksheets.</span>
+              </button>
+              <button id="modeCloudBill" class="mode-card" type="button" data-mode="cloud_bill">
+                <strong>Cloud bill</strong>
+                <span>AWS, Azure, or GCP bill exports mapped to OCI-equivalent services.</span>
+              </button>
+            </div>
+            <label id="providerControl" class="provider-control is-hidden" for="providerHint">
+              <span>Provider detection</span>
+              <select id="providerHint">
+                <option value="auto">Auto-detect</option>
+                <option value="aws">AWS</option>
+                <option value="azure">Azure</option>
+                <option value="gcp">GCP</option>
+              </select>
+            </label>
           </div>
           <label id="dropZone" class="drop-zone" for="fileInput">
             <input id="fileInput" type="file" accept=".xlsx,.xls" />
@@ -38,7 +59,7 @@
               </svg>
             </span>
             <strong>Choose spreadsheet</strong>
-            <span>or drag the workbook onto this upload area</span>
+            <span id="dropZoneHint">or drag the workbook onto this upload area</span>
           </label>
           <div id="uploadProgress" class="upload-progress is-hidden" role="status" aria-live="polite">
             <div class="loading-mark" aria-hidden="true"></div>
@@ -53,10 +74,18 @@
         <div id="reviewPanel" class="review-panel is-hidden">
           <div class="toolbar">
             <div>
-              <h2>Review uploaded data</h2>
+              <h2>Adjust your table</h2>
               <p id="sheetMeta">No workbook loaded</p>
             </div>
             <div class="toolbar-actions">
+              <label class="review-filter-toggle" for="missingOnlyToggle">
+                <input id="missingOnlyToggle" type="checkbox" />
+                <span class="toggle-track" aria-hidden="true"></span>
+                <span class="toggle-copy">
+                  <strong>Missing data only</strong>
+                  <small id="missingOnlySummary">Show rows with blanks</small>
+                </span>
+              </label>
               <button id="priceButton" class="primary-button" type="button">Continue to shape</button>
             </div>
           </div>
@@ -85,20 +114,29 @@
           </div>
 
           <div class="table-footer">
-            <button id="addRow" class="ghost-button add-row-button" type="button">Add row</button>
+            <div class="table-footer-actions">
+              <button id="addRow" class="ghost-button add-row-button" type="button">Add row</button>
+              <button id="addColumn" class="ghost-button add-column-button" type="button">Add column</button>
+            </div>
+            <form id="addColumnForm" class="add-column-form is-hidden">
+              <input id="newColumnName" type="text" maxlength="64" placeholder="Column name" aria-label="New column name" />
+              <button class="ghost-button" type="submit">Add</button>
+              <button id="cancelAddColumn" class="ghost-button" type="button">Cancel</button>
+            </form>
+          </div>
+
+          <div class="table-assistant" aria-label="AI table editor">
+            <label class="table-assistant-label" for="tableEditPrompt">Adjust the table</label>
+            <div class="table-assistant-row">
+              <textarea id="tableEditPrompt" rows="3" placeholder="Change dev rows to unapproved, set web servers to 64 GB RAM, or add a new prod database row"></textarea>
+              <button id="applyTableEdit" class="primary-button" type="button">Apply changes</button>
+            </div>
+            <p id="tableEditStatus" class="table-assistant-status" role="status" aria-live="polite"></p>
           </div>
         </div>
       </section>
 
       <aside id="pricingRail" class="pricing-rail is-hidden">
-        <section class="rail-section">
-          <div class="rail-heading">
-            <h2>Rate card</h2>
-            <span id="rateCardShape">E6 Standard Ax</span>
-          </div>
-          <div id="rateCard" class="rate-card"></div>
-        </section>
-
         <section class="rail-section">
           <div class="rail-heading">
             <h2>SKU mapping</h2>
@@ -154,6 +192,58 @@
 
       <section id="resultsKpis" class="results-kpis" aria-label="Cost summary"></section>
 
+      <section class="insight-panel ramp-panel" aria-labelledby="rampHeading">
+        <div class="panel-heading ramp-heading">
+          <div>
+            <h3 id="rampHeading">Build a 3-year ramp</h3>
+            <p>Drag any dot to adjust that section of the ramp. Click the graph or add a dot to create another section. The red dashed line is the BOM maximum.</p>
+          </div>
+          <span id="rampCeilingLabel">BOM maximum</span>
+        </div>
+        <div class="ramp-body">
+          <div class="ramp-chart-frame">
+            <svg id="rampChart" class="ramp-chart" viewBox="0 0 760 330" role="img" tabindex="0" aria-labelledby="rampChartTitle rampChartDesc">
+              <title id="rampChartTitle">Three year consumption ramp</title>
+              <desc id="rampChartDesc">Interactive ramp chart capped by the full-capacity monthly estimate.</desc>
+            </svg>
+          </div>
+          <div class="ramp-controls" aria-label="Ramp assumptions">
+            <div class="ramp-action-row">
+              <button id="addRampPoint" class="ghost-button" type="button">Add ramp dot</button>
+              <button id="removeRampPoint" class="ghost-button" type="button">Remove selected</button>
+            </div>
+            <div class="ramp-control-grid">
+              <label class="ramp-control">
+                <span>Selected dot month</span>
+                <input id="rampPeakMonth" type="number" min="1" max="36" step="1" value="36" />
+                <small>Month 1 to month 36</small>
+              </label>
+              <label class="ramp-control">
+                <span>Selected dot monthly spend</span>
+                <input id="rampPeakMonthly" type="number" min="0" step="100" value="0" />
+                <small>Cannot exceed the BOM maximum</small>
+              </label>
+            </div>
+            <div class="ramp-years" aria-label="Annual ramp totals">
+              <div><span>Year 1 spend</span><strong id="rampYearOneTotal">$0.00</strong></div>
+              <div><span>Year 2 spend</span><strong id="rampYearTwoTotal">$0.00</strong></div>
+              <div><span>Year 3 spend</span><strong id="rampYearThreeTotal">$0.00</strong></div>
+            </div>
+            <div class="ramp-summary">
+              <div class="ramp-contract-value">
+                <span>Total Contract Value</span>
+                <strong id="rampThreeYearTotal">$0.00</strong>
+                <small>Year 1 + Year 2 + Year 3</small>
+              </div>
+              <div class="ramp-average">
+                <span>Average monthly spend</span>
+                <strong id="rampAvgMonthly">$0.00</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="results-grid">
         <article class="insight-panel cost-mix-panel">
           <div class="panel-heading">
@@ -168,32 +258,16 @@
 
         <article class="insight-panel">
           <div class="panel-heading">
-            <h3>Top workloads</h3>
+            <h3 id="topListHeading">Top workloads</h3>
             <span>Highest monthly cost</span>
           </div>
           <div id="topWorkloads" class="bar-list"></div>
-        </article>
-
-        <article class="insight-panel">
-          <div class="panel-heading">
-            <h3>Resource footprint</h3>
-            <span>Approved rows</span>
-          </div>
-          <div id="resourceFootprint" class="resource-stack"></div>
-        </article>
-
-        <article class="insight-panel">
-          <div class="panel-heading">
-            <h3>LLM review notes</h3>
-            <span id="resultsEngine">Pending</span>
-          </div>
-          <div id="llmNotes" class="notes-list"></div>
         </article>
       </section>
 
       <section class="insight-panel result-detail-panel">
         <div class="panel-heading">
-          <h3>Application cost detail</h3>
+          <h3 id="detailHeading">Application cost detail</h3>
           <span id="resultRowCount">0 workloads</span>
         </div>
         <div class="result-detail-wrap">

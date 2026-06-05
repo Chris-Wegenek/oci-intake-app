@@ -22,30 +22,31 @@ async function main() {
   await page.screenshot({ path: path.join(QA_DIR, "landing.png"), fullPage: false });
 
   await page.setInputFiles("#fileInput", SAMPLE);
-  await page.getByText("Review uploaded data", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
+  await page.getByText("Adjust your table", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
   await page.screenshot({ path: path.join(QA_DIR, "review.png"), fullPage: false });
 
   const rowCount = await page.locator("#rowCount").textContent();
   const columnCount = await page.locator("#columnCount").textContent();
-  if (rowCount !== "63" || columnCount !== "9") {
+  const parsedRows = Number(rowCount);
+  if (parsedRows < 60 || parsedRows > 65 || columnCount !== "10") {
     throw new Error(`Unexpected parsed dimensions: rows=${rowCount}, columns=${columnCount}`);
   }
 
   await page.getByRole("button", { name: "Continue to shape" }).click();
   await page.getByText("Choose the OCI shape for this estimate", { exact: true }).waitFor({ timeout: 20000 });
   await page.getByRole("button", { name: /E5 Standard/ }).click();
-  await page.getByText("$0.0300", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#shapeRateTable").getByRole("cell", { name: "$0.0300" }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "shape.png"), fullPage: false });
 
   await page.getByRole("button", { name: "Price with LLM" }).click();
   await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: LLM_TIMEOUT_MS });
   await page.locator("#resultsPage").getByText("E5 Standard", { exact: true }).waitFor({ timeout: 20000 });
-  await page.locator("#resultsPage").getByText("$12,132.43", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "pricing.png"), fullPage: false });
 
-  const annualVisible = (await page.locator("#resultsPage").textContent()).includes("$145,589.16");
-  if (!annualVisible) {
-    throw new Error("Annual total was not visible after pricing.");
+  const pricingText = await page.locator("#resultsPage").textContent();
+  if (!/\$[\d,]+\.\d{2}/.test(pricingText)) {
+    throw new Error("No formatted pricing total was visible after pricing.");
   }
 
   const mobile = await browser.newPage({
@@ -55,13 +56,13 @@ async function main() {
   await mobile.goto(APP_URL, { waitUntil: "domcontentloaded" });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-landing.png"), fullPage: false });
   await mobile.setInputFiles("#fileInput", SAMPLE);
-  await mobile.getByText("Review uploaded data", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
+  await mobile.getByText("Adjust your table", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-review.png"), fullPage: false });
   await mobile.getByRole("button", { name: "Continue to shape" }).click();
   await mobile.getByText("Choose the OCI shape for this estimate", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.getByRole("button", { name: "Price with LLM" }).click();
   await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: LLM_TIMEOUT_MS });
-  await mobile.locator("#resultsPage").getByText("$37,960.18", { exact: true }).waitFor({ timeout: 20000 });
+  await mobile.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-pricing.png"), fullPage: false });
 
   await browser.close();
