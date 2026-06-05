@@ -25,14 +25,9 @@ let activeFill = null;
 const PREVIEW_FIELD_RULES = [
   { label: "Application Name", contains: ["application name"] },
   { label: "Environment", contains: ["environment"] },
-  { label: "Application Details", containsAny: [["application details"], ["application type"], ["description"]] },
-  { label: "Application Version", contains: ["application version"], section: "Application Details" },
-  { label: "Operating System", containsAny: [["operating system"], ["os version"], [" os "]], section: "Application Details" },
-  { label: "Servers", containsAny: [["number of servers"], ["server count"], ["instances"], ["nodes"]], section: "Application Details" },
-  { label: "OCPUs", containsAny: [["ocpus per server"], ["ocpu"], ["number of cpu cores per server"], ["number of cpus"], ["vcpu"], ["cpu cores"], ["cores"]], section: "Application Details" },
-  { label: "RAM (GB)", containsAny: [["memory per server"], ["memory"], ["ram"]], section: "Application Details" },
-  { label: "Chipset", containsAny: [["chipset"], ["processor family"], ["cpu type"], ["architecture"]], section: "Application Details" },
-  { label: "Storage (GB)", containsAny: [["local storage"], ["storage"], ["disk"]], section: "Application Details" },
+  { label: "OCPUs", containsAny: [["ocpus per server"], ["ocpu"], ["number of cpu cores per server"], ["number of cpus"], ["vcpu"], ["cpu cores"], ["cores"]] },
+  { label: "RAM (GB)", containsAny: [["memory per server"], ["memory"], ["ram"]] },
+  { label: "Storage (GB)", containsAny: [["local storage"], ["shared storage"], ["total allocated storage"], ["database size"], ["total storage"], ["storage gb"], ["disk gb"]] },
 ];
 
 const FULL_SERVICE_PREVIEW_FIELD_RULES = [
@@ -64,15 +59,12 @@ const CLOUD_BILL_PREVIEW_FIELD_RULES = [
 const MANUAL_REVIEW_FIELDS = [
   { key: "application_name", label: "Application Name" },
   { key: "environment", label: "Environment" },
-  { key: "application_details", label: "Application Details" },
-  { key: "application_details_number_of_servers", label: "Application Details: Number of Servers" },
   {
     key: "application_details_number_of_cpu_cores_per_server",
     label: "Application Details: OCPUs",
   },
   { key: "application_details_memory_per_server_gb", label: "Application Details: Memory per server (GB)" },
   { key: "application_details_local_storage_gb", label: "Application Details: Local Storage (GB)" },
-  { key: "application_details_shared_storage_gb", label: "Application Details: Shared Storage (GB)" },
 ];
 
 const els = {

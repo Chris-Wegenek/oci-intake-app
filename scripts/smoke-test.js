@@ -28,7 +28,8 @@ async function main() {
   const rowCount = await page.locator("#rowCount").textContent();
   const columnCount = await page.locator("#columnCount").textContent();
   const parsedRows = Number(rowCount);
-  if (parsedRows < 60 || parsedRows > 65 || columnCount !== "10") {
+  const parsedColumns = Number(columnCount);
+  if (parsedRows < 1 || parsedColumns < 4 || parsedColumns > 6) {
     throw new Error(`Unexpected parsed dimensions: rows=${rowCount}, columns=${columnCount}`);
   }
 

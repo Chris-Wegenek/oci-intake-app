@@ -202,6 +202,8 @@ CANONICAL_INVENTORY_FIELDS = [
             "db cpu",
             "database cpus",
             "db cpus",
+            "number of cpu cores per server",
+            "number of cpus",
             "database cores",
             "db cores",
             "database vcpu",
@@ -210,6 +212,7 @@ CANONICAL_INVENTORY_FIELDS = [
             "db vcpus",
             "database cpu count",
             "db cpu count",
+            "cpu cores per server",
         ],
     },
     {
@@ -865,6 +868,30 @@ def spreadsheet_memory_label(label):
     return any(term in text for term in ["ram", "memory", "mem gb", "gb ram"])
 
 
+def spreadsheet_storage_label(label):
+    text = normalize(label)
+    if not text:
+        return False
+    if any(term in text for term in ["iops", "cpu", "ocpu", "vcpu", "memory", "ram", "load balancer"]):
+        return False
+    if header_is_bare_disk_count(text):
+        return False
+    return any(
+        term in text
+        for term in [
+            "storage",
+            "database size",
+            "db size",
+            "allocated",
+            "disk gb",
+            "disk size",
+            "disk capacity",
+            "volume size",
+            "data size",
+        ]
+    )
+
+
 def ocpu_review_label(label):
     text = normalize(label)
     prefix = "Database Details" if any(term in text for term in ["database", " db ", "db cpu", "db cores"]) else "Application Details"
@@ -896,11 +923,11 @@ def to_gb(value, default=0.0):
     text = normalize(value)
     if not text:
         return default
-    if re.search(r"\btb\b|terabyte", text):
+    if re.search(r"(?:^|\d|\s)tbs?(?:$|\s)|terabytes?", text):
         return number * 1024
-    if re.search(r"\bmb\b|megabyte", text):
+    if re.search(r"(?:^|\d|\s)mbs?(?:$|\s)|megabytes?", text):
         return number / 1024
-    if re.search(r"\bkb\b|kilobyte", text):
+    if re.search(r"(?:^|\d|\s)kbs?(?:$|\s)|kilobytes?", text):
         return number / (1024 * 1024)
     return number
 
@@ -1368,6 +1395,43 @@ def build_fields(raw, group_row, header_row):
     return fields
 
 
+def meaningful_inventory_value(value):
+    text = normalize(value)
+    return bool(text and text not in {"na", "n a", "none", "null", "tbd", "unknown"})
+
+
+def rule_based_row_has_inventory_signal(row, fields):
+    has_application = False
+    has_environment = False
+    has_descriptive_detail = False
+    has_resource = False
+
+    for field in fields:
+        value = row.get(field["key"])
+        if not meaningful_inventory_value(value):
+            continue
+        label = normalize(field.get("label"))
+        if "application name" in label or label in {"application", "app name"}:
+            has_application = True
+        elif "environment" in label or label == "env":
+            has_environment = True
+        elif (
+            "ocpu" in label
+            or spreadsheet_cpu_label(label)
+            or spreadsheet_memory_label(label)
+            or spreadsheet_storage_label(label)
+            or "number of servers" in label
+            or "number of database servers" in label
+        ):
+            has_resource = True
+        elif any(term in label for term in ["application type", "database type", "server name", "host name", "description"]):
+            has_descriptive_detail = True
+
+    if not has_application:
+        return False
+    return has_resource or has_environment or has_descriptive_detail
+
+
 def parse_workbook_rule_based(path, full_service_beta=False):
     excel_file = pd.ExcelFile(path)
     sheet = pick_sheet(excel_file)
@@ -1376,6 +1440,7 @@ def parse_workbook_rule_based(path, full_service_beta=False):
     fields = build_fields(raw, group_row, header_row)
     cpu_field_keys = set()
     memory_field_keys = set()
+    storage_field_keys = set()
     for field in fields:
         if spreadsheet_cpu_label(field["label"]):
             cpu_field_keys.add(field["key"])
@@ -1383,6 +1448,8 @@ def parse_workbook_rule_based(path, full_service_beta=False):
         elif spreadsheet_memory_label(field["label"]):
             memory_field_keys.add(field["key"])
             field["label"] = memory_review_label(field["label"])
+        elif spreadsheet_storage_label(field["label"]):
+            storage_field_keys.add(field["key"])
 
     rows = []
     for raw_idx in range(data_start, len(raw.index)):
@@ -1396,8 +1463,11 @@ def parse_workbook_rule_based(path, full_service_beta=False):
                 value = compact_number(to_number(value) / 2)
             elif field["key"] in memory_field_keys and clean_text(value) != "":
                 value = compact_number(to_gb(value))
+            elif field["key"] in storage_field_keys and clean_text(value) != "":
+                value = compact_number(to_gb(value))
             row[field["key"]] = value
-        rows.append(row)
+        if rule_based_row_has_inventory_signal(row, fields):
+            rows.append(row)
 
     return {
         "fileName": Path(path).name,
@@ -1501,12 +1571,23 @@ def workbook_digest(path):
     return {"sheets": sheets}
 
 
+def carried_section_label(raw, row_idx, col_idx):
+    sections = {"application details", "database details", "oci details"}
+    for scan_idx in range(col_idx, -1, -1):
+        candidate = clean_text(raw.iat[row_idx, scan_idx])
+        if normalize(candidate) in sections:
+            return candidate
+    return ""
+
+
 def header_label(raw, header_rows, col_idx):
     parts = []
     for row_number in header_rows:
         row_idx = int(row_number) - 1
         if 0 <= row_idx < len(raw.index):
             part = clean_text(raw.iat[row_idx, col_idx])
+            if not part:
+                part = carried_section_label(raw, row_idx, col_idx)
             if part and part not in parts:
                 parts.append(part)
     return " ".join(parts)
@@ -1515,6 +1596,8 @@ def header_label(raw, header_rows, col_idx):
 def alias_score(label, field):
     label_norm = normalize(label)
     if not label_norm:
+        return 0
+    if field["key"] == "application_name" and "database" in label_norm and "application" not in label_norm:
         return 0
     if header_is_bare_disk_count(label_norm) and field["key"] in {
         "application_details_local_storage_gb",
@@ -1566,12 +1649,16 @@ def infer_column_mappings(raw, header_rows, full_service_beta=False, intake_mode
             if score > best_score:
                 best = field
                 best_score = score
-        if best and best_score >= 45 and best["key"] not in mappings:
+        if best and best_score >= 45:
+            existing = mappings.get(best["key"])
+            if existing and existing.get("_score", 0) >= best_score:
+                continue
             mappings[best["key"]] = {
                 "canonicalKey": best["key"],
                 "sourceColumn": col_idx + 1,
                 "sourceHeader": label,
                 "confidence": min(0.98, best_score / 130),
+                "_score": best_score,
             }
     return mappings
 
@@ -1735,7 +1822,11 @@ def should_keep_inventory_row(row):
     )
     full_service_signal = any(clean_text(row.get(key)) for key in SOURCE_SERVICE_FIELD_KEYS)
     resource_signal = any(value for value in resources)
-    return bool(resource_signal or full_service_signal or ((identity or populated_fields >= 2) and populated_fields >= 2))
+    if full_service_signal:
+        return True
+    if not identity:
+        return False
+    return bool(resource_signal or populated_fields >= 2)
 
 
 def parse_workbook_from_plan(path, plan, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM):
@@ -1755,7 +1846,16 @@ def parse_workbook_from_plan(path, plan, full_service_beta=False, intake_mode=IN
         mappings.setdefault(key, mapping)
     inferred = infer_column_mappings(raw, header_rows, full_service_beta, intake_mode, plan["dataStartRow"])
     for key, mapping in inferred.items():
-        mappings.setdefault(key, mapping)
+        existing = mappings.get(key)
+        if (
+            key == "database_details_total_allocated_storage_gb"
+            and existing
+            and "total allocated" in normalize(mapping.get("sourceHeader"))
+            and "total allocated" not in normalize(existing.get("sourceHeader"))
+        ):
+            mappings[key] = mapping
+        else:
+            mappings.setdefault(key, mapping)
 
     fields = canonical_fields_payload(full_service_beta, intake_mode)
     for field in fields:
