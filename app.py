@@ -42,7 +42,14 @@ OPENAI_DISABLED_MESSAGE = "OpenAI API calls are temporarily disabled."
 
 
 def openai_api_enabled():
-    return clean_text(os.environ.get("OPENAI_API_ENABLED")).lower() in {"1", "true", "yes", "on"}
+    flag = clean_text(os.environ.get("OPENAI_API_ENABLED")).lower()
+    if flag:
+        return flag in {"1", "true", "yes", "on"}
+    return True
+
+
+def openai_api_configured():
+    return bool(clean_text(os.environ.get("OPENAI_API_KEY")))
 
 CANONICAL_INVENTORY_FIELDS = [
     {
@@ -4662,6 +4669,8 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "openaiApiEnabled": openai_api_enabled(),
+                    "openaiApiConfigured": openai_api_configured(),
+                    "openaiApiConnected": openai_api_enabled() and openai_api_configured(),
                     "openaiModel": os.environ.get("OPENAI_MODEL", LOW_COST_OPENAI_MODEL),
                     "rateCard": build_rate_card(DEFAULT_SHAPE_KEY),
                     "rateCards": all_shape_payloads(),

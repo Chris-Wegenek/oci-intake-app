@@ -12,6 +12,8 @@ const state = {
   fullServiceBeta: false,
   showMissingOnly: false,
   openaiApiEnabled: false,
+  openaiApiConfigured: false,
+  openaiApiConnected: false,
   openaiModel: "",
   ramp: {
     months: 36,
@@ -329,9 +331,9 @@ function providerLabel(value = state.providerHint) {
 
 function pricingActionLabel(action = "price") {
   if (action === "rerun") {
-    return state.openaiApiEnabled ? "Reprice with OpenAI" : "Reprice estimate";
+    return state.openaiApiConnected ? "Reprice with OpenAI" : "Reprice estimate";
   }
-  return state.openaiApiEnabled ? "Price with OpenAI" : "Price estimate";
+  return state.openaiApiConnected ? "Price with OpenAI" : "Price estimate";
 }
 
 function syncApiUi() {
@@ -343,9 +345,11 @@ function syncApiUi() {
   }
   syncModeUi();
   if (!state.rows.length && els.engineStatus) {
-    els.engineStatus.textContent = state.openaiApiEnabled
+    els.engineStatus.textContent = state.openaiApiConnected
       ? `OpenAI enabled: ${state.openaiModel || "configured model"}`
-      : "OpenAI temporarily disconnected";
+      : state.openaiApiEnabled
+        ? "OpenAI API key missing"
+        : "OpenAI temporarily disconnected";
   }
 }
 
@@ -426,7 +430,7 @@ function syncModeUi() {
   els.uploadHeading.textContent = cloudBill ? "Upload cloud bill" : "Upload inventory";
   els.uploadDescription.textContent = cloudBill
     ? "Upload an AWS, Azure, or GCP bill export. PDF invoices and CSV, TSV, or Excel exports are mapped to OCI-equivalent services and meters."
-    : state.openaiApiEnabled
+    : state.openaiApiConnected
     ? "Drop an Excel workbook here. OpenAI can inspect the workbook, choose the inventory table, and normalize server/application fields for review."
     : "Drop an Excel workbook here. The local parser will choose the inventory table and normalize CPU, RAM, storage, environment, and application fields for review.";
   els.dropZone.querySelector("strong").textContent = cloudBill ? "Choose bill export" : "Choose spreadsheet";
@@ -1067,7 +1071,7 @@ async function applyTableEdit() {
 
     state.rows = payload.rows || state.rows;
     renderTable();
-    resetPricingAfterTableChange(state.openaiApiEnabled ? "Table updated by OpenAI" : "Table updated");
+    resetPricingAfterTableChange(state.openaiApiConnected ? "Table updated by OpenAI" : "Table updated");
     els.tableEditPrompt.value = "";
 
     const warnings = Array.isArray(payload.warnings) ? payload.warnings.filter(Boolean) : [];
@@ -2082,6 +2086,8 @@ fetch("/api/health")
     state.rateCards = payload.rateCards || [];
     state.fullServiceCatalog = payload.fullServiceCatalog || [];
     state.openaiApiEnabled = Boolean(payload.openaiApiEnabled);
+    state.openaiApiConfigured = Boolean(payload.openaiApiConfigured);
+    state.openaiApiConnected = Boolean(payload.openaiApiConnected);
     state.openaiModel = payload.openaiModel || "";
     state.selectedShape = payload.selectedShape?.key || state.selectedShape;
     state.rateCard = selectedShape().rateCard || payload.rateCard || [];
