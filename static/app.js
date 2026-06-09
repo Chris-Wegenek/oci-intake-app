@@ -331,9 +331,9 @@ function providerLabel(value = state.providerHint) {
 
 function pricingActionLabel(action = "price") {
   if (action === "rerun") {
-    return state.openaiApiConnected ? "Reprice with OpenAI" : "Reprice estimate";
+    return state.openaiApiConnected ? "Reprice on OCI" : "Reprice estimate";
   }
-  return state.openaiApiConnected ? "Price with OpenAI" : "Price estimate";
+  return state.openaiApiConnected ? "Price on OCI" : "Price estimate";
 }
 
 function syncApiUi() {
