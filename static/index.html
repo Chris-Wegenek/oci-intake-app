@@ -162,13 +162,14 @@
         </div>
       </section>
 
-      <section class="shape-grid" id="shapeGrid" aria-label="OCI flex shape choices"></section>
+      <section class="shape-tabs" id="shapeGrid" role="tablist" aria-label="OCI flex shape choices"></section>
 
-      <section class="shape-detail">
+      <section id="shapeRatePanel" class="shape-detail" aria-live="polite">
         <div class="shape-detail-copy">
           <span id="shapeFamily">AMD flexible shape</span>
           <h3 id="shapeDetailTitle">E6 Standard Ax</h3>
           <p id="shapeDetailSummary">Selected shape rates will be applied to approved rows.</p>
+          <div id="shapeDetailRates" class="shape-detail-rates" aria-label="Selected shape rates"></div>
         </div>
         <div class="shape-rate-wrap">
           <table id="shapeRateTable" class="shape-rate-table"></table>

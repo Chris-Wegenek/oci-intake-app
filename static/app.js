@@ -119,6 +119,7 @@ const els = {
   shapeFamily: document.querySelector("#shapeFamily"),
   shapeDetailTitle: document.querySelector("#shapeDetailTitle"),
   shapeDetailSummary: document.querySelector("#shapeDetailSummary"),
+  shapeDetailRates: document.querySelector("#shapeDetailRates"),
   rateCard: document.querySelector("#rateCard"),
   rateCardShape: document.querySelector("#rateCardShape"),
   pricingSummary: document.querySelector("#pricingSummary"),
@@ -529,16 +530,20 @@ function renderShapeChoices() {
     .map((shape) => {
       const isSelected = shape.key === state.selectedShape;
       return `
-        <button class="shape-card ${isSelected ? "is-selected" : ""}" type="button" data-shape="${escapeHtml(shape.key)}" style="--shape-accent:${escapeHtml(shape.accent || "#c74634")}">
-          <span class="shape-card-top">
-            <strong>${escapeHtml(shape.label)}</strong>
-            <em>${isSelected ? '<b aria-hidden="true">✓</b> Selected' : "Choose"}</em>
-          </span>
-          <span class="shape-family">${escapeHtml(shape.family || "OCI flex shape")}</span>
-          <span class="shape-summary">${escapeHtml(shape.summary || "")}</span>
-          <span class="shape-metrics">
-            <span><b>$${Number(shape.computeRate || 0).toFixed(4)}</b><small>OCPU/hr</small></span>
-            <span><b>$${Number(shape.memoryRate || 0).toFixed(4)}</b><small>GB/hr</small></span>
+        <button
+          id="shape-tab-${escapeHtml(shape.key)}"
+          class="shape-tab ${isSelected ? "is-selected" : ""}"
+          type="button"
+          role="tab"
+          aria-selected="${isSelected ? "true" : "false"}"
+          aria-controls="shapeRatePanel"
+          data-shape="${escapeHtml(shape.key)}"
+          style="--shape-accent:${escapeHtml(shape.accent || "#c74634")}"
+        >
+          <span class="shape-tab-name">${escapeHtml(shape.shortLabel || shape.label)}</span>
+          <span class="shape-tab-rates">
+            <span>$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr</span>
+            <span>$${Number(shape.memoryRate || 0).toFixed(4)} GB/hr</span>
           </span>
         </button>
       `;
@@ -556,6 +561,22 @@ function renderShapeDetail() {
   els.shapeFamily.textContent = shape.family || "OCI flex shape";
   els.shapeDetailTitle.textContent = shape.label || "Selected shape";
   els.shapeDetailSummary.textContent = shape.summary || "Selected shape rates will be applied to approved rows.";
+  if (els.shapeDetailRates) {
+    els.shapeDetailRates.innerHTML = `
+      <div>
+        <span>OCPU/hr</span>
+        <strong>$${Number(shape.computeRate || 0).toFixed(4)}</strong>
+      </div>
+      <div>
+        <span>Memory GB/hr</span>
+        <strong>$${Number(shape.memoryRate || 0).toFixed(4)}</strong>
+      </div>
+      <div>
+        <span>Billing basis</span>
+        <strong>${formatNumber(shape.hoursPerMonth || 730)} hrs/mo</strong>
+      </div>
+    `;
+  }
   els.shapeRateTable.innerHTML = `
     <thead>
       <tr>
