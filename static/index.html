@@ -162,18 +162,36 @@
         </div>
       </section>
 
-      <section class="shape-tabs" id="shapeGrid" role="tablist" aria-label="OCI flex shape choices"></section>
+      <section class="processor-section" aria-label="Processor platform">
+        <div class="processor-section-copy">
+          <span>Processor family</span>
+          <p>Choose a processor logo to reveal the matching OCI shapes and rate card.</p>
+        </div>
+        <div id="processorPicker" class="processor-picker" aria-label="Choose AMD or Intel"></div>
+      </section>
 
-      <section id="shapeRatePanel" class="shape-detail" aria-live="polite">
-        <div class="shape-detail-copy">
-          <span id="shapeFamily">AMD flexible shape</span>
-          <h3 id="shapeDetailTitle">E6 Standard Ax</h3>
-          <p id="shapeDetailSummary">Selected shape rates will be applied to approved rows.</p>
-          <div id="shapeDetailRates" class="shape-detail-rates" aria-label="Selected shape rates"></div>
+      <section id="shapeDropdown" class="shape-dropdown" aria-live="polite">
+        <div class="shape-dropdown-heading">
+          <div>
+            <span id="shapeVendorTitle">AMD shapes</span>
+            <p id="shapeVendorDescription">AMD-based flexible shapes available for this estimate.</p>
+          </div>
+          <em id="shapeVendorCount">0 shapes</em>
         </div>
-        <div class="shape-rate-wrap">
-          <table id="shapeRateTable" class="shape-rate-table"></table>
-        </div>
+
+        <section class="shape-tabs" id="shapeGrid" role="tablist" aria-label="OCI flex shape choices"></section>
+
+        <section id="shapeRatePanel" class="shape-detail">
+          <div class="shape-detail-copy">
+            <span id="shapeFamily">AMD flexible shape</span>
+            <h3 id="shapeDetailTitle">E6 Standard Ax</h3>
+            <p id="shapeDetailSummary">Selected shape rates will be applied to approved rows.</p>
+            <div id="shapeDetailRates" class="shape-detail-rates" aria-label="Selected shape rates"></div>
+          </div>
+          <div class="shape-rate-wrap">
+            <table id="shapeRateTable" class="shape-rate-table"></table>
+          </div>
+        </section>
       </section>
     </main>
 

@@ -5,6 +5,10 @@ const state = {
   rateCards: [],
   fullServiceCatalog: [],
   selectedShape: "e6-standard-ax",
+  selectedVendor: "amd",
+  lastShapeByVendor: {
+    amd: "e6-standard-ax",
+  },
   pricing: null,
   intakeMode: "on_prem",
   providerHint: "auto",
@@ -27,6 +31,19 @@ const state = {
     points: [],
   },
 };
+
+const PROCESSOR_VENDORS = [
+  {
+    key: "amd",
+    label: "AMD",
+    description: "AMD-based E-series and Ax flexible shapes.",
+  },
+  {
+    key: "intel",
+    label: "Intel",
+    description: "Intel-based X-series standard shapes.",
+  },
+];
 
 let activeFill = null;
 
@@ -114,6 +131,11 @@ const els = {
   priceButton: document.querySelector("#priceButton"),
   priceShapeButton: document.querySelector("#priceShapeButton"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
+  processorPicker: document.querySelector("#processorPicker"),
+  shapeDropdown: document.querySelector("#shapeDropdown"),
+  shapeVendorTitle: document.querySelector("#shapeVendorTitle"),
+  shapeVendorDescription: document.querySelector("#shapeVendorDescription"),
+  shapeVendorCount: document.querySelector("#shapeVendorCount"),
   shapeGrid: document.querySelector("#shapeGrid"),
   shapeRateTable: document.querySelector("#shapeRateTable"),
   shapeFamily: document.querySelector("#shapeFamily"),
@@ -302,6 +324,37 @@ function selectedShape() {
   );
 }
 
+function normalizeVendorKey(value) {
+  const vendor = String(value || "").toLowerCase();
+  if (vendor.includes("intel")) return "intel";
+  if (vendor.includes("amd")) return "amd";
+  return "";
+}
+
+function shapeVendor(shape = {}) {
+  const explicit = normalizeVendorKey(shape.processorVendor || shape.vendor || shape.processor);
+  if (explicit) return explicit;
+  const text = normalizeText([shape.key, shape.label, shape.family].filter(Boolean).join(" "));
+  if (text.includes("intel") || text.includes("x9")) return "intel";
+  return "amd";
+}
+
+function vendorDefinition(vendorKey = state.selectedVendor) {
+  return PROCESSOR_VENDORS.find((vendor) => vendor.key === vendorKey) || PROCESSOR_VENDORS[0];
+}
+
+function shapesForVendor(vendorKey = state.selectedVendor) {
+  return state.rateCards.filter((shape) => shapeVendor(shape) === vendorKey);
+}
+
+function syncVendorForSelectedShape() {
+  const shape = selectedShape();
+  state.selectedVendor = shapeVendor(shape);
+  if (shape?.key) {
+    state.lastShapeByVendor[state.selectedVendor] = shape.key;
+  }
+}
+
 function displayRateCard(rateCard = state.rateCard) {
   if (!state.fullServiceBeta) return rateCard || [];
   const items = [...(rateCard || [])];
@@ -358,13 +411,80 @@ function syncApiUi() {
   }
 }
 
+function renderProcessorPicker() {
+  if (!els.processorPicker) return;
+  els.processorPicker.innerHTML = PROCESSOR_VENDORS.map((vendor) => {
+    const shapes = shapesForVendor(vendor.key);
+    const isSelected = vendor.key === state.selectedVendor;
+    const shapeCount = shapes.length;
+    const countLabel = `${formatNumber(shapeCount)} ${shapeCount === 1 ? "shape" : "shapes"}`;
+    const logo =
+      vendor.key === "amd"
+        ? `<span class="processor-logo amd-logo"><span>AMD</span><i aria-hidden="true"></i></span>`
+        : `<span class="processor-logo intel-logo"><span>intel</span></span>`;
+    return `
+      <button
+        class="processor-button ${isSelected ? "is-selected" : ""}"
+        type="button"
+        data-processor-vendor="${escapeHtml(vendor.key)}"
+        aria-expanded="${isSelected ? "true" : "false"}"
+        aria-controls="shapeDropdown"
+      >
+        ${logo}
+        <em>${escapeHtml(countLabel)}</em>
+      </button>
+    `;
+  }).join("");
+
+  els.processorPicker.querySelectorAll("[data-processor-vendor]").forEach((button) => {
+    button.addEventListener("click", () => setProcessorVendor(button.dataset.processorVendor));
+  });
+}
+
+function renderShapeVendorMeta() {
+  const vendor = vendorDefinition();
+  const shapes = shapesForVendor(vendor.key);
+  const shapeCount = shapes.length;
+  if (els.shapeVendorTitle) {
+    els.shapeVendorTitle.textContent = `${vendor.label} shapes`;
+  }
+  if (els.shapeVendorDescription) {
+    els.shapeVendorDescription.textContent = vendor.description;
+  }
+  if (els.shapeVendorCount) {
+    els.shapeVendorCount.textContent = `${formatNumber(shapeCount)} ${shapeCount === 1 ? "shape" : "shapes"}`;
+  }
+  if (els.shapeDropdown) {
+    els.shapeDropdown.dataset.vendor = vendor.key;
+  }
+}
+
+function setProcessorVendor(vendorKey) {
+  const vendor = vendorDefinition(vendorKey).key;
+  state.selectedVendor = vendor;
+  const shapes = shapesForVendor(vendor);
+  const rememberedShape = shapes.find((shape) => shape.key === state.lastShapeByVendor[vendor]);
+  const currentShapeInVendor = shapes.some((shape) => shape.key === state.selectedShape);
+  const targetShape = currentShapeInVendor ? selectedShape() : rememberedShape || shapes[0];
+  if (targetShape && targetShape.key !== state.selectedShape) {
+    setShape(targetShape.key);
+    return;
+  }
+  renderProcessorPicker();
+  renderShapeChoices();
+  renderShapeDetail();
+}
+
 function setShape(shapeKey) {
   const shape = state.rateCards.find((item) => item.key === shapeKey);
   if (!shape) return;
   state.selectedShape = shape.key;
+  state.selectedVendor = shapeVendor(shape);
+  state.lastShapeByVendor[state.selectedVendor] = shape.key;
   state.rateCard = shape.rateCard || [];
   state.pricing = null;
   renderRateCard();
+  renderProcessorPicker();
   renderShapeChoices();
   renderShapeDetail();
   els.engineStatus.textContent = `${shape.label} selected`;
@@ -526,7 +646,13 @@ function resetPricingAfterTableChange(statusText = "Table updated") {
 
 function renderShapeChoices() {
   if (!els.shapeGrid) return;
-  els.shapeGrid.innerHTML = state.rateCards
+  const shapes = shapesForVendor();
+  renderShapeVendorMeta();
+  if (!shapes.length) {
+    els.shapeGrid.innerHTML = `<div class="shape-empty-state">No ${escapeHtml(vendorDefinition().label)} shapes are currently available.</div>`;
+    return;
+  }
+  els.shapeGrid.innerHTML = shapes
     .map((shape) => {
       const isSelected = shape.key === state.selectedShape;
       return `
@@ -880,6 +1006,7 @@ async function uploadFile(file) {
     state.fullServiceCatalog = payload.fullServiceCatalog || state.fullServiceCatalog;
     state.selectedShape = payload.selectedShape?.key || state.selectedShape;
     state.rateCard = selectedShape().rateCard || payload.rateCard || [];
+    syncVendorForSelectedShape();
     state.uploadMetadata = payload.metadata || {};
     state.intakeMode = payload.metadata?.intakeMode || state.intakeMode;
     state.fullServiceBeta = state.intakeMode === "cloud_bill";
@@ -908,6 +1035,7 @@ async function uploadFile(file) {
     els.sheetMeta.title = `Sheet "${payload.sheetName}" • ${parserLabel}${modeLabel}${grain} • data begins on row ${payload.metadata.dataStartRow}`;
     els.sheetName.textContent = payload.sheetName;
     renderRateCard();
+    renderProcessorPicker();
     renderShapeChoices();
     renderShapeDetail();
     renderTable();
@@ -976,6 +1104,7 @@ function initializeManualReviewTable() {
   els.sheetMeta.title = "Blank table for manual entry.";
   els.sheetName.textContent = "Manual entry";
   renderRateCard();
+  renderProcessorPicker();
   renderShapeChoices();
   renderShapeDetail();
   renderTable();
@@ -1255,6 +1384,7 @@ function showShapePage() {
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.remove("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  renderProcessorPicker();
   renderShapeChoices();
   renderShapeDetail();
   setStep("shape");
@@ -2288,8 +2418,10 @@ fetch("/api/health")
     state.openaiModel = payload.openaiModel || "";
     state.selectedShape = payload.selectedShape?.key || state.selectedShape;
     state.rateCard = selectedShape().rateCard || payload.rateCard || [];
+    syncVendorForSelectedShape();
     syncApiUi();
     renderRateCard();
+    renderProcessorPicker();
     renderShapeChoices();
     renderShapeDetail();
   })
