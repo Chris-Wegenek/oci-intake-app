@@ -1326,9 +1326,52 @@ td input[type="checkbox"] {
 
 .results-kpis {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
-  gap: 10px;
+  gap: 14px;
   margin-top: 14px;
+}
+
+.kpi-section {
+  display: grid;
+  gap: 8px;
+}
+
+.kpi-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.kpi-section-heading span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.kpi-section-heading em {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kpi-row {
+  display: grid;
+  gap: 10px;
+}
+
+.pricing-kpi-row {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.specs-kpi-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .result-kpi {
@@ -2007,10 +2050,14 @@ td input[type="checkbox"] {
     grid-template-columns: 1fr;
   }
 
-  .results-kpis,
+  .pricing-kpi-row,
   .results-grid,
   .ramp-body {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .specs-kpi-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -2047,7 +2094,8 @@ td input[type="checkbox"] {
   .summary-strip,
   .table-assistant-row,
   .pricing-rail,
-  .results-kpis,
+  .pricing-kpi-row,
+  .specs-kpi-row,
   .results-grid,
   .cost-mix,
   .ramp-body,
@@ -2055,6 +2103,16 @@ td input[type="checkbox"] {
   .ramp-control-grid,
   .ramp-years {
     grid-template-columns: 1fr;
+  }
+
+  .kpi-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .kpi-section-heading em {
+    white-space: normal;
   }
 
   .ramp-chart {

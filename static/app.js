@@ -1705,8 +1705,7 @@ function renderResults(pricing) {
   const memoryScale = Math.min(100, Math.max(12, (pricing.totals.memoryGb || reviewRows || 0) / Math.max(1, pricing.totals.memoryGb || serviceRows || reviewRows || 1) * 100));
   const storageGb = Number(pricing.totals.blockStorageGb || 0) + Number(pricing.totals.fileStorageGb || 0);
   const storageScale = Math.min(100, Math.max(12, Math.log10(Math.max(10, storageGb || 0)) * 20));
-
-  els.resultsKpis.innerHTML = `
+  const pricingCards = `
     ${resultKpiCard({
       label: cloudBill ? "OCI-equivalent monthly" : "Monthly run rate",
       value: formatCompactCurrency(pricing.totals.monthly),
@@ -1754,31 +1753,51 @@ function renderResults(pricing) {
             accent: reviewRows ? "#d97706" : "#067647",
             fill: reviewRows ? reviewShare : 100,
           })}`
-        : `${resultKpiCard({
-            label: "Compute",
-            value: formatKpiQuantity(pricing.totals.ocpus, "OCPUs"),
-            meta: "Converted from spreadsheet vCPUs",
-            accent: "#2f6f73",
-            fill: computeScale,
-            title: `${formatNumber(pricing.totals.ocpus)} OCPUs`,
-          })}
-          ${resultKpiCard({
-            label: "Memory",
-            value: formatKpiQuantity(pricing.totals.memoryGb, "GB"),
-            meta: "GB-hours at 730 hrs/mo",
-            accent: "#d4b483",
-            fill: memoryScale,
-            title: `${formatNumber(pricing.totals.memoryGb)} GB`,
-          })}
-          ${resultKpiCard({
-            label: "Storage",
-            value: formatKpiQuantity(storageGb, "GB"),
-            meta: "Block + file storage",
-            accent: "#7a5c1f",
-            fill: storageScale,
-            title: `${formatNumber(storageGb)} GB`,
-          })}`
+        : ""
     }
+  `;
+  const specCards = `
+    ${resultKpiCard({
+      label: "Compute",
+      value: formatKpiQuantity(pricing.totals.ocpus, "OCPUs"),
+      meta: "Converted from spreadsheet vCPUs",
+      accent: "#2f6f73",
+      fill: computeScale,
+      title: `${formatNumber(pricing.totals.ocpus)} OCPUs`,
+    })}
+    ${resultKpiCard({
+      label: "Memory",
+      value: formatKpiQuantity(pricing.totals.memoryGb, "GB"),
+      meta: "GB-hours at 730 hrs/mo",
+      accent: "#d4b483",
+      fill: memoryScale,
+      title: `${formatNumber(pricing.totals.memoryGb)} GB`,
+    })}
+    ${resultKpiCard({
+      label: "Storage",
+      value: formatKpiQuantity(storageGb, "GB"),
+      meta: "Block + file storage",
+      accent: "#7a5c1f",
+      fill: storageScale,
+      title: `${formatNumber(storageGb)} GB`,
+    })}
+  `;
+
+  els.resultsKpis.innerHTML = `
+    <section class="kpi-section" aria-label="Pricing summary">
+      <div class="kpi-section-heading">
+        <span>Pricing summary</span>
+        <em>Calculated from approved rows</em>
+      </div>
+      <div class="kpi-row pricing-kpi-row">${pricingCards}</div>
+    </section>
+    <section class="kpi-section" aria-label="Specs identified">
+      <div class="kpi-section-heading">
+        <span>Specs identified</span>
+        <em>Normalized from the uploaded table</em>
+      </div>
+      <div class="kpi-row specs-kpi-row">${specCards}</div>
+    </section>
   `;
 
   initializeConsumptionRamp(pricing);

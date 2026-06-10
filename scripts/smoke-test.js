@@ -43,6 +43,8 @@ async function main() {
   await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await page.locator("#resultsPage").getByText("E5 Standard", { exact: true }).waitFor({ timeout: 20000 });
   await page.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsKpis").getByText("Specs identified", { exact: true }).waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "pricing.png"), fullPage: false });
 
   const pricingText = await page.locator("#resultsPage").textContent();
@@ -64,6 +66,8 @@ async function main() {
   await mobile.getByRole("button", { name: /Price (estimate|on OCI)/ }).click();
   await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await mobile.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
+  await mobile.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
+  await mobile.locator("#resultsKpis").getByText("Specs identified", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-pricing.png"), fullPage: false });
 
   await browser.close();
