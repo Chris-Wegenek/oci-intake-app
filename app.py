@@ -48,6 +48,16 @@ def openai_api_enabled():
 def openai_api_configured():
     return bool(clean_text(os.environ.get("OPENAI_API_KEY")))
 
+
+LLM_WORKFLOW_CONTRACT = [
+    "Upload step: inspect the spreadsheet, PDF, or bill export and identify each workload's core count, RAM, storage, application/workload name, and environment when present.",
+    "CPU/core values from uploaded inventory are source vCPU/core counts; normalize them to OCI OCPUs for review using 2 vCPUs = 1 OCPU.",
+    "Review step: the editable review table is the source of truth. User edits override values inferred during upload.",
+    "Pricing step: price only the approved rows and edited values from the review table against the supplied OCI rate card and curated price catalog.",
+    "Never invent OCI rates or use source-cloud spend as an OCI rate. Use the provided rate card/catalog for final pricing math and flag uncertain mappings for review.",
+]
+
+
 CANONICAL_INVENTORY_FIELDS = [
     {
         "key": "application_name",
@@ -2943,6 +2953,7 @@ def call_llm_cloud_bill_mapping(parsed):
     include_private_context = clean_text(os.environ.get("OPENAI_BILL_INCLUDE_PRIVATE_CONTEXT")).lower() in {"1", "true", "yes", "on"}
     system = (
         "You are an Oracle Cloud Infrastructure cloud-bill mapper. Return compact JSON only. "
+        "Your primary job is to recognize source-cloud or document lines that imply compute/core usage, RAM/memory, and storage capacity or requests, then map those rows to OCI services and meters. "
         "Think through each source bill-line pattern using source provider, service, SKU/meter name, and usage unit. "
         "Map the source line to the closest OCI service and OCI price-list meter using the provided Oracle service mapping guide and metering rules. "
         "Use localCatalogCandidates when there is a trustworthy exact meter. If the local catalog does not include the needed OCI meter, still identify the OCI service/product but set reviewRequired true. "
@@ -2955,6 +2966,7 @@ def call_llm_cloud_bill_mapping(parsed):
         "targetUsageUnit:string, quantityMultiplier:number|null, confidence:number, reviewRequired:boolean, rationale:string}], warnings:[string]}."
     )
     payload = {
+        "workflowContract": LLM_WORKFLOW_CONTRACT,
         "officialReferences": OCI_OFFICIAL_REFERENCES,
         "meteringGuidance": OCI_METERING_GUIDANCE,
         "sourceServiceMappings": provider_mapping_context(provider),
@@ -4315,6 +4327,7 @@ def compact_llm_summary(pricing):
             ]
         )
     return {
+        "workflowContract": LLM_WORKFLOW_CONTRACT,
         "rowCount": len(pricing["rows"]),
         "totals": pricing["totals"],
         "sampleRows": sample_rows,
@@ -4399,6 +4412,7 @@ def call_llm_workbook_plan(path, full_service_beta=False):
     digest = workbook_digest(path)
     system = (
         "You interpret Excel infrastructure inventory workbooks for an Oracle Cloud Infrastructure intake app. "
+        "Your primary job is to find the workload identity and the specs needed for OCI pricing: core count, RAM/memory, and storage. "
         "Given workbook sheet samples, identify the sheet and row range that contain servers, applications, VMs, "
         "hosts, databases, or other infrastructure inventory. Return compact JSON only. "
         "Use 1-based row and column numbers. Do not invent missing columns. "
@@ -4434,6 +4448,7 @@ def call_llm_workbook_plan(path, full_service_beta=False):
             "column mapping."
         )
     payload = {
+        "workflowContract": LLM_WORKFLOW_CONTRACT,
         "canonicalFields": canonical_field_prompt(full_service_beta),
         "ociFullServiceBeta": bool(full_service_beta),
         "ociPriceCatalog": price_catalog_payload() if full_service_beta else [],
@@ -4461,10 +4476,12 @@ def call_llm_mapping(pricing):
     prompt = compact_llm_summary(pricing)
     system = (
         "You are an Oracle Cloud Infrastructure pricing mapper. "
-        "Validate whether the SKU mapping rules, selected OCI flexible compute shape, and any cloud-bill/on-prem "
-        "service mappings are appropriate for the uploaded rows. "
+        "The rows you receive have already passed through the editable review table; treat those edited values as the source of truth. "
+        "Validate whether the SKU mapping rules, selected OCI flexible compute shape, supplied OCI rate card, and any cloud-bill/on-prem "
+        "service mappings are appropriate for the approved review-table rows. "
         "Return compact JSON only with keys globalAssumptions, mappingRules, and reviewNotes. "
-        "Do not recalculate every row; validate the rules and call out mapping risks."
+        "Do not price from the original upload if review-table values differ. Do not invent rates. "
+        "Do not recalculate every row; validate the rules against the supplied rate card and call out mapping risks."
     )
     payload, warning = call_openai_json(
         system,
@@ -4521,6 +4538,7 @@ def compact_table_edit_context(fields, rows, max_rows=250):
 def call_llm_table_edit(fields, rows, instruction, full_service_beta=False):
     system = (
         "You edit a normalized Oracle Cloud Infrastructure intake review table. Return compact JSON only. "
+        "This table is the user's editable source of truth before pricing. Keep core/OCPU, RAM/memory, storage, application/workload, and environment fields coherent when the user asks for changes. "
         "Use only the provided rowId values and field key values when changing existing rows. "
         "If the user refers to row numbers, use displayIndex to choose the row. "
         "Never invent field keys. Do not change a value unless the user asked for that change or it is a direct consequence. "
@@ -4530,6 +4548,7 @@ def call_llm_table_edit(fields, rows, instruction, full_service_beta=False):
         "rowApprovals:[{rowId:string, approved:boolean}], addRows:[{values:object, approved:boolean}], warnings:[string]}."
     )
     payload = {
+        "workflowContract": LLM_WORKFLOW_CONTRACT,
         "instruction": instruction,
         "ociFullServiceBeta": bool(full_service_beta),
         "table": compact_table_edit_context(fields, rows),
