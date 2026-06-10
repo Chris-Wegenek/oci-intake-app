@@ -37,7 +37,7 @@ DEFAULT_SHAPE_KEY = "e6-standard-ax"
 INTAKE_MODE_ON_PREM = "on_prem"
 INTAKE_MODE_CLOUD_BILL = "cloud_bill"
 PROVIDER_AUTO = "auto"
-LOW_COST_OPENAI_MODEL = "gpt-5.4-nano"
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
 OPENAI_DISABLED_MESSAGE = "OpenAI API calls are temporarily disabled."
 
 
@@ -2990,7 +2990,7 @@ def call_llm_cloud_bill_mapping(parsed):
         timeout=90,
         model_env="OPENAI_BILL_MODEL",
         reasoning_effort_env="OPENAI_BILL_REASONING_EFFORT",
-        default_reasoning_effort="low",
+        default_reasoning_effort="medium",
     )
     metadata["llmBillMappingAttempted"] = True
     metadata["llmBillPatternCount"] = len(patterns)
@@ -4378,7 +4378,7 @@ def call_openai_json(
     if not api_key:
         return None, "OPENAI_API_KEY is not set."
 
-    model = os.environ.get(model_env) or os.environ.get("OPENAI_MODEL", LOW_COST_OPENAI_MODEL)
+    model = os.environ.get(model_env) or os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
     reasoning_effort = clean_text(os.environ.get(reasoning_effort_env)) if reasoning_effort_env else ""
     reasoning_effort = reasoning_effort or clean_text(default_reasoning_effort)
     body = {
@@ -4690,7 +4690,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
                     "openaiApiEnabled": openai_api_enabled(),
                     "openaiApiConfigured": openai_api_configured(),
                     "openaiApiConnected": openai_api_enabled() and openai_api_configured(),
-                    "openaiModel": os.environ.get("OPENAI_MODEL", LOW_COST_OPENAI_MODEL),
+                    "openaiModel": os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
                     "rateCard": build_rate_card(DEFAULT_SHAPE_KEY),
                     "rateCards": all_shape_payloads(),
                     "selectedShape": shape_payload(DEFAULT_SHAPE_KEY),
