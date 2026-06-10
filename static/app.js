@@ -666,10 +666,7 @@ function renderShapeChoices() {
           style="--shape-accent:${escapeHtml(shape.accent || "#c74634")}"
         >
           <span class="shape-tab-name">${escapeHtml(shape.shortLabel || shape.label)}</span>
-          <span class="shape-tab-rates">
-            <span>$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr</span>
-            <span>$${Number(shape.memoryRate || 0).toFixed(4)} GB/hr</span>
-          </span>
+          <span class="shape-tab-meta">${escapeHtml(shape.family || "OCI shape")}</span>
         </button>
       `;
     })
@@ -687,18 +684,36 @@ function renderShapeDetail() {
   els.shapeDetailSummary.textContent = shape.summary || "Selected shape rates will be applied to approved rows.";
   if (els.shapeDetailRates) {
     els.shapeDetailRates.innerHTML = `
-      <div>
-        <span>OCPU/hr</span>
-        <strong>${escapeHtml(shape.computeSku || "Compute")} · $${Number(shape.computeRate || 0).toFixed(4)}</strong>
-      </div>
-      <div>
-        <span>Memory GB/hr</span>
-        <strong>${escapeHtml(shape.memorySku || "Memory")} · $${Number(shape.memoryRate || 0).toFixed(4)}</strong>
-      </div>
-      <div>
-        <span>Billing basis</span>
-        <strong>${formatNumber(shape.hoursPerMonth || 730)} hrs/mo</strong>
-      </div>
+      <table class="shape-rate-card-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>SKU</th>
+            <th>Value</th>
+            <th>Unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Compute</td>
+            <td>${escapeHtml(shape.computeSku || "Compute")}</td>
+            <td>$${Number(shape.computeRate || 0).toFixed(4)}</td>
+            <td>OCPU/hr</td>
+          </tr>
+          <tr>
+            <td>Memory</td>
+            <td>${escapeHtml(shape.memorySku || "Memory")}</td>
+            <td>$${Number(shape.memoryRate || 0).toFixed(4)}</td>
+            <td>GB/hr</td>
+          </tr>
+          <tr>
+            <td>Billing month</td>
+            <td>-</td>
+            <td>${formatNumber(shape.hoursPerMonth || 730)}</td>
+            <td>hrs/mo</td>
+          </tr>
+        </tbody>
+      </table>
     `;
   }
 }
