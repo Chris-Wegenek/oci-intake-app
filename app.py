@@ -42,7 +42,10 @@ OPENAI_DISABLED_MESSAGE = "OpenAI API calls are temporarily disabled."
 
 
 def openai_api_enabled():
-    return clean_text(os.environ.get("OPENAI_API_ENABLED")).lower() in {"1", "true", "yes", "on"}
+    flag = clean_text(os.environ.get("OPENAI_API_ENABLED")).lower()
+    if flag:
+        return flag in {"1", "true", "yes", "on"}
+    return True
 
 
 def openai_api_configured():
