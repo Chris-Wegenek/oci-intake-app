@@ -220,7 +220,10 @@
               </label>
               <label class="ramp-control">
                 <span>Selected dot monthly spend</span>
-                <input id="rampPeakMonthly" type="number" min="0" step="100" value="0" />
+                <div class="currency-input">
+                  <b aria-hidden="true">$</b>
+                  <input id="rampPeakMonthly" type="number" min="0" step="100" value="0" inputmode="decimal" aria-label="Selected dot monthly spend in dollars" />
+                </div>
                 <small>Cannot exceed the BOM maximum</small>
               </label>
             </div>

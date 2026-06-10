@@ -52,9 +52,13 @@ Do not commit the real API key to GitHub. The app reads it from Vercel at runtim
 
 ## Rate cards
 
-- Shape choices: `E4 Standard`, `E5 Standard`, and `E6 Standard Ax`
+- Shape choices: `E4 Standard`, `E5 Standard`, `E6 Standard Ax`, `X9 Standard`, and `X12 Standard Ax`
 - `B112530`: E6 Standard Ax OCPU-hour rate, `OCPU x 730`
 - `B112531`: E6 Standard Ax Memory GB-hour rate, `GB x 730`
+- `X9-OCPU`: X9 Standard OCPU-hour rate, `OCPU x 730`
+- `X9-MEMORY`: X9 Standard Memory GB-hour rate, `GB x 730`
+- `X12AX-OCPU`: X12 Standard Ax OCPU-hour rate, `OCPU x 730`
+- `X12AX-MEMORY`: X12 Standard Ax Memory GB-hour rate, `GB x 730`
 - `B91961`: Block volume GB-month rate
 - `B89057`: File storage GB-month rate
 

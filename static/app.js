@@ -15,6 +15,10 @@ const state = {
   openaiApiConfigured: false,
   openaiApiConnected: false,
   openaiModel: "",
+  resultSort: {
+    key: "monthly",
+    direction: "desc",
+  },
   ramp: {
     months: 36,
     ceiling: 0,
@@ -528,7 +532,7 @@ function renderShapeChoices() {
         <button class="shape-card ${isSelected ? "is-selected" : ""}" type="button" data-shape="${escapeHtml(shape.key)}" style="--shape-accent:${escapeHtml(shape.accent || "#c74634")}">
           <span class="shape-card-top">
             <strong>${escapeHtml(shape.label)}</strong>
-            <em>${isSelected ? "Selected" : "Choose"}</em>
+            <em>${isSelected ? '<b aria-hidden="true">✓</b> Selected' : "Choose"}</em>
           </span>
           <span class="shape-family">${escapeHtml(shape.family || "OCI flex shape")}</span>
           <span class="shape-summary">${escapeHtml(shape.summary || "")}</span>
@@ -1896,107 +1900,260 @@ function serviceQuantityLabel(mapping, row) {
   return storage ? `${formatNumber(storage)} GB` : "-";
 }
 
+function sortComparableValue(value) {
+  if (value == null || value === "") {
+    return { empty: true, value: "" };
+  }
+  if (typeof value === "number") {
+    return { empty: !Number.isFinite(value), value };
+  }
+  const text = String(value).trim();
+  return { empty: !text || text === "-", value: text.toLowerCase() };
+}
+
+function compareSortValues(left, right, direction = "asc") {
+  const a = sortComparableValue(left);
+  const b = sortComparableValue(right);
+  if (a.empty && b.empty) return 0;
+  if (a.empty) return 1;
+  if (b.empty) return -1;
+  const multiplier = direction === "asc" ? 1 : -1;
+  if (typeof a.value === "number" && typeof b.value === "number") {
+    return (a.value - b.value) * multiplier;
+  }
+  return String(a.value).localeCompare(String(b.value), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  }) * multiplier;
+}
+
+function activeResultSort(columns) {
+  const requestedColumn = columns.find((column) => column.key === state.resultSort.key);
+  const fallbackColumn = columns.find((column) => column.key === "monthly") || columns[0];
+  const column = requestedColumn || fallbackColumn;
+  const direction = requestedColumn
+    ? state.resultSort.direction === "asc" ? "asc" : "desc"
+    : column?.key === "monthly" ? "desc" : "asc";
+  return { column, direction };
+}
+
+function sortResultRows(rows, columns) {
+  const { column: activeColumn, direction } = activeResultSort(columns);
+  if (!activeColumn) return rows.slice();
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const comparison = compareSortValues(
+        activeColumn.sortValue(left.row),
+        activeColumn.sortValue(right.row),
+        direction,
+      );
+      return comparison || left.index - right.index;
+    })
+    .map((item) => item.row);
+}
+
+function renderSortableHead(columns) {
+  const { column: activeColumn, direction } = activeResultSort(columns);
+  return `
+    <thead>
+      <tr>
+        ${columns
+          .map((column) => {
+            const active = activeColumn?.key === column.key;
+            const ariaSort = active ? (direction === "asc" ? "ascending" : "descending") : "none";
+            return `
+              <th class="${active ? `is-sorted is-${direction}` : "is-sortable"}" aria-sort="${ariaSort}">
+                <button type="button" class="sort-header" data-result-sort="${escapeHtml(column.key)}">
+                  <span>${escapeHtml(column.label)}</span>
+                  <i aria-hidden="true"></i>
+                </button>
+              </th>
+            `;
+          })
+          .join("")}
+      </tr>
+    </thead>
+  `;
+}
+
+function renderResultTableFromColumns(rows, columns) {
+  const sortedRows = sortResultRows(rows, columns);
+  const body = sortedRows
+    .map((row) => `
+      <tr>
+        ${columns.map((column) => `<td>${column.render(row)}</td>`).join("")}
+      </tr>
+    `)
+    .join("");
+  els.resultsTable.innerHTML = `${renderSortableHead(columns)}<tbody>${body}</tbody>`;
+}
+
 function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
   if (cloudBill) {
-    const cloudHead = `
-      <thead>
-        <tr>
-          <th>Source service</th>
-          <th>Source SKU / meter</th>
-          <th>OCI target</th>
-          <th>Usage</th>
-          <th>Source cost</th>
-          <th>OCI monthly</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-    `;
-    const cloudBody = rows
-      .map((row) => {
+    const columns = [
+      {
+        key: "sourceService",
+        label: "Source service",
+        sortValue: (row) => row.fullServiceMapping?.sourceService || fallbackEntityName(row, "Source line"),
+        render: (row) => escapeHtml(row.fullServiceMapping?.sourceService || fallbackEntityName(row, "Source line")),
+      },
+      {
+        key: "sourceProduct",
+        label: "Source SKU / meter",
+        sortValue: (row) => row.fullServiceMapping?.sourceProduct || "",
+        render: (row) => escapeHtml(row.fullServiceMapping?.sourceProduct || "-"),
+      },
+      {
+        key: "ociTarget",
+        label: "OCI target",
+        sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review"),
+      },
+      {
+        key: "usage",
+        label: "Usage",
+        sortValue: (row) => Number(row.fullServiceMapping?.quantity || row.specs?.blockStorageGb || row.specs?.fileStorageGb || 0),
+        render: (row) => escapeHtml(serviceQuantityLabel(row.fullServiceMapping || {}, row)),
+      },
+      {
+        key: "sourceCost",
+        label: "Source cost",
+        sortValue: (row) => Number(row.fullServiceMapping?.sourceMonthlyCost || 0),
+        render: (row) => formatCurrency(row.fullServiceMapping?.sourceMonthlyCost || 0),
+      },
+      {
+        key: "monthly",
+        label: "OCI monthly",
+        sortValue: (row) => Number(row.monthly || 0),
+        render: (row) => formatCurrency(row.monthly),
+      },
+      {
+        key: "status",
+        label: "Status",
+        sortValue: (row) => {
+          const mapping = row.fullServiceMapping || {};
+          return mapping.reviewRequired ? "Review" : mapping.confidence ? `${Math.round(mapping.confidence * 100)}% match` : "Unmapped";
+        },
+        render: (row) => {
         const mapping = row.fullServiceMapping || {};
-        const product = mapping.ociProduct || row.lineItems[0]?.description || "Needs review";
         const status = mapping.reviewRequired
           ? "Review"
           : mapping.confidence
             ? `${Math.round(mapping.confidence * 100)}% match`
             : "Unmapped";
-        return `
-          <tr>
-            <td>${escapeHtml(mapping.sourceService || fallbackEntityName(row, "Source line"))}</td>
-            <td>${escapeHtml(mapping.sourceProduct || "-")}</td>
-            <td>${escapeHtml(product)}</td>
-            <td>${escapeHtml(serviceQuantityLabel(mapping, row))}</td>
-            <td>${formatCurrency(mapping.sourceMonthlyCost || 0)}</td>
-            <td>${formatCurrency(row.monthly)}</td>
-            <td>${escapeHtml(status)}</td>
-          </tr>
-        `;
-      })
-      .join("");
-    els.resultsTable.innerHTML = `${cloudHead}<tbody>${cloudBody}</tbody>`;
+          return escapeHtml(status);
+        },
+      },
+    ];
+    renderResultTableFromColumns(rows, columns);
     return;
   }
 
   if (fullServiceBeta) {
-    const betaHead = `
-      <thead>
-        <tr>
-          <th>Workload</th>
-          <th>Source</th>
-          <th>OCI product</th>
-          <th>Quantity</th>
-          <th>Monthly</th>
-          <th>Annual</th>
-        </tr>
-      </thead>
-    `;
-    const betaBody = rows
-      .map((row) => {
-        const mapping = row.fullServiceMapping;
-        const product = mapping?.ociProduct || row.lineItems[0]?.description || "Needs review";
-        return `
-          <tr>
-            <td>${escapeHtml(fallbackEntityName(row))}</td>
-            <td>${escapeHtml(serviceSourceLabel(mapping))}</td>
-            <td>${escapeHtml(product)}</td>
-            <td>${escapeHtml(serviceQuantityLabel(mapping, row))}</td>
-            <td>${formatCurrency(row.monthly)}</td>
-            <td>${formatCurrency(row.annual)}</td>
-          </tr>
-        `;
-      })
-      .join("");
-    els.resultsTable.innerHTML = `${betaHead}<tbody>${betaBody}</tbody>`;
+    const columns = [
+      {
+        key: "workload",
+        label: "Workload",
+        sortValue: (row) => fallbackEntityName(row),
+        render: (row) => escapeHtml(fallbackEntityName(row)),
+      },
+      {
+        key: "source",
+        label: "Source",
+        sortValue: (row) => serviceSourceLabel(row.fullServiceMapping),
+        render: (row) => escapeHtml(serviceSourceLabel(row.fullServiceMapping)),
+      },
+      {
+        key: "ociProduct",
+        label: "OCI product",
+        sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review"),
+      },
+      {
+        key: "quantity",
+        label: "Quantity",
+        sortValue: (row) => Number(row.fullServiceMapping?.quantity || row.specs?.blockStorageGb || row.specs?.fileStorageGb || 0),
+        render: (row) => escapeHtml(serviceQuantityLabel(row.fullServiceMapping, row)),
+      },
+      {
+        key: "monthly",
+        label: "Monthly",
+        sortValue: (row) => Number(row.monthly || 0),
+        render: (row) => formatCurrency(row.monthly),
+      },
+      {
+        key: "annual",
+        label: "Annual",
+        sortValue: (row) => Number(row.annual || 0),
+        render: (row) => formatCurrency(row.annual),
+      },
+    ];
+    renderResultTableFromColumns(rows, columns);
     return;
   }
 
-  const head = `
-    <thead>
-      <tr>
-        <th>Workload</th>
-        <th>Env</th>
-        <th>OCPUs</th>
-        <th>Memory</th>
-        <th>Storage</th>
-        <th>Monthly</th>
-        <th>Annual</th>
-      </tr>
-    </thead>
-  `;
-  const body = rows
-    .map((row) => `
-      <tr>
-        <td>${escapeHtml(fallbackEntityName(row))}</td>
-        <td>${escapeHtml(row.environment || "-")}</td>
-        <td>${formatNumber(row.specs.ocpus)}</td>
-        <td>${formatNumber(row.specs.memoryGb)} GB</td>
-        <td>${formatNumber(row.specs.blockStorageGb + row.specs.fileStorageGb)} GB</td>
-        <td>${formatCurrency(row.monthly)}</td>
-        <td>${formatCurrency(row.annual)}</td>
-      </tr>
-    `)
-    .join("");
-  els.resultsTable.innerHTML = `${head}<tbody>${body}</tbody>`;
+  const columns = [
+    {
+      key: "workload",
+      label: "Workload",
+      sortValue: (row) => fallbackEntityName(row),
+      render: (row) => escapeHtml(fallbackEntityName(row)),
+    },
+    {
+      key: "environment",
+      label: "Env",
+      sortValue: (row) => row.environment || "",
+      render: (row) => escapeHtml(row.environment || "-"),
+    },
+    {
+      key: "ocpus",
+      label: "OCPUs",
+      sortValue: (row) => Number(row.specs?.ocpus || 0),
+      render: (row) => formatNumber(row.specs?.ocpus),
+    },
+    {
+      key: "memory",
+      label: "Memory",
+      sortValue: (row) => Number(row.specs?.memoryGb || 0),
+      render: (row) => `${formatNumber(row.specs?.memoryGb)} GB`,
+    },
+    {
+      key: "storage",
+      label: "Storage",
+      sortValue: (row) => Number(row.specs?.blockStorageGb || 0) + Number(row.specs?.fileStorageGb || 0),
+      render: (row) => `${formatNumber(Number(row.specs?.blockStorageGb || 0) + Number(row.specs?.fileStorageGb || 0))} GB`,
+    },
+    {
+      key: "monthly",
+      label: "Monthly",
+      sortValue: (row) => Number(row.monthly || 0),
+      render: (row) => formatCurrency(row.monthly),
+    },
+    {
+      key: "annual",
+      label: "Annual",
+      sortValue: (row) => Number(row.annual || 0),
+      render: (row) => formatCurrency(row.annual),
+    },
+  ];
+  renderResultTableFromColumns(rows, columns);
+}
+
+if (els.resultsTable) {
+  els.resultsTable.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-result-sort]");
+    if (!button) return;
+    const key = button.dataset.resultSort;
+    const direction = state.resultSort.key === key && state.resultSort.direction === "asc" ? "desc" : "asc";
+    state.resultSort = { key, direction };
+    if (!state.pricing) return;
+    renderResultsTable(
+      state.pricing.rows || [],
+      state.pricing.fullServiceBeta,
+      state.pricing.intakeMode === "cloud_bill" || state.pricing.cloudBillMode,
+    );
+  });
 }
 
 els.fileInput.addEventListener("change", () => {

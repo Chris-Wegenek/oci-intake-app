@@ -603,6 +603,30 @@ SHAPE_DEFINITIONS = [
         "summary": "Lower OCPU rate and higher memory rate; useful when compute-heavy rows dominate.",
         "accent": "#164f68",
     },
+    {
+        "key": "x9-standard",
+        "label": "X9 Standard",
+        "shortLabel": "X9",
+        "family": "Virtual Machine Standard",
+        "computeSku": "X9-OCPU",
+        "memorySku": "X9-MEMORY",
+        "computeRate": 0.0400,
+        "memoryRate": 0.0015,
+        "summary": "Standard X9 VM shape using the public OCPU and memory rates from the supplied rate card.",
+        "accent": "#7a3126",
+    },
+    {
+        "key": "x12-standard-ax",
+        "label": "X12 Standard Ax",
+        "shortLabel": "X12 Ax",
+        "family": "Ax flexible shape",
+        "computeSku": "X12AX-OCPU",
+        "memorySku": "X12AX-MEMORY",
+        "computeRate": 0.0119,
+        "memoryRate": 0.0114,
+        "summary": "Standard X12 Ax shape using the public OCPU and memory rates from the supplied rate card.",
+        "accent": "#8a6f24",
+    },
 ]
 
 SHAPE_LOOKUP = {shape["key"]: shape for shape in SHAPE_DEFINITIONS}
