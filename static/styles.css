@@ -226,15 +226,15 @@ textarea {
 .upload-copy .llm-disclaimer {
   display: inline-flex;
   max-width: 540px;
-  margin-top: 14px;
-  padding: 10px 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
   border: 1px solid rgba(199, 70, 52, 0.24);
   border-radius: 8px;
   background: rgba(199, 70, 52, 0.07);
   color: var(--redwood-dark);
-  font-size: 13px;
-  font-weight: 720;
-  line-height: 1.35;
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.45;
 }
 
 .mode-selector {
