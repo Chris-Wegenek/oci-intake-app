@@ -137,7 +137,6 @@ const els = {
   shapeVendorDescription: document.querySelector("#shapeVendorDescription"),
   shapeVendorCount: document.querySelector("#shapeVendorCount"),
   shapeGrid: document.querySelector("#shapeGrid"),
-  shapeRateTable: document.querySelector("#shapeRateTable"),
   shapeFamily: document.querySelector("#shapeFamily"),
   shapeDetailTitle: document.querySelector("#shapeDetailTitle"),
   shapeDetailSummary: document.querySelector("#shapeDetailSummary"),
@@ -683,7 +682,6 @@ function renderShapeChoices() {
 
 function renderShapeDetail() {
   const shape = selectedShape();
-  const rateCard = displayRateCard(shape.rateCard || state.rateCard || []);
   els.shapeFamily.textContent = shape.family || "OCI flex shape";
   els.shapeDetailTitle.textContent = shape.label || "Selected shape";
   els.shapeDetailSummary.textContent = shape.summary || "Selected shape rates will be applied to approved rows.";
@@ -691,11 +689,11 @@ function renderShapeDetail() {
     els.shapeDetailRates.innerHTML = `
       <div>
         <span>OCPU/hr</span>
-        <strong>$${Number(shape.computeRate || 0).toFixed(4)}</strong>
+        <strong>${escapeHtml(shape.computeSku || "Compute")} · $${Number(shape.computeRate || 0).toFixed(4)}</strong>
       </div>
       <div>
         <span>Memory GB/hr</span>
-        <strong>$${Number(shape.memoryRate || 0).toFixed(4)}</strong>
+        <strong>${escapeHtml(shape.memorySku || "Memory")} · $${Number(shape.memoryRate || 0).toFixed(4)}</strong>
       </div>
       <div>
         <span>Billing basis</span>
@@ -703,36 +701,6 @@ function renderShapeDetail() {
       </div>
     `;
   }
-  els.shapeRateTable.innerHTML = `
-    <thead>
-      <tr>
-        <th>SKU</th>
-        <th>Description</th>
-        <th>Rate</th>
-        <th>Notes</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rateCard
-        .map(
-          (item) => `
-            <tr>
-              <td>${escapeHtml(item.sku)}</td>
-              <td>${escapeHtml(item.description)}</td>
-              <td>$${Number(item.rate || 0).toFixed(4)}</td>
-              <td>${escapeHtml(item.notes || item.unit || "")}</td>
-            </tr>
-          `,
-        )
-        .join("")}
-      <tr>
-        <td>-</td>
-        <td>Hours per month (constant)</td>
-        <td>${formatNumber(shape.hoursPerMonth || 730)}</td>
-        <td>Used in compute and memory calculations</td>
-      </tr>
-    </tbody>
-  `;
 }
 
 function renderStats(meta = {}) {

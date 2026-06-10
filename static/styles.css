@@ -1413,7 +1413,6 @@ td input[type="checkbox"] {
 
 .shape-detail {
   display: grid;
-  grid-template-columns: minmax(280px, 0.42fr) minmax(0, 1fr);
   gap: 0;
   margin-top: 0;
   border: 0;
@@ -1424,11 +1423,14 @@ td input[type="checkbox"] {
 }
 
 .shape-detail-copy {
-  padding: 22px;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.5fr) minmax(360px, 1fr);
+  gap: 18px;
+  align-items: center;
+  padding: 20px 22px;
   background:
     linear-gradient(180deg, rgba(212, 180, 131, 0.18), transparent 62%),
     #fbfaf7;
-  border-right: 1px solid var(--line);
 }
 
 .shape-detail-copy span {
@@ -1454,15 +1456,16 @@ td input[type="checkbox"] {
 
 .shape-detail-rates {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .shape-detail-rates div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  display: grid;
   gap: 12px;
+  align-content: start;
+  min-height: 74px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px;
@@ -1478,42 +1481,10 @@ td input[type="checkbox"] {
 
 .shape-detail-rates strong {
   color: var(--ink);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 820;
-  text-align: right;
-}
-
-.shape-rate-wrap {
-  overflow: auto;
-}
-
-.shape-rate-table {
-  min-width: 620px;
-  height: 100%;
-}
-
-.shape-rate-table th {
-  background: var(--navy);
-}
-
-.shape-rate-table th:first-child,
-.shape-rate-table td:first-child {
-  position: static;
-  width: auto;
-  min-width: 0;
-  text-align: left;
-}
-
-.shape-rate-table td {
-  padding: 12px;
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.shape-rate-table td:first-child,
-.shape-rate-table td:nth-child(3) {
-  color: var(--redwood-dark);
-  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .shape-result-pill {
@@ -2354,13 +2325,8 @@ td input[type="checkbox"] {
     width: 100%;
   }
 
-  .shape-detail {
-    grid-template-columns: 1fr;
-  }
-
   .shape-detail-copy {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    grid-template-columns: 1fr;
   }
 
   .pricing-kpi-row,
