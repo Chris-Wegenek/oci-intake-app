@@ -36,12 +36,12 @@ const PROCESSOR_VENDORS = [
   {
     key: "amd",
     label: "AMD",
-    description: "AMD-based E-series and Ax flexible shapes.",
+    description: "AMD-based E-series flexible shapes.",
   },
   {
     key: "intel",
     label: "Intel",
-    description: "Intel-based X-series standard shapes.",
+    description: "Intel-based X-series standard and Ax shapes.",
   },
 ];
 
