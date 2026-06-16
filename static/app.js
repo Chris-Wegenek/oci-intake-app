@@ -14,6 +14,11 @@ const state = {
   providerHint: "auto",
   uploadMetadata: {},
   fullServiceBeta: false,
+  bomMatch: false,
+  hideGpuPricing: false,
+  hideWindowsPricing: false,
+  rightsize: false,
+  existingInfraCost: 0,
   showMissingOnly: false,
   openaiApiEnabled: false,
   openaiApiConfigured: false,
@@ -130,6 +135,11 @@ const els = {
   tableEditStatus: document.querySelector("#tableEditStatus"),
   priceButton: document.querySelector("#priceButton"),
   priceShapeButton: document.querySelector("#priceShapeButton"),
+  bomMatchToggle: document.querySelector("#bomMatchToggle"),
+  hideGpuToggle: document.querySelector("#hideGpuToggle"),
+  hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
+  rightsizeSwitch: document.querySelector("#rightsizeSwitch"),
+  exportExcel: document.querySelector("#exportExcel"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
   processorPicker: document.querySelector("#processorPicker"),
   shapeDropdown: document.querySelector("#shapeDropdown"),
@@ -1245,6 +1255,10 @@ async function priceRows() {
           intakeMode: state.intakeMode,
           providerHint: state.providerHint,
           fullServiceBeta: state.fullServiceBeta,
+          bomMatch: state.bomMatch,
+          hideGpuPricing: state.hideGpuPricing,
+          hideWindowsPricing: state.hideWindowsPricing,
+          rightsize: state.rightsize,
         }),
       },
       70000,
@@ -1268,6 +1282,60 @@ async function priceRows() {
     els.priceShapeButton.textContent = pricingActionLabel("price");
     els.rerunPricing.disabled = false;
     els.rerunPricing.textContent = pricingActionLabel("rerun");
+  }
+}
+
+async function exportToExcel() {
+  if (!state.pricing) return;
+  const button = els.exportExcel;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Exporting...";
+  try {
+    const monthly = (typeof rampMonthlyValues === "function" && state.ramp.points.length)
+      ? rampMonthlyValues()
+      : [];
+    const ramp = { ceiling: state.ramp.ceiling, monthly };
+    const response = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fields: state.fields,
+        rows: state.rows,
+        shape: state.selectedShape,
+        intakeMode: state.intakeMode,
+        fullServiceBeta: state.fullServiceBeta,
+        bomMatch: state.bomMatch,
+        hideGpuPricing: state.hideGpuPricing,
+        hideWindowsPricing: state.hideWindowsPricing,
+        rightsize: state.rightsize,
+        ramp,
+        existingInfraCost: state.existingInfraCost || 0,
+      }),
+    });
+    if (!response.ok) {
+      let message = "Export failed.";
+      try {
+        message = (await response.json()).error || message;
+      } catch (err) {
+        /* non-JSON error body */
+      }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "OCI_BOM_Export.xlsx";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    els.engineStatus.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
   }
 }
 
@@ -2123,6 +2191,17 @@ function renderResultTableFromColumns(rows, columns) {
   els.resultsTable.innerHTML = `${renderSortableHead(columns)}<tbody>${body}</tbody>`;
 }
 
+function sizeFlagBadge(row) {
+  const check = row.sizeCheck || {};
+  if (check.status === "impossible") {
+    return ` <span class="size-flag size-flag-impossible" title="${escapeHtml(check.message || "")}">IMPOSSIBLE</span>`;
+  }
+  if (check.status === "baremetal") {
+    return ` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">BARE METAL</span>`;
+  }
+  return "";
+}
+
 function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
   if (cloudBill) {
     const columns = [
@@ -2232,7 +2311,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       key: "workload",
       label: "Workload",
       sortValue: (row) => fallbackEntityName(row),
-      render: (row) => escapeHtml(fallbackEntityName(row)),
+      render: (row) => escapeHtml(fallbackEntityName(row)) + sizeFlagBadge(row),
     },
     {
       key: "environment",
@@ -2335,6 +2414,24 @@ els.tableEditPrompt.addEventListener("keydown", (event) => {
 els.priceButton.addEventListener("click", showShapePage);
 els.priceShapeButton.addEventListener("click", priceRows);
 els.rerunPricing.addEventListener("click", priceRows);
+els.bomMatchToggle?.addEventListener("change", (event) => {
+  state.bomMatch = event.target.checked;
+});
+els.hideGpuToggle?.addEventListener("change", (event) => {
+  state.hideGpuPricing = event.target.checked;
+});
+els.hideWindowsToggle?.addEventListener("change", (event) => {
+  state.hideWindowsPricing = event.target.checked;
+});
+els.rightsizeSwitch?.addEventListener("click", (event) => {
+  const opt = event.target.closest("[data-rightsize]");
+  if (!opt) return;
+  state.rightsize = opt.dataset.rightsize === "true";
+  els.rightsizeSwitch.querySelectorAll(".mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", b === opt);
+  });
+});
+els.exportExcel?.addEventListener("click", exportToExcel);
 els.backToReview.addEventListener("click", showIntakePage);
 els.backToReviewFromShape.addEventListener("click", showIntakePage);
 els.steps.forEach((step) => {

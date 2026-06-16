@@ -19,6 +19,8 @@ from urllib.parse import unquote, urlparse
 import pandas as pd
 from pypdf import PdfReader
 
+import bom_export
+
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
@@ -645,6 +647,13 @@ STORAGE_RATE_ITEMS = [
         "notes": "VM OS / data disks",
     },
     {
+        "sku": "B91962",
+        "description": "Block Volume Performance Units (per GB-mo)",
+        "unit": "Performance Units/GB-month",
+        "rate": 0.0017,
+        "notes": "Balanced performance: 10 performance units per block-volume GB",
+    },
+    {
         "sku": "B89057",
         "description": "File Storage (GB-mo)",
         "unit": "GB-month",
@@ -652,6 +661,25 @@ STORAGE_RATE_ITEMS = [
         "notes": "NAS / ETL shared file storage",
     },
 ]
+
+# Block-volume performance units billed per GB of block storage (BOM script uses Balanced = 10).
+BLOCK_PERFORMANCE_UNITS_PER_GB = 10
+
+# Windows OS licensing (BOM script): charged per OCPU-hour for rows detected as Windows.
+WINDOWS_LICENSE_SKU = "B88318"
+WINDOWS_LICENSE_RATE = 0.0920
+
+# "Rightsize and Cut Costs": follows the Acceleron optimizer methodology — map to the OCI
+# target memory ratio of 8 GB per OCPU instead of carrying over the source's (often
+# over-provisioned) memory. Memory is capped at ocpus x 8 GB; OCPUs are unchanged.
+RIGHTSIZE_MEM_PER_OCPU = 8.0
+WINDOWS_LICENSE_ITEM = {
+    "sku": WINDOWS_LICENSE_SKU,
+    "description": "Compute - Windows OS (OCPU Per Hour)",
+    "unit": "OCPU-hour",
+    "rate": WINDOWS_LICENSE_RATE,
+    "notes": "Windows OS licensing for OS-detected Windows rows, OCPU-hours x 730",
+}
 
 FULL_SERVICE_RATE_ITEMS = [
     {
@@ -1251,6 +1279,7 @@ def build_rate_card(shape_key=None, full_service_beta=False):
             "notes": f"{shape['label']} GB-hours x 730 hrs/mo",
         },
         *[item.copy() for item in STORAGE_RATE_ITEMS],
+        WINDOWS_LICENSE_ITEM.copy(),
     ]
     if full_service_beta:
         seen_skus = {item["sku"] for item in items}
@@ -2507,6 +2536,128 @@ def parse_azure_service_mapping_table(path, sheet_name, raw, provider_hint=PROVI
     }
 
 
+def _load_cloud_shape_map():
+    """Load the AWS/Azure/GCP -> OCI instance sizing reference (extracted from the mapping workbook)."""
+    path = Path(__file__).resolve().parent / "data" / "cloud_shape_map.json"
+    index = {}
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return index
+    for entry in payload.get("shapes", []):
+        key = entry.get("key") or re.sub(r"[^a-z0-9]", "", str(entry.get("instance", "")).lower())
+        if key:
+            index.setdefault(key, entry)
+    return index
+
+
+# Exact per-instance sizing from the provided cloud mapping doc (authoritative over heuristics).
+CLOUD_SHAPE_MAP = _load_cloud_shape_map()
+# Longest keys first so e.g. "e2standard16" wins over a shorter accidental substring.
+CLOUD_SHAPE_KEYS_BY_LEN = sorted(CLOUD_SHAPE_MAP.keys(), key=len, reverse=True)
+
+
+def lookup_cloud_shape(context):
+    """Return the mapping-doc record whose instance type appears in the bill context, else None."""
+    collapsed = re.sub(r"[^a-z0-9]", "", str(context).lower())
+    if not collapsed:
+        return None
+    for key in CLOUD_SHAPE_KEYS_BY_LEN:
+        if len(key) >= 4 and key in collapsed:
+            return CLOUD_SHAPE_MAP[key]
+    return None
+
+
+def _load_oci_shapes():
+    path = Path(__file__).resolve().parent / "data" / "oci_shapes.json"
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {"vendorTiers": {}, "allShapes": []}
+
+
+OCI_SHAPES = _load_oci_shapes()
+OCI_VENDOR_TIERS = OCI_SHAPES.get("vendorTiers", {})
+
+
+def _load_oci_gpu_shapes():
+    path = Path(__file__).resolve().parent / "data" / "oci_gpu_shapes.json"
+    index = {}
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return index
+    for s in payload.get("shapes", []):
+        index[s["shape"]] = s
+    return index
+
+
+OCI_GPU_SHAPES = _load_oci_gpu_shapes()
+GPU_HOURS_PER_MONTH = 730
+
+
+def gpu_pricing_for_context(context):
+    """If a cloud-bill row maps to a GPU instance, return its OCI GPU shape pricing, else None."""
+    rec = lookup_cloud_shape(context)
+    if not rec or not rec.get("isGpu"):
+        return None
+    shape_name = rec.get("ociShape")
+    cat = OCI_GPU_SHAPES.get(shape_name)
+    if not cat:
+        return None
+    return {
+        "shape": shape_name,
+        "gpuModel": cat.get("gpuModel"),
+        "gpuCount": cat.get("gpuCount"),
+        "pricePerGpuHour": cat.get("pricePerGpuHour"),
+        "mappable": rec.get("mappable", True),
+        "flag": rec.get("mapFlag", ""),
+    }
+
+# Map each app flex shape to its OCI shape name, per-VM max OCPU/memory, and CPU vendor.
+SHAPE_KEY_TO_OCI = {
+    "e6-standard-ax": ("VM.Standard.E6.Ax.Flex", 94, 712, "amd"),
+    "e5-standard": ("VM.Standard.E5.Flex", 94, 1049, "amd"),
+    "e4-standard": ("VM.Standard.E4.Flex", 64, 1024, "amd"),
+    "x9-standard": ("VM.Standard3.Flex", 32, 512, "intel"),
+    "x12-standard-ax": ("VM.Standard4.Ax.Flex", 39, 360, "intel"),
+}
+
+
+def oci_size_check(shape_key, ocpus, memory_gb):
+    """Classify a single VM's size against the selected OCI shape.
+
+    Returns dict: status = ok | baremetal | impossible, with the fitting shape and a message.
+    'baremetal' means it overflows the selected flex shape but fits an OCI bare-metal shape;
+    'impossible' means it exceeds every OCI shape for that CPU vendor.
+    """
+    info = SHAPE_KEY_TO_OCI.get(shape_key)
+    if not info or (ocpus <= 0 and memory_gb <= 0):
+        return {"status": "ok"}
+    flex_shape, max_ocpu, max_mem, vendor = info
+    if ocpus <= max_ocpu and memory_gb <= max_mem:
+        return {"status": "ok", "shape": flex_shape}
+    # Overflows the selected flex shape — try the vendor's bare-metal tier.
+    for tier in OCI_VENDOR_TIERS.get(vendor, []):
+        if tier.get("tier") == "flex":
+            continue
+        if ocpus <= tier["maxOcpu"] and memory_gb <= tier["maxMem"]:
+            return {
+                "status": "baremetal",
+                "shape": tier["shape"],
+                "message": f"{ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}; fits bare metal {tier['shape']}.",
+            }
+    biggest = (OCI_VENDOR_TIERS.get(vendor) or [{}])[-1]
+    return {
+        "status": "impossible",
+        "shape": None,
+        "message": (
+            f"{ocpus:g} OCPU / {memory_gb:g} GB exceeds the largest OCI {vendor} shape "
+            f"({biggest.get('shape')}: {biggest.get('maxOcpu')} OCPU / {biggest.get('maxMem')} GB)."
+        ),
+    }
+
+
 AWS_INSTANCE_SIZE_SHAPES = {
     "nano": (2, 0.5),
     "micro": (2, 1),
@@ -2573,6 +2724,16 @@ def meter_capacity_quantity(quantity, unit_context, is_vcpu=False):
 def infer_instance_shape_resources(context, usage_quantity="", usage_unit=""):
     unit_context = normalize(f"{usage_unit} {context}")
     capacity_factor = bill_usage_capacity_factor(usage_quantity, unit_context)
+
+    # Authoritative: exact instance match from the cloud mapping reference doc.
+    mapped = lookup_cloud_shape(context)
+    if mapped:
+        ocpus = to_number(mapped.get("ocpus"), 0)
+        if not ocpus:
+            ocpus = to_number(mapped.get("vcpu"), 0) / 2
+        memory_gb = to_number(mapped.get("ramGb"), 0) or to_number(mapped.get("memoryGb"), 0)
+        if ocpus or memory_gb:
+            return ocpus * capacity_factor, memory_gb * capacity_factor
 
     aws_match = re.search(
         r"\b(?:[a-z]\d[a-z0-9]*|[a-z]{1,4}\d[a-z0-9]*)\.(nano|micro|small|medium|large|xlarge|[0-9]+xlarge)\b",
@@ -3510,6 +3671,20 @@ def value_for(row, key, default=0.0):
     return to_number(row.get(key), default) if key else default
 
 
+def row_operating_system(row):
+    """Scan all source values of a row for an OS hint (matches the BOM script)."""
+    detected = ""
+    for key, value in row.items():
+        if isinstance(key, str) and key.startswith("__"):
+            continue
+        text = str(value).lower()
+        if "windows" in text:
+            return "windows"
+        if "linux" in text:
+            detected = "linux"
+    return detected
+
+
 def field_by_key(fields, key):
     return next((field for field in fields if field.get("key") == key), None)
 
@@ -4039,7 +4214,12 @@ def full_service_line_items(row, fields, rate_card=None):
     return [line_item], mapping, []
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM):
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False):
+    def _rightsize_mem(ocpu_value, mem_value):
+        # Cap memory at the OCI target ratio of 8 GB/OCPU (never increase it). OCPUs unchanged.
+        if not rightsize or not ocpu_value or not mem_value:
+            return mem_value
+        return min(mem_value, math.ceil(ocpu_value * RIGHTSIZE_MEM_PER_OCPU))
     cloud_bill_mode = intake_mode == INTAKE_MODE_CLOUD_BILL
     service_catalog_enabled = bool(full_service_beta or cloud_bill_mode)
     selected_shape = shape_payload(shape_key, service_catalog_enabled)
@@ -4093,6 +4273,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "fullServiceMonthly": 0.0,
         "mappedServiceRows": 0,
         "unpricedServiceRows": 0,
+        "oversizeRows": 0,
+        "impossibleRows": 0,
         "sourceMonthlyCost": 0.0,
         "mappedSourceMonthlyCost": 0.0,
         "unmappedSourceMonthlyCost": 0.0,
@@ -4156,11 +4338,27 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             db_ocpus = 0.0
             ocpus = app_ocpus
             memory_gb = value_for(row, "resource_memory_gb")
+        elif bom_match:
+            # BOM-script mode: CPU column is treated as OCPUs directly (no vCPU/2),
+            # and CPU/RAM are floored so fractions are never priced (matches the script).
+            app_cpu_units = math.floor(app_cpu) if app_cpu else 0.0
+            db_cpu_units = math.floor(db_cpu) if db_cpu else 0.0
+            app_mem_units = math.floor(app_memory) if app_memory else 0.0
+            db_mem_units = math.floor(db_memory) if db_memory else 0.0
+            app_ocpus = app_servers * app_cpu_units if app_servers and app_cpu_units else 0.0
+            db_ocpus = db_servers * db_cpu_units if db_servers and db_cpu_units else 0.0
+            ocpus = app_ocpus + db_ocpus
+            memory_gb = (app_servers * app_mem_units) + (db_servers * db_mem_units)
         else:
             app_ocpus = app_servers * ocpus_for_review_value(fields, keys["app_cpu"], app_cpu) if app_servers and app_cpu else 0.0
             db_ocpus = db_servers * ocpus_for_review_value(fields, keys["db_cpu"], db_cpu) if db_servers and db_cpu else 0.0
             ocpus = app_ocpus + db_ocpus
             memory_gb = (app_servers * app_memory) + (db_servers * db_memory)
+
+        # Rightsize and Cut Costs: cap memory at 8 GB/OCPU (OCPUs unchanged) when enabled.
+        original_memory_gb = memory_gb
+        memory_gb = _rightsize_mem(ocpus, memory_gb)
+
         local_storage_multiplier = 1.0 if storage_field_is_row_total(fields, keys["app_local_storage"]) else app_servers
         shared_storage_multiplier = 1.0 if storage_field_is_row_total(fields, keys["app_shared_storage"]) else app_servers
         block_storage_gb = (local_storage_multiplier * app_local_storage) + db_storage
@@ -4174,6 +4372,22 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 memory_gb,
                 "Spreadsheet CPU values are assumed to be vCPUs, shown in review as OCPUs using 2 vCPUs = 1 OCPU, then multiplied by 730 monthly hours.",
             )
+            # Windows OS license: OS recognition scans the row; Windows rows are licensed per OCPU-hour
+            # (1 license per OCPU = 1 per 2 vCPUs). Skipped when Windows pricing is toggled off.
+            if ocpus and not hide_windows_pricing and row_operating_system(row) == "windows":
+                win_rc = rate(WINDOWS_LICENSE_SKU, rate_card)
+                win_qty = ocpus * HOURS_PER_MONTH
+                line_items.append(
+                    {
+                        "sku": win_rc["sku"],
+                        "description": win_rc["description"],
+                        "quantity": round(win_qty, 4),
+                        "unit": win_rc["unit"],
+                        "rate": win_rc["rate"],
+                        "monthly": money(win_qty * win_rc["rate"]),
+                        "mapping": "Row detected as Windows; Windows OS licensing applied at OCPU-hours x 730.",
+                    }
+                )
         if block_storage_gb:
             rc = rate("B91961", rate_card)
             line_items.append(
@@ -4185,6 +4399,20 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     "rate": rc["rate"],
                     "monthly": money(block_storage_gb * rc["rate"]),
                     "mapping": "Local VM storage and database allocated storage map to block volume GB-months.",
+                }
+            )
+            # Block volume performance units: 10 units per GB of block storage (BOM script Balanced tier).
+            perf_rc = rate("B91962", rate_card)
+            perf_qty = BLOCK_PERFORMANCE_UNITS_PER_GB * block_storage_gb
+            line_items.append(
+                {
+                    "sku": perf_rc["sku"],
+                    "description": perf_rc["description"],
+                    "quantity": round(perf_qty, 4),
+                    "unit": perf_rc["unit"],
+                    "rate": perf_rc["rate"],
+                    "monthly": money(perf_qty * perf_rc["rate"]),
+                    "mapping": "Block volume performance units = 10 x block storage GB (Balanced performance).",
                 }
             )
         if file_storage_gb:
@@ -4230,6 +4458,32 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 totals["unpricedServiceRows"] += 1
                 totals["unmappedSourceMonthlyCost"] += source_cost_value
 
+        gpu_info = gpu_pricing_for_context(row_context(row, fields)) if cloud_bill_mode else None
+        if gpu_info:
+            # OCI GPU bare-metal pricing replaces flex OCPU/memory (the host is bundled in the GPU price).
+            line_items = [li for li in line_items if li.get("unit") not in {"OCPU-hour", "GB-hour"}]
+            price = gpu_info.get("pricePerGpuHour")
+            count = gpu_info.get("gpuCount") or 0
+            gpu_desc = f"GPU - {gpu_info.get('gpuModel')} ({gpu_info['shape']})"
+            if price and count and not hide_gpu_pricing:
+                qty = count * GPU_HOURS_PER_MONTH
+                line_items.append({
+                    "sku": gpu_info["shape"],
+                    "description": gpu_desc,
+                    "quantity": round(qty, 4),
+                    "unit": "GPU-hour",
+                    "rate": price,
+                    "monthly": money(qty * price),
+                    "mapping": f"Mapped to OCI GPU shape {gpu_info['shape']} ({count}x {gpu_info.get('gpuModel')}); priced per GPU-hour x 730.",
+                    "isGpu": True,
+                })
+            elif hide_gpu_pricing:
+                line_items.append({
+                    "sku": gpu_info["shape"], "description": gpu_desc, "quantity": 0,
+                    "unit": "GPU-hour", "rate": price or 0, "monthly": 0.0,
+                    "mapping": "GPU pricing hidden by toggle.", "isGpu": True, "gpuHidden": True,
+                })
+
         monthly = money(sum(item["monthly"] for item in line_items))
         annual = money(monthly * 12)
         source_row_label = clean_text(row.get("__sourceRow"))
@@ -4253,11 +4507,62 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             assumptions.append("Recognized AWS, Azure, GCP, and on-prem rows are mapped to a curated Oracle price-list subset.")
             assumptions.extend(full_service_notes)
 
+        # Per-VM feasibility against the selected OCI shape (single VM, not the row aggregate).
+        if cloud_bill_mode:
+            per_vm_specs = [(value_for(row, "resource_ocpus"), value_for(row, "resource_memory_gb"))]
+        elif bom_match:
+            per_vm_specs = [
+                (math.floor(app_cpu) if app_cpu else 0, math.floor(app_memory) if app_memory else 0),
+                (math.floor(db_cpu) if db_cpu else 0, math.floor(db_memory) if db_memory else 0),
+            ]
+        else:
+            per_vm_specs = [
+                (ocpus_for_review_value(fields, keys["app_cpu"], app_cpu), app_memory),
+                (ocpus_for_review_value(fields, keys["db_cpu"], db_cpu), db_memory),
+            ]
+        size_check = {"status": "ok"}
+        _rank = {"ok": 0, "baremetal": 1, "impossible": 2}
+        for vm_ocpu, vm_mem in per_vm_specs:
+            vm_mem = _rightsize_mem(vm_ocpu, vm_mem)
+            if (vm_ocpu or 0) <= 0 and (vm_mem or 0) <= 0:
+                continue
+            chk = oci_size_check(shape_key, float(vm_ocpu or 0), float(vm_mem or 0))
+            if _rank[chk["status"]] > _rank[size_check["status"]]:
+                size_check = chk
+        if size_check["status"] == "impossible":
+            totals["impossibleRows"] += 1
+        elif size_check["status"] == "baremetal":
+            totals["oversizeRows"] += 1
+
+        # Source-cloud cost estimate (other-cloud comparison): Linux baseline + Windows license add-on.
+        # Windows add-on mirrors the OCI rule (1 license per OCPU) and is gated by the Windows toggle.
+        is_windows_row = row_operating_system(row) == "windows"
+        windows_addon = money(ocpus * WINDOWS_LICENSE_RATE * HOURS_PER_MONTH) if (is_windows_row and not hide_windows_pricing and ocpus) else 0.0
+        src_rec = lookup_cloud_shape(row_context(row, fields))
+        source_cloud_estimate = None
+        # GCP: keep sizing/mapping only, no estimated source-cloud pricing.
+        if src_rec and src_rec.get("provider") != "gcp" and src_rec.get("approxSourceMonthly") is not None:
+            base = src_rec["approxSourceMonthly"]
+            source_cloud_estimate = {
+                "provider": src_rec.get("provider"),
+                "instance": src_rec.get("instance"),
+                "osDetected": "windows" if is_windows_row else "linux",
+                "linuxMonthly": base,
+                "windowsAddOnMonthly": windows_addon,
+                "totalMonthly": money(base + windows_addon),
+                "priceSource": "real" if src_rec.get("sourcePriceReal") else "estimate",
+            }
+
         priced = {
             "rowId": row["__id"],
             "sourceRow": row.get("__sourceRow"),
             "name": name,
             "environment": environment,
+            "sizeCheck": size_check,
+            "windowsLicenseMonthly": windows_addon,
+            "sourceCloudEstimate": source_cloud_estimate,
+            "rightsized": bool(rightsize and original_memory_gb and memory_gb != original_memory_gb),
+            "originalMemoryGb": round(original_memory_gb, 4),
             "specs": {
                 "applicationServers": app_servers,
                 "databaseServers": db_servers,
@@ -4283,7 +4588,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     for key in totals:
         if key in {"monthly", "annual", "fullServiceMonthly", "sourceMonthlyCost", "mappedSourceMonthlyCost", "unmappedSourceMonthlyCost"}:
             totals[key] = money(totals[key])
-        elif key in {"mappedServiceRows", "unpricedServiceRows"}:
+        elif key in {"mappedServiceRows", "unpricedServiceRows", "oversizeRows", "impossibleRows"}:
             totals[key] = int(totals[key])
         else:
             totals[key] = round(totals[key], 4)
@@ -4763,6 +5068,9 @@ class IntakeHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/edit-table":
             self.handle_table_edit()
             return
+        if parsed.path == "/api/export":
+            self.handle_export()
+            return
         self.send_error_json(404, "Not found.")
 
     def handle_upload(self):
@@ -4819,13 +5127,21 @@ class IntakeHandler(BaseHTTPRequestHandler):
             shape_key = payload.get("shape") or DEFAULT_SHAPE_KEY
             intake_mode = normalize_intake_mode(payload.get("intakeMode"))
             full_service_beta = bool(payload.get("fullServiceBeta")) or intake_mode == INTAKE_MODE_CLOUD_BILL
+            bom_match = bool(payload.get("bomMatch"))
+            hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
+            hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
+            rightsize = bool(payload.get("rightsize"))
             if shape_key not in SHAPE_LOOKUP:
                 self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
                 return
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize)
+            pricing["bomMatch"] = bom_match
+            pricing["hideGpuPricing"] = hide_gpu_pricing
+            pricing["hideWindowsPricing"] = hide_windows_pricing
+            pricing["rightsize"] = rightsize
             llm_payload, llm_warning = call_llm_mapping(pricing)
             pricing = enrich_with_llm(pricing, llm_payload)
             if llm_warning:
@@ -4833,6 +5149,51 @@ class IntakeHandler(BaseHTTPRequestHandler):
             self.send_json(200, pricing)
         except Exception as exc:
             self.send_error_json(500, f"Could not price inventory: {exc}")
+
+    def handle_export(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            fields = payload.get("fields", [])
+            rows = payload.get("rows", [])
+            shape_key = payload.get("shape") or DEFAULT_SHAPE_KEY
+            intake_mode = normalize_intake_mode(payload.get("intakeMode"))
+            full_service_beta = bool(payload.get("fullServiceBeta")) or intake_mode == INTAKE_MODE_CLOUD_BILL
+            bom_match = bool(payload.get("bomMatch"))
+            hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
+            hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
+            rightsize = bool(payload.get("rightsize"))
+            ramp = payload.get("ramp")
+            existing_infra_cost = payload.get("existingInfraCost", 0)
+            if shape_key not in SHAPE_LOOKUP:
+                self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
+                return
+            if not fields or not rows:
+                self.send_error_json(400, "Export requires fields and rows.")
+                return
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize)
+            servers = bom_export.servers_from_pricing(pricing, rows)
+            shape = pricing.get("selectedShape") or {}
+            shape_for_export = {
+                "label": shape.get("shortLabel") or shape.get("label"),
+                "shortLabel": shape.get("shortLabel") or shape.get("label"),
+                "computeSku": shape.get("computeSku"),
+                "memorySku": shape.get("memorySku"),
+                "computeRate": shape.get("computeRate"),
+                "memoryRate": shape.get("memoryRate"),
+            }
+            content = bom_export.build_workbook_bytes(servers, ramp, existing_infra_cost, shape_for_export, hide_windows_pricing)
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            self.send_header("Content-Disposition", 'attachment; filename="OCI_BOM_Export.xlsx"')
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception as exc:
+            self.send_error_json(500, f"Could not export workbook: {exc}")
 
     def handle_table_edit(self):
         try:

@@ -1,0 +1,244 @@
+{
+ "meta": {
+  "source": "OCI compute shapes (GPU) - user provided specs; prices per GPU-hour where public",
+  "priceUnit": "USD per GPU-hour",
+  "knownPrices": {
+   "per_shape_per_gpu_hour": "see shapes[].pricePerGpuHour"
+  },
+  "priceNote": "Prices null = not yet provided (OCI price-list cells are JS-rendered). Toggle hides GPU pricing in the app.",
+  "nvaieNote": "NVIDIA AI Enterprise optional software add-on, USD per GPU-hour, added on top of GPU compute price when licensed. null = not offered for that shape."
+ },
+ "shapes": [
+  {
+   "shape": "VM.GPU2.1",
+   "gpuModel": "P100",
+   "gpuCount": 1,
+   "ocpu": 12,
+   "gpuMemGb": 16,
+   "cpuMemGb": 72,
+   "pricePerGpuHour": 1.275,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "BM.GPU2.2",
+   "gpuModel": "P100",
+   "gpuCount": 2,
+   "ocpu": 28,
+   "gpuMemGb": 32,
+   "cpuMemGb": 192,
+   "pricePerGpuHour": 1.275,
+   "windows": true,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "VM.GPU3.1",
+   "gpuModel": "V100",
+   "gpuCount": 1,
+   "ocpu": 6,
+   "gpuMemGb": 16,
+   "cpuMemGb": 90,
+   "pricePerGpuHour": 2.95,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "VM.GPU3.2",
+   "gpuModel": "V100",
+   "gpuCount": 2,
+   "ocpu": 12,
+   "gpuMemGb": 32,
+   "cpuMemGb": 180,
+   "pricePerGpuHour": 2.95,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "VM.GPU3.4",
+   "gpuModel": "V100",
+   "gpuCount": 4,
+   "ocpu": 24,
+   "gpuMemGb": 64,
+   "cpuMemGb": 360,
+   "pricePerGpuHour": 2.95,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "BM.GPU3.8",
+   "gpuModel": "V100",
+   "gpuCount": 8,
+   "ocpu": 52,
+   "gpuMemGb": 128,
+   "cpuMemGb": 768,
+   "pricePerGpuHour": 2.95,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "VM.GPU.A10.1",
+   "gpuModel": "A10",
+   "gpuCount": 1,
+   "ocpu": 15,
+   "gpuMemGb": 24,
+   "cpuMemGb": 240,
+   "pricePerGpuHour": 2.0,
+   "windows": false,
+   "nvaiePerGpuHour": 0.88
+  },
+  {
+   "shape": "VM.GPU.A10.2",
+   "gpuModel": "A10",
+   "gpuCount": 2,
+   "ocpu": 30,
+   "gpuMemGb": 48,
+   "cpuMemGb": 480,
+   "pricePerGpuHour": 2.0,
+   "windows": false,
+   "nvaiePerGpuHour": 0.88
+  },
+  {
+   "shape": "BM.GPU.A10.4",
+   "gpuModel": "A10",
+   "gpuCount": 4,
+   "ocpu": 64,
+   "gpuMemGb": 96,
+   "cpuMemGb": 1024,
+   "pricePerGpuHour": 2.0,
+   "windows": false,
+   "nvaiePerGpuHour": 0.88
+  },
+  {
+   "shape": "BM.GPU4.8",
+   "gpuModel": "A100-40G",
+   "gpuCount": 8,
+   "ocpu": 64,
+   "gpuMemGb": 320,
+   "cpuMemGb": 2048,
+   "pricePerGpuHour": 3.05,
+   "windows": false,
+   "nvaiePerGpuHour": 0.76
+  },
+  {
+   "shape": "BM.GPU.A100-v2.8",
+   "gpuModel": "A100-80G",
+   "gpuCount": 8,
+   "ocpu": 128,
+   "gpuMemGb": 640,
+   "cpuMemGb": 2048,
+   "pricePerGpuHour": 4.0,
+   "windows": false,
+   "nvaiePerGpuHour": 1.0
+  },
+  {
+   "shape": "BM.GPU.L40S.4",
+   "gpuModel": "L40S",
+   "gpuCount": 4,
+   "ocpu": 112,
+   "gpuMemGb": 192,
+   "cpuMemGb": 1024,
+   "pricePerGpuHour": 3.5,
+   "windows": false,
+   "nvaiePerGpuHour": 0.88
+  },
+  {
+   "shape": "BM.GPU.H100.8",
+   "gpuModel": "H100",
+   "gpuCount": 8,
+   "ocpu": 112,
+   "gpuMemGb": 640,
+   "cpuMemGb": 2048,
+   "pricePerGpuHour": 10.0,
+   "windows": false,
+   "nvaiePerGpuHour": 2.5
+  },
+  {
+   "shape": "BM.GPU.H200.8",
+   "gpuModel": "H200",
+   "gpuCount": 8,
+   "ocpu": 112,
+   "gpuMemGb": 1128,
+   "cpuMemGb": 3072,
+   "pricePerGpuHour": 10.0,
+   "windows": false,
+   "nvaiePerGpuHour": 2.5
+  },
+  {
+   "shape": "BM.GPU.MI300X.8",
+   "gpuModel": "MI300X",
+   "gpuCount": 8,
+   "ocpu": 112,
+   "gpuMemGb": 1536,
+   "cpuMemGb": 2048,
+   "pricePerGpuHour": 6.0,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "BM.GPU.MI355X.8",
+   "gpuModel": "MI355X",
+   "gpuCount": 8,
+   "ocpu": 128,
+   "gpuMemGb": 288,
+   "cpuMemGb": 3072,
+   "pricePerGpuHour": 8.6,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "BM.GPU.RTXPRO.8",
+   "gpuModel": "RTXPRO6000",
+   "gpuCount": 8,
+   "ocpu": 144,
+   "gpuMemGb": 768,
+   "cpuMemGb": 3072,
+   "pricePerGpuHour": 4.5,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "BM.GPU.B200.8",
+   "gpuModel": "B200",
+   "gpuCount": 8,
+   "ocpu": 128,
+   "gpuMemGb": 1440,
+   "cpuMemGb": 4096,
+   "pricePerGpuHour": 14.0,
+   "windows": false,
+   "nvaiePerGpuHour": 3.5
+  },
+  {
+   "shape": "BM.GPU.B300.8",
+   "gpuModel": "B300",
+   "gpuCount": 8,
+   "ocpu": 128,
+   "gpuMemGb": 2100,
+   "cpuMemGb": 4096,
+   "pricePerGpuHour": 15.0,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  },
+  {
+   "shape": "BM.GPU.GB200.4",
+   "gpuModel": "B200",
+   "gpuCount": 4,
+   "ocpu": 144,
+   "gpuMemGb": 768,
+   "cpuMemGb": 960,
+   "pricePerGpuHour": 16.0,
+   "windows": false,
+   "nvaiePerGpuHour": 4.0
+  },
+  {
+   "shape": "BM.GPU.GB300.4",
+   "gpuModel": "B300",
+   "gpuCount": 4,
+   "ocpu": 144,
+   "gpuMemGb": 1112,
+   "cpuMemGb": 960,
+   "pricePerGpuHour": 18.0,
+   "windows": false,
+   "nvaiePerGpuHour": null
+  }
+ ]
+}

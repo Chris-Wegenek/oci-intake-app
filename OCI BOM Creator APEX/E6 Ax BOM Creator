@@ -1,0 +1,733 @@
+function main(workbook: ExcelScript.Workbook) {
+  // Names of the two sheets this script generates.
+  const generatedNames = ["BOM w E6 Acceleron", "Overview"];
+  // Identify the SOURCE data sheet robustly.
+  // On a re-run the active sheet is "Overview" (we activate it at the end) and the original
+  // data sheet has been renamed to "Base Data" — so prefer that, then fall back to the active sheet.
+  let on_prem_data_sheet = workbook.getWorksheet("Base Data") || workbook.getActiveWorksheet();
+  // Safety net: never treat one of the generated sheets as the source.
+  if (generatedNames.indexOf(on_prem_data_sheet.getName()) !== -1) {
+    const candidate = workbook.getWorksheets().find(ws => generatedNames.indexOf(ws.getName()) === -1);
+    if (candidate) {
+      on_prem_data_sheet = candidate;
+    }
+  }
+  // Now delete any existing copies of the sheets we are about to create, so a re-run replaces them.
+  // (on_prem_data_sheet is guaranteed above to NOT be one of these, so this is safe.)
+  for (const sheetName of generatedNames) {
+    const existingSheet = workbook.getWorksheet(sheetName);
+    if (existingSheet) {
+      existingSheet.delete();
+    }
+  }
+  // THEN create the new BOM sheet
+  let bom = workbook.addWorksheet("BOM w E6 Acceleron");
+  let new_bom_sheet = workbook.getWorksheet("BOM w E6 Acceleron");
+  // --- Config Variables ---
+  var cpu_col_num = 11;
+  var ram_col_num = 10;
+  var disk_col_num = 7;
+  var name_col_num = 1;
+  var hours_col_num = 12;
+  var bom_header_col_start = 0;
+  var bom_header_row_start = 0;
+  var use_fixed_hours = true;
+  var fixed_hours_value = 730;
+  var max_scan_rows = 2000;
+  // Colors
+  var server_name_red = "#FF9999";
+  var boot_volume_pink = "#FFE8E8";
+  var box_border_color = "#000000";
+  var themax = Math.max(cpu_col_num, ram_col_num, disk_col_num, name_col_num);
+  // Each server block = 6 data rows + 1 spacer = 7 rows total
+  var block_size = 7;
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Helper to apply outer border to a range
+  function applyOuterBorder(range: ExcelScript.Range, color: string, style: ExcelScript.BorderLineStyle): void {
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(style);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setColor(color);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setStyle(style);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setColor(color);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setStyle(style);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setColor(color);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setStyle(style);
+    range.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setColor(color);
+  }
+  // Helper to check if a source row has meaningful data
+  function isValidRow(row: number): boolean {
+    const name = on_prem_data_sheet.getCell(row, name_col_num).getValue();
+    const cpu = on_prem_data_sheet.getCell(row, cpu_col_num).getValue();
+    const ram = on_prem_data_sheet.getCell(row, ram_col_num).getValue();
+    const disk = on_prem_data_sheet.getCell(row, disk_col_num).getValue();
+    const hasName = name !== null && name !== "" && String(name).trim() !== "";
+    const hasData = (Number(cpu) > 0) || (Number(ram) > 0) || (Number(disk) > 0);
+    return hasName && hasData;
+  }
+  /////////////////////////////////////////////////////////////////////////////////////////////////////
+  new_bom_sheet.getCell(2, 0).setValue("Part");
+  new_bom_sheet.getCell(2, 0).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 0).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(2, 0).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 0).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 0).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 1).setValue("Description");
+  new_bom_sheet.getCell(2, 1).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(2, 1).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 2).setValue("Part Qty");
+  new_bom_sheet.getCell(2, 2).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(2, 2).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 2).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 3).setValue("Instance Qty");
+  new_bom_sheet.getCell(2, 3).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(2, 3).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 3).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 3).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 4).setValue("Usage Qty (Hours)");
+  new_bom_sheet.getCell(2, 4).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(2, 4).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 4).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 4).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 5).setValue("Unit Price");
+  new_bom_sheet.getCell(2, 5).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(2, 5).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 5).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 5).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 6).setValue("Monthly Cost");
+  new_bom_sheet.getCell(2, 6).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 6).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(2, 6).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 6).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 6).getFormat().getFont().setSize(11);
+  // Col H header — VM Cost
+  new_bom_sheet.getCell(2, 7).setValue("VM Cost");
+  new_bom_sheet.getCell(2, 7).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  new_bom_sheet.getCell(2, 7).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(2, 7).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(2, 7).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(2, 7).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(2, 7).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.medium);
+  new_bom_sheet.getCell(2, 7).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setColor(box_border_color);
+  // Col I — empty spacer column header
+  new_bom_sheet.getCell(2, 8).getFormat().getFill().setColor("#C0E6F5");
+  new_bom_sheet.getCell(3, 1).setValue("Free Tier");
+  new_bom_sheet.getCell(3, 1).getFormat().getFont().setSize(17);
+  new_bom_sheet.getCell(3, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(4, 1).setValue("OCI Data Ingress (Inbound Data Transfer)");
+  new_bom_sheet.getCell(4, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(4, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(5, 1).setValue("OCI Data Egress (Outbound) (first 10TB)");
+  new_bom_sheet.getCell(5, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(5, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(6, 1).setValue("Flexible Network Load Balancer");
+  new_bom_sheet.getCell(6, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(6, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(7, 1).setValue("OCI Vault Secrets Security");
+  new_bom_sheet.getCell(7, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(7, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(8, 1).setValue("OCI User Management and MFA");
+  new_bom_sheet.getCell(8, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(8, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(9, 1).setValue("OCI Cloud Guard (Monitoring and Defense)");
+  new_bom_sheet.getCell(9, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(9, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(10, 1).setValue("OCI Data Encryption");
+  new_bom_sheet.getCell(10, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(10, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(11, 1).setValue("OCI Network Firewall");
+  new_bom_sheet.getCell(11, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(11, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(12, 1).setValue("Support");
+  new_bom_sheet.getCell(12, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(12, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(4, 2).setValue("Free");
+  new_bom_sheet.getCell(4, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(5, 2).setValue("Free");
+  new_bom_sheet.getCell(5, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(6, 2).setValue("Free");
+  new_bom_sheet.getCell(6, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(7, 2).setValue("Free");
+  new_bom_sheet.getCell(7, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(8, 2).setValue("Free");
+  new_bom_sheet.getCell(8, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(9, 2).setValue("Free");
+  new_bom_sheet.getCell(9, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(10, 2).setValue("Free");
+  new_bom_sheet.getCell(10, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(11, 2).setValue("Free");
+  new_bom_sheet.getCell(11, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(12, 2).setValue("Included");
+  new_bom_sheet.getCell(12, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(15, 1).setValue("FastConnect");
+  new_bom_sheet.getCell(15, 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(15, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(15, 1).getFormat().getFont().setSize(17);
+  new_bom_sheet.getCell(16, 0).setValue("B88326");
+  new_bom_sheet.getCell(16, 0).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(16, 0).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(16, 0).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(16, 1).setValue("          OCI - FastConnect 1 Gbps (Port Hour)");
+  new_bom_sheet.getCell(16, 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(16, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(16, 2).setValue("0");
+  new_bom_sheet.getCell(16, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(16, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(16, 3).setValue("1");
+  new_bom_sheet.getCell(16, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(16, 3).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(16, 4).setValue("730");
+  new_bom_sheet.getCell(16, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(16, 4).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(16, 5).setValue("0.2125");
+  new_bom_sheet.getCell(16, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(16, 5).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(18, 1).setValue("Windows Licenses");
+  new_bom_sheet.getCell(18, 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(18, 1).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(18, 1).getFormat().getFont().setSize(17);
+  new_bom_sheet.getCell(19, 0).setValue("B88318");
+  new_bom_sheet.getCell(19, 0).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(19, 0).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(19, 0).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(19, 1).setValue("          Compute - Windows OS (OCPU Per Hour)");
+  new_bom_sheet.getCell(19, 1).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(19, 1).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(19, 2).setValue("0");
+  new_bom_sheet.getCell(19, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(19, 2).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(19, 3).setValue("1");
+  new_bom_sheet.getCell(19, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(19, 3).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(19, 4).setValue("730");
+  new_bom_sheet.getCell(19, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(19, 4).getFormat().getFont().setSize(11);
+  new_bom_sheet.getCell(19, 5).setValue("0.0920");
+  new_bom_sheet.getCell(19, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(19, 5).getFormat().getFont().setSize(11);
+  new_bom_sheet.getRange("G5").setFormula("$0.00");
+  new_bom_sheet.getRange("G5").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G6").setFormula("$0.00");
+  new_bom_sheet.getRange("G6").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G7").setFormula("$0.00");
+  new_bom_sheet.getRange("G7").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G8").setFormula("$0.00");
+  new_bom_sheet.getRange("G8").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G9").setFormula("$0.00");
+  new_bom_sheet.getRange("G9").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G10").setFormula("$0.00");
+  new_bom_sheet.getRange("G10").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G11").setFormula("$0.00");
+  new_bom_sheet.getRange("G11").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G12").setFormula("$0.00");
+  new_bom_sheet.getRange("G12").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G13").setFormula("$0.00");
+  new_bom_sheet.getRange("G13").getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("G17").setFormula("=C17*D17*E17*F17");
+  new_bom_sheet.getRange("G20").setFormula("=C20*D20*E20*F20");
+  new_bom_sheet.getCell(16, 6).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(19, 6).getFormat().getFont().setBold(true);
+  new_bom_sheet.getRange("F:F").setNumberFormatLocal("$#,##0.0000");
+  new_bom_sheet.getRange("G:G").setNumberFormatLocal("$#,##0.00");
+  new_bom_sheet.getRange("H:H").setNumberFormatLocal("$#,##0.00");
+  // Row 21 (0-indexed): "Virtual Machines"
+  new_bom_sheet.getCell(21, 1).setValue("Virtual Machines");
+  new_bom_sheet.getCell(21, 1).getFormat().getFont().setSize(17);
+  new_bom_sheet.getCell(21, 1).getFormat().getFont().setBold(true);
+  // Row 22 (0-indexed): empty spacer after Virtual Machines header
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Use fixed range to avoid getUsedRange() null errors
+  const allSourceValues = on_prem_data_sheet.getRangeByIndexes(0, 0, max_scan_rows, themax + 1).getValues();
+  // Wider read of Base Data so OS (Windows/Linux) can live in ANY column, not just cols 0..themax
+  var os_scan_cols = 50;
+  const osScanValues = on_prem_data_sheet.getRangeByIndexes(0, 0, max_scan_rows, os_scan_cols).getValues();
+  // Running tally of OCPUs belonging to Windows servers (written to G20 at the end)
+  var windows_cpu_total = 0;
+  let rowCount = 0;
+  for (let i = allSourceValues.length - 1; i >= 0; i--) {
+    if (allSourceValues[i][name_col_num] !== null && allSourceValues[i][name_col_num] !== "") {
+      rowCount = i + 1;
+      break;
+    }
+  }
+  if (rowCount === 0) {
+    console.log("Could not find any data in the name column. Check that name_col_num is set correctly.");
+    return;
+  }
+  console.log(`Found ${rowCount} rows including header on sheet: ${on_prem_data_sheet.getName()}`);
+  var counter = 0;
+  var blockCounter = 0;
+  var first_name_row = 23;
+  while (counter < (rowCount - 1)) {
+    const sourceRow = 1 + counter;
+    // Skip rows with no meaningful data
+    if (!isValidRow(sourceRow)) {
+      console.log(`Skipping empty/invalid row ${sourceRow + 1}`);
+      counter++;
+      continue;
+    }
+    var nameRow = first_name_row + (blockCounter * block_size);
+    var cpuRow = nameRow + 1;
+    var ramRow = nameRow + 2;
+    var bvRow = nameRow + 3;
+    var diskRow = nameRow + 4;
+    var perfRow = nameRow + 5;
+    // Copy reference columns
+    new_bom_sheet.getRangeByIndexes(nameRow, 9, 1, 1).copyFrom(on_prem_data_sheet.getRangeByIndexes(bom_header_col_start, bom_header_row_start, 1, themax + 1), ExcelScript.RangeCopyType.all, false, false);
+    new_bom_sheet.getRangeByIndexes(nameRow + 1, 9, 1, 1).copyFrom(on_prem_data_sheet.getRangeByIndexes(sourceRow, 0, 1, themax + 1), ExcelScript.RangeCopyType.all, false, false);
+    // Read source values directly — Math.floor for CPU and RAM
+    const cpuValue = Math.floor(Number(on_prem_data_sheet.getCell(sourceRow, cpu_col_num).getValue()));
+    const ramValue = Math.floor(Number(on_prem_data_sheet.getCell(sourceRow, ram_col_num).getValue()));
+    const diskValue = Number(on_prem_data_sheet.getCell(sourceRow, disk_col_num).getValue());
+    const nameValue = on_prem_data_sheet.getCell(sourceRow, name_col_num).getValue();
+    const nameFillColor = on_prem_data_sheet.getCell(sourceRow, name_col_num).getFormat().getFill().getColor();
+    const hoursValue = use_fixed_hours
+      ? fixed_hours_value
+      : ((): number => {
+        const raw = on_prem_data_sheet.getCell(sourceRow, hours_col_num).getValue();
+        return (raw !== null && raw !== "" && Number(raw) > 0) ? Number(raw) : fixed_hours_value;
+      })();
+    // --- OS detection: scan the entire source row for "windows" / "linux" ---
+    // Handles values like "Microsoft Windows Server 2019" or "Oracle Linux 8".
+    var serverOS = "";
+    const osRowVals = osScanValues[sourceRow];
+    for (let oc = 0; oc < osRowVals.length; oc++) {
+      const cellText = String(osRowVals[oc]).toLowerCase();
+      if (cellText.indexOf("windows") !== -1) { serverOS = "windows"; break; }
+      if (cellText.indexOf("linux") !== -1) { serverOS = "linux"; }
+    }
+    // If this server is Windows, add its OCPU count to the running tally
+    if (serverOS === "windows") {
+      windows_cpu_total += cpuValue;
+    }
+    // --- Server Name Row — full row A-H gets red fill ---
+    const nameRowRange = new_bom_sheet.getRangeByIndexes(nameRow, 0, 1, 8);
+    nameRowRange.getFormat().getFill().setColor(server_name_red);
+    const textRange = new_bom_sheet.getCell(nameRow, 1);
+    textRange.setValue(nameValue);
+    textRange.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+    textRange.getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.bottom);
+    textRange.getFormat().setWrapText(false);
+    textRange.getFormat().setTextOrientation(0);
+    textRange.getFormat().setIndentLevel(1);
+    textRange.getFormat().getFont().setBold(true);
+    textRange.getFormat().getFont().setSize(15);
+    if (nameFillColor && nameFillColor !== "") {
+      textRange.getFormat().getFill().setColor(nameFillColor);
+    }
+    // --- CPU Row ---
+    new_bom_sheet.getCell(cpuRow, 0).setValue("B112530");
+    new_bom_sheet.getCell(cpuRow, 0).getFormat().getFont().setBold(true);
+    new_bom_sheet.getCell(cpuRow, 1).setValue(" Compute - E6 Acceleron - OCPU (OCPU Per Hour)      Capacity Type: On - Demand");
+    new_bom_sheet.getCell(cpuRow, 2).setValue(cpuValue);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().setIndentLevel(0);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(cpuRow, 2).getFormat().getFill().clear();
+    new_bom_sheet.getCell(cpuRow, 3).setValue("1");
+    new_bom_sheet.getCell(cpuRow, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(cpuRow, 4).setValue(hoursValue);
+    new_bom_sheet.getCell(cpuRow, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(cpuRow, 5).setValue("0.0138");
+    new_bom_sheet.getCell(cpuRow, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(cpuRow, 6).copyFrom(new_bom_sheet.getRange("G17"));
+    // --- RAM Row (Math.floor applied above) ---
+    new_bom_sheet.getCell(ramRow, 0).setValue("B112530");
+    new_bom_sheet.getCell(ramRow, 0).getFormat().getFont().setBold(true);
+    new_bom_sheet.getCell(ramRow, 1).setValue(" Compute - E6 Acceleron - Memory(Gigabyte Per Hour)    Capacity Type: On - Demand");
+    new_bom_sheet.getCell(ramRow, 2).setValue(ramValue);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.bottom);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().setIndentLevel(0);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(ramRow, 2).getFormat().getFill().clear();
+    new_bom_sheet.getCell(ramRow, 3).setValue("1");
+    new_bom_sheet.getCell(ramRow, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(ramRow, 4).setValue(hoursValue);
+    new_bom_sheet.getCell(ramRow, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(ramRow, 5).setValue("0.0108");
+    new_bom_sheet.getCell(ramRow, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(ramRow, 6).copyFrom(new_bom_sheet.getRange("G17"));
+    // --- Boot Volume Label Row ---
+    new_bom_sheet.getCell(bvRow, 1).setValue(" Boot Volume (Local Storage Sizes)");
+    new_bom_sheet.getCell(bvRow, 1).getFormat().getFill().setColor(boot_volume_pink);
+    new_bom_sheet.getCell(bvRow, 1).getFormat().getFont().setBold(true);
+    // --- Disk Storage Row ---
+    new_bom_sheet.getCell(diskRow, 0).setValue("B91961");
+    new_bom_sheet.getCell(diskRow, 0).getFormat().getFont().setBold(true);
+    new_bom_sheet.getCell(diskRow, 1).setValue("Storage - Block Volume - Storage (Gigabyte Storage Capacity Per Month)");
+    new_bom_sheet.getCell(diskRow, 2).setValue(diskValue);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.bottom);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().setIndentLevel(0);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(diskRow, 2).getFormat().getFill().clear();
+    new_bom_sheet.getCell(diskRow, 3).setValue("1");
+    new_bom_sheet.getCell(diskRow, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(diskRow, 4).setValue("1");
+    new_bom_sheet.getCell(diskRow, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(diskRow, 5).setValue("$0.0255");
+    new_bom_sheet.getCell(diskRow, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(diskRow, 6).copyFrom(new_bom_sheet.getRange("G17"));
+    // --- Performance Units Row ---
+    new_bom_sheet.getCell(perfRow, 0).setValue("B91962");
+    new_bom_sheet.getCell(perfRow, 0).getFormat().getFont().setBold(true);
+    new_bom_sheet.getCell(perfRow, 1).setValue("Storage - Block Volume - Performance Units (Performance Units Per Gigabyte Per Month)");
+    new_bom_sheet.getCell(perfRow, 2).setValue(10 * diskValue);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.bottom);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().setIndentLevel(0);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setStyle(ExcelScript.BorderLineStyle.none);
+    new_bom_sheet.getCell(perfRow, 2).getFormat().getFill().clear();
+    new_bom_sheet.getCell(perfRow, 3).setValue("1");
+    new_bom_sheet.getCell(perfRow, 3).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(perfRow, 4).setValue("1");
+    new_bom_sheet.getCell(perfRow, 4).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(perfRow, 5).setValue("$0.0017");
+    new_bom_sheet.getCell(perfRow, 5).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    new_bom_sheet.getCell(perfRow, 6).copyFrom(new_bom_sheet.getRange("G17"));
+    // --- Col H: left border, "Total VM Cost" label on diskRow, SUM on perfRow ---
+    for (let r = nameRow; r <= perfRow; r++) {
+      new_bom_sheet.getCell(r, 7).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.medium);
+      new_bom_sheet.getCell(r, 7).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setColor(box_border_color);
+    }
+    new_bom_sheet.getCell(diskRow, 7).setValue("Total VM Cost");
+    new_bom_sheet.getCell(diskRow, 7).getFormat().getFont().setBold(true);
+    new_bom_sheet.getCell(diskRow, 7).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    const excelCpuRow = cpuRow + 1;
+    const excelPerfRow = perfRow + 1;
+    new_bom_sheet.getCell(perfRow, 7).setFormula(`=SUM(G${excelCpuRow}:G${excelPerfRow})`);
+    new_bom_sheet.getCell(perfRow, 7).getFormat().getFont().setBold(true);
+    new_bom_sheet.getCell(perfRow, 7).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    // --- Outer box border around server block (nameRow to perfRow, cols A-H) ---
+    const blockRange = new_bom_sheet.getRangeByIndexes(nameRow, 0, 6, 8);
+    applyOuterBorder(blockRange, box_border_color, ExcelScript.BorderLineStyle.medium);
+    // --- Outer box border around col H VM cost box (diskRow to perfRow) ---
+    const vmCostRange = new_bom_sheet.getRangeByIndexes(diskRow, 7, 2, 1);
+    applyOuterBorder(vmCostRange, box_border_color, ExcelScript.BorderLineStyle.medium);
+    counter++;
+    blockCounter++;
+  }
+  // Clean up reference columns (col 9+)
+  const refRange = new_bom_sheet.getUsedRange();
+  if (refRange) {
+    const refRowCount = refRange.getRowCount();
+    const refColCount = refRange.getColumnCount();
+    for (let r = 0; r < refRowCount; r++) {
+      for (let c = 9; c < refColCount; c++) {
+        const cell = new_bom_sheet.getCell(r, c);
+        cell.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.none);
+        cell.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeTop).setStyle(ExcelScript.BorderLineStyle.none);
+        cell.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeBottom).setStyle(ExcelScript.BorderLineStyle.none);
+        cell.getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeRight).setStyle(ExcelScript.BorderLineStyle.none);
+        cell.getFormat().getFont().setBold(false);
+        cell.getFormat().getFont().setSize(11);
+        cell.getFormat().getFont().setColor("#000000");
+      }
+    }
+  }
+  // ===================================================================================================
+  // NEW: Box around each right-side pasted printout + "Server info" label above each one.
+  // Runs AFTER the cleanup loop above, otherwise the cleanup would strip these borders.
+  // The pasted reference data lives in columns J onward (col index 9), 2 rows tall
+  // (header row at nameRow, data row at nameRow + 1) and themax+1 columns wide.
+  // ===================================================================================================
+  var ref_data_start_col = 9;          // column J — left edge of the pasted printout
+  var ref_label_col = 10;              // where "Server info" goes. 10 = col K (above each printout).
+  for (let b = 0; b < blockCounter; b++) {
+    var refNameRow = first_name_row + (b * block_size);
+    // Box around the 2 pasted rows across all reference columns
+    var refPrintRange = new_bom_sheet.getRangeByIndexes(refNameRow, ref_data_start_col, 2, themax + 1);
+    applyOuterBorder(refPrintRange, box_border_color, ExcelScript.BorderLineStyle.medium);
+    // "Server info" label one row above the printout
+    var refLabelCell = new_bom_sheet.getCell(refNameRow - 1, ref_label_col);
+    refLabelCell.setValue("Server info");
+    refLabelCell.getFormat().getFont().setBold(true);
+    refLabelCell.getFormat().getFont().setSize(11);
+  }
+  // ===================================================================================================
+  // Windows license quantity: total Windows OCPUs -> C20 (Part Qty).
+  // G20's formula (=C20*D20*E20*F20) then turns this into the Windows OS monthly cost.
+  new_bom_sheet.getCell(19, 2).setValue(windows_cpu_total);
+  new_bom_sheet.getCell(19, 2).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  new_bom_sheet.getCell(19, 2).getFormat().getFont().setSize(11);
+  // ===================================================================================================
+  // Totals
+  const totalRow = first_name_row + (blockCounter * block_size);
+  new_bom_sheet.getCell(totalRow, 7).setFormula("=SUM(G:G)");
+  new_bom_sheet.getCell(totalRow, 7).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(totalRow, 7).getFormat().getFont().setSize(15);
+  new_bom_sheet.getCell(totalRow, 7).setNumberFormatLocal("$#,##0.00");
+  new_bom_sheet.getCell(totalRow, 6).setValue("Total Per Month:");
+  new_bom_sheet.getCell(totalRow, 6).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(totalRow, 6).getFormat().getFont().setSize(15);
+  new_bom_sheet.getCell(14, 9).setFormula("=SUM(G:G)");
+  new_bom_sheet.getCell(14, 9).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(14, 9).getFormat().getFont().setSize(15);
+  new_bom_sheet.getCell(14, 9).setNumberFormatLocal("$#,##0.00");
+  new_bom_sheet.getCell(13, 8).setValue("Total Per Month:");
+  new_bom_sheet.getCell(13, 8).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(13, 8).getFormat().getFont().setSize(15);
+  new_bom_sheet.getCell(14, 8).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getCell(17, 9).setFormula("=J15*12");
+  new_bom_sheet.getCell(17, 9).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(17, 9).getFormat().getFont().setSize(15);
+  new_bom_sheet.getCell(17, 9).setNumberFormatLocal("$#,##0");
+  new_bom_sheet.getCell(16, 8).setValue("Total Per Year:");
+  new_bom_sheet.getCell(16, 8).getFormat().getFont().setBold(true);
+  new_bom_sheet.getCell(16, 8).getFormat().getFont().setSize(15);
+  new_bom_sheet.getCell(17, 8).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.left);
+  new_bom_sheet.getRange("F:F").setNumberFormatLocal("$#,##0.0000");
+  new_bom_sheet.getRange("G:G").setNumberFormatLocal("$#,##0.00");
+  new_bom_sheet.getRange("H:H").setNumberFormatLocal("$#,##0.00");
+  // Auto-fit columns
+  new_bom_sheet.getRange("A:H").getFormat().autofitColumns();
+  new_bom_sheet.getRange("I:P").getFormat().autofitColumns();
+  new_bom_sheet.getRange("J:J").getFormat().autofitColumns();
+  let overview = workbook.addWorksheet("Overview");
+  // Palette (red theme)
+  const ov_navy = "#7F1D1D";    // deep red — banners / title / borders
+  const ov_blue = "#C0504D";    // medium red — column / KPI headers
+  const ov_light = "#F2DCDB";   // light red — value cards / totals
+  const ov_input = "#FFF2CC";   // yellow = "fill this in"
+  const ov_inputBorder = "#BF8F00";
+
+  // --- Column widths for a clean layout ---
+  overview.getRange("A:A").getFormat().setColumnWidth(200);
+  overview.getRange("B:F").getFormat().setColumnWidth(118);
+
+  // --- Title banner ---
+  overview.getRange("A1:H2").merge(true);
+  overview.getRange("A1").setValue("Cloud Migration Cost Overview");
+  overview.getRange("A1:H2").getFormat().getFill().setColor(ov_navy);
+  overview.getRange("A1:H2").getFormat().getFont().setColor("#FFFFFF");
+  overview.getRange("A1:H2").getFormat().getFont().setBold(true);
+  overview.getRange("A1:H2").getFormat().getFont().setSize(26);
+  overview.getRange("A1:H2").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  overview.getRange("A1:H2").getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  overview.getRange("A1:H1").getFormat().setRowHeight(26);
+  overview.getRange("A2:H2").getFormat().setRowHeight(26);
+
+  // --- KPI cards (Monthly + Annual) ---
+  overview.getRange("B4:C4").merge(true);
+  overview.getRange("B4").setValue("Total Monthly Cost");
+  overview.getRange("B5:C6").merge(true);
+  overview.getRange("B5").setFormula("='BOM w E6 Acceleron'!J15");
+
+  overview.getRange("E4:F4").merge(true);
+  overview.getRange("E4").setValue("Total Annual Cost (Full)");
+  overview.getRange("E5:F6").merge(true);
+  overview.getRange("E5").setFormula("='BOM w E6 Acceleron'!J18");
+
+  const kpiHeaders = ["B4:C4", "E4:F4"];
+  for (const a of kpiHeaders) {
+    const r = overview.getRange(a);
+    r.getFormat().getFill().setColor(ov_blue);
+    r.getFormat().getFont().setColor("#FFFFFF");
+    r.getFormat().getFont().setBold(true);
+    r.getFormat().getFont().setSize(13);
+    r.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    r.getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+  }
+  const kpiValues = ["B5:C6", "E5:F6"];
+  for (const a of kpiValues) {
+    const r = overview.getRange(a);
+    r.getFormat().getFill().setColor(ov_light);
+    r.getFormat().getFont().setBold(true);
+    r.getFormat().getFont().setSize(24);
+    r.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+    r.getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
+    r.setNumberFormatLocal("$#,##0.00");
+    applyOuterBorder(r, ov_navy, ExcelScript.BorderLineStyle.medium);
+  }
+
+  // --- 5-Year Cost Projection (editable Utilization % drives a ramp-up) ---
+  overview.getRange("A8:D8").merge(true);
+  overview.getRange("A8").setValue("5-Year Cost Projection");
+  overview.getRange("A8:D8").getFormat().getFill().setColor(ov_navy);
+  overview.getRange("A8:D8").getFormat().getFont().setColor("#FFFFFF");
+  overview.getRange("A8:D8").getFormat().getFont().setBold(true);
+  overview.getRange("A8:D8").getFormat().getFont().setSize(13);
+  overview.getRange("A8").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+  overview.getRange("A9").setValue("Year");
+  overview.getRange("B9").setValue("Utilization %");
+  overview.getRange("C9").setValue("OCI Annual Cost");
+  overview.getRange("D9").setValue("Cumulative");
+  const projHdr = overview.getRange("A9:D9");
+  projHdr.getFormat().getFill().setColor(ov_blue);
+  projHdr.getFormat().getFont().setColor("#FFFFFF");
+  projHdr.getFormat().getFont().setBold(true);
+  projHdr.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+  for (let y = 0; y < 5; y++) {
+    const row = 10 + y;
+    overview.getRange(`A${row}`).setValue(y + 1);
+    overview.getRange(`B${row}`).setValue(1); // 100% default — lower these for a ramp-up
+    overview.getRange(`B${row}`).setNumberFormatLocal("0%");
+    overview.getRange(`C${row}`).setFormula(`=$E$5*B${row}`);
+    overview.getRange(`D${row}`).setFormula(y === 0 ? `=C${row}` : `=D${row - 1}+C${row}`);
+  }
+  overview.getRange("A15").setValue("5-Year Total");
+  overview.getRange("A15:B15").merge(true);
+  overview.getRange("C15").setFormula("=SUM(C10:C14)");
+  overview.getRange("D15").setFormula("=D14");
+
+  overview.getRange("A10:B14").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  overview.getRange("C10:D15").setNumberFormatLocal("$#,##0.00");
+  overview.getRange("B10:B14").getFormat().getFill().setColor(ov_input); // editable ramp cells
+  applyOuterBorder(overview.getRange("B10:B14"), ov_inputBorder, ExcelScript.BorderLineStyle.thin);
+  overview.getRange("A15:D15").getFormat().getFont().setBold(true);
+  overview.getRange("A15:D15").getFormat().getFill().setColor(ov_light);
+  applyOuterBorder(overview.getRange("A9:D15"), ov_navy, ExcelScript.BorderLineStyle.thin);
+
+  // --- Current vs. OCI Savings ---
+  overview.getRange("A17:D17").merge(true);
+  overview.getRange("A17").setValue("Existing Infrastructure vs. OCI Estimate");
+  overview.getRange("A17:D17").getFormat().getFill().setColor(ov_navy);
+  overview.getRange("A17:D17").getFormat().getFont().setColor("#FFFFFF");
+  overview.getRange("A17:D17").getFormat().getFont().setBold(true);
+  overview.getRange("A17:D17").getFormat().getFont().setSize(13);
+  overview.getRange("A17").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+
+  overview.getRange("A18").setValue("Existing Infra Cost (enter):");
+  overview.getRange("B18").setValue(0);
+  overview.getRange("B18").getFormat().getFill().setColor(ov_input);
+  applyOuterBorder(overview.getRange("B18"), ov_inputBorder, ExcelScript.BorderLineStyle.medium);
+  overview.getRange("A19").setValue("OCI Estimated Annual:");
+  overview.getRange("B19").setFormula("=$E$5");
+  overview.getRange("A20").setValue("Estimated Annual Savings:");
+  overview.getRange("B20").setFormula("=B18-B19");
+  overview.getRange("A21").setValue("Estimated 5-Year Savings:");
+  overview.getRange("B21").setFormula("=(B18*5)-SUM(C10:C14)");
+  overview.getRange("A22").setValue("Savings % vs. Existing:");
+  overview.getRange("B22").setFormula("=IF(B18=0,0,(B18-B19)/B18)");
+  overview.getRange("A18:A22").getFormat().getFont().setBold(true);
+  overview.getRange("B18:B21").setNumberFormatLocal("$#,##0.00");
+  overview.getRange("B22").setNumberFormatLocal("0.0%");
+  overview.getRange("B18:B22").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  // Green (bold) font whenever savings are positive
+  const savCF = overview.getRange("B20:B22").addConditionalFormat(ExcelScript.ConditionalFormatType.cellValue);
+  savCF.getCellValue().setRule({ operator: ExcelScript.ConditionalCellValueOperator.greaterThan, formula1: "0" });
+  savCF.getCellValue().getFormat().getFont().setColor("#008000");
+  savCF.getCellValue().getFormat().getFont().setBold(true);
+
+  // ---- Styling helpers for the chart-data tables (match the projection table) ----
+  const hdrBand = (mergeAddr: string, firstCell: string, text: string) => {
+    overview.getRange(mergeAddr).merge(true);
+    overview.getRange(firstCell).setValue(text);
+    const r = overview.getRange(mergeAddr);
+    r.getFormat().getFill().setColor(ov_navy);
+    r.getFormat().getFont().setColor("#FFFFFF");
+    r.getFormat().getFont().setBold(true);
+    r.getFormat().getFont().setSize(12);
+    r.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  };
+  const colHdr = (addr: string) => {
+    const r = overview.getRange(addr);
+    r.getFormat().getFill().setColor(ov_blue);
+    r.getFormat().getFont().setColor("#FFFFFF");
+    r.getFormat().getFont().setBold(true);
+    r.getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  };
+
+  // ---- Chart Data 1: Today + 5-year comparison (OCI, Existing, Combined) + reference line + savings ----
+  hdrBand("A23:F23", "A23", "Chart Data — Comparison");
+  overview.getRange("A24").setValue("Year");
+  overview.getRange("B24").setValue("OCI Estimate");
+  overview.getRange("C24").setValue("Existing Infra Cost");
+  overview.getRange("D24").setValue("Combined Cost");
+  overview.getRange("E24").setValue("Current Spend");
+  overview.getRange("F24").setValue("Total Savings");
+  colHdr("A24:F24");
+  // Row 25 = "Today": current spend only (single bar), no OCI / combined yet.
+  overview.getRange("A25").setValue("Today");
+  overview.getRange("C25").setFormula("=$B$18");            // current / existing spend bar
+  overview.getRange("E25").setFormula("=$B$18");            // reference-line level
+  overview.getRange("F25").setFormula("=$B$18-C25");        // savings today = 0
+  // Rows 26-30 = Year 1..5
+  for (let y = 0; y < 5; y++) {
+    const r = 26 + y;
+    overview.getRange(`A${r}`).setValue(`Year ${y + 1}`);
+    overview.getRange(`B${r}`).setFormula(`=C${10 + y}`);   // ramped OCI estimate (projection table)
+    overview.getRange(`C${r}`).setFormula(`=U${10 + y}`);   // ramped existing infra cost (ramp adjuster)
+    overview.getRange(`D${r}`).setFormula(`=B${r}+C${r}`);  // combined = new OCI + remaining existing
+    overview.getRange(`E${r}`).setFormula("=$B$18");        // reference line = current full spend
+    overview.getRange(`F${r}`).setFormula(`=$B$18-D${r}`);  // savings = current - combined
+  }
+  overview.getRange("B25:F30").setNumberFormatLocal("$#,##0.00");
+  overview.getRange("A25:A30").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  applyOuterBorder(overview.getRange("A24:F30"), ov_navy, ExcelScript.BorderLineStyle.thin);
+  // Green font where Total Savings is positive
+  const savColCF = overview.getRange("F25:F30").addConditionalFormat(ExcelScript.ConditionalFormatType.cellValue);
+  savColCF.getCellValue().setRule({ operator: ExcelScript.ConditionalCellValueOperator.greaterThan, formula1: "0" });
+  savColCF.getCellValue().getFormat().getFont().setColor("#008000");
+
+  // ---- Chart 1: Today + 5-year comparison (clustered columns + reference line) ----
+  // Plot range A24:E30 -> series [0]=OCI, [1]=Existing, [2]=Combined, [3]=Current Spend (line).
+  const cmpChart = overview.addChart(ExcelScript.ChartType.columnClustered, overview.getRange("A24:E30"));
+  cmpChart.setPosition(overview.getRange("H8"), overview.getRange("R31"));
+  cmpChart.getTitle().setText("Existing Infra vs. OCI Estimate (Today + 5-Year)");
+  const cmpSeries = cmpChart.getSeries();
+  if (cmpSeries.length >= 1) {
+    cmpSeries[0].getFormat().getFill().setSolidColor("#C00000"); // OCI / my pricing = red
+  }
+  if (cmpSeries.length >= 2) {
+    cmpSeries[1].getFormat().getFill().setSolidColor("#808080"); // existing infrastructure = grey
+  }
+  if (cmpSeries.length >= 3) {
+    cmpSeries[2].getFormat().getFill().setSolidColor("#ED7D31"); // combined cost = orange
+  }
+  if (cmpSeries.length >= 4) {
+    // Current Spend = faded horizontal reference line, level with the "Today" bar
+    cmpSeries[3].setChartType(ExcelScript.ChartType.line);
+    cmpSeries[3].getFormat().getLine().setColor("#E6A9A9");
+  }
+
+  // ---- Existing-spend ramp adjuster, placed to the RIGHT of the (now wider) chart (cols T:V) ----
+  // Edit the yellow "Existing Util %" cells to ramp the existing infrastructure spend up/down
+  // across the 5 years. The comparison chart's "Existing Infra Cost" series reads from here.
+  overview.getRange("T:V").getFormat().setColumnWidth(125);
+  hdrBand("T8:V8", "T8", "Existing Spend — Ramp %");
+  overview.getRange("T9").setValue("Year");
+  overview.getRange("U9").setValue("Existing Infra Cost");
+  overview.getRange("V9").setValue("Existing Util %");
+  colHdr("T9:V9");
+  for (let y = 0; y < 5; y++) {
+    const r = 10 + y;
+    overview.getRange(`T${r}`).setValue(`Year ${y + 1}`);
+    overview.getRange(`V${r}`).setValue(1);                  // editable ramp %, default 100%
+    overview.getRange(`V${r}`).setNumberFormatLocal("0%");
+    overview.getRange(`U${r}`).setFormula(`=$B$18*V${r}`);   // existing cost x utilization
+  }
+  overview.getRange("U10:U14").setNumberFormatLocal("$#,##0.00");
+  overview.getRange("T10:T14").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  overview.getRange("V10:V14").getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
+  overview.getRange("V10:V14").getFormat().getFill().setColor(ov_input); // editable ramp cells
+  applyOuterBorder(overview.getRange("V10:V14"), ov_inputBorder, ExcelScript.BorderLineStyle.thin);
+  applyOuterBorder(overview.getRange("T9:V14"), ov_navy, ExcelScript.BorderLineStyle.thin);
+
+  overview.getRange("A1").getFormat().getFont().setName("Calibri");
+  on_prem_data_sheet.setName("Base Data");
+  new_bom_sheet.setPosition(0);
+  overview.setPosition(0);
+  overview.activate();
+}

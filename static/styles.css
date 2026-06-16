@@ -1123,6 +1123,67 @@ td input[type="checkbox"] {
   justify-content: flex-end;
 }
 
+.bom-match-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #4a4a4a;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bom-match-toggle input {
+  cursor: pointer;
+}
+
+.mode-switch {
+  display: inline-flex;
+  border: 1px solid #c9d2dc;
+  border-radius: 999px;
+  background: #eef1f5;
+  padding: 2px;
+  gap: 2px;
+}
+
+.mode-switch .mode-opt {
+  border: none;
+  background: transparent;
+  color: #54616e;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-switch .mode-opt.is-active {
+  background: #3399ff;
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.size-flag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 9px;
+  vertical-align: middle;
+  letter-spacing: 0.03em;
+}
+
+.size-flag-impossible {
+  background: #c00000;
+  color: #fff;
+}
+
+.size-flag-baremetal {
+  background: #ffc000;
+  color: #4a3b00;
+}
+
 .processor-section {
   display: grid;
   align-items: center;

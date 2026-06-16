@@ -1,0 +1,48 @@
+{
+  "meta": {
+    "source": "OCI compute shapes doc (flexible + bare metal) - user provided",
+    "note": "Per-VM best-fit tiers used for cloud->OCI mapping and impossible-config flagging. Ascending capacity: modern Ax flex first, then bare metal. 'impossible' = exceeds the largest shape in the vendor tier.",
+    "recommendedLabel": {"amd": "E6 Standard Ax", "intel": "X12 Standard Ax", "arm": "A4 Standard Ax"}
+  },
+  "vendorTiers": {
+    "amd": [
+      {"shape": "VM.Standard.E6.Ax.Flex", "maxOcpu": 94,  "maxMem": 712,  "tier": "flex"},
+      {"shape": "BM.Standard.E6.Ax.192",  "maxOcpu": 192, "maxMem": 1536, "tier": "baremetal"},
+      {"shape": "BM.Standard.E6.256",     "maxOcpu": 256, "maxMem": 3072, "tier": "baremetal"}
+    ],
+    "intel": [
+      {"shape": "VM.Standard4.Ax.Flex",   "maxOcpu": 39,  "maxMem": 360,  "tier": "flex"},
+      {"shape": "BM.Standard4.Ax.120",    "maxOcpu": 120, "maxMem": 1152, "tier": "baremetal"}
+    ],
+    "arm": [
+      {"shape": "VM.Standard.A4.Ax.Flex", "maxOcpu": 45,  "maxMem": 720,  "tier": "flex"},
+      {"shape": "BM.Standard.A4.Ax.48",   "maxOcpu": 48,  "maxMem": 768,  "tier": "baremetal"},
+      {"shape": "BM.Standard.A1.160",     "maxOcpu": 160, "maxMem": 1024, "tier": "baremetal"}
+    ]
+  },
+  "allShapes": [
+    {"shape": "VM.Standard.E6.Ax.Flex", "vendor": "amd",   "maxOcpu": 94,  "maxMem": 712,  "tier": "flex"},
+    {"shape": "VM.Standard.E5.Flex",    "vendor": "amd",   "maxOcpu": 94,  "maxMem": 1049, "tier": "flex"},
+    {"shape": "VM.Standard.E4.Flex",    "vendor": "amd",   "maxOcpu": 64,  "maxMem": 1024, "tier": "flex"},
+    {"shape": "VM.Standard.E3.Flex",    "vendor": "amd",   "maxOcpu": 64,  "maxMem": 1024, "tier": "flex"},
+    {"shape": "VM.Standard4.Ax.Flex",   "vendor": "intel", "maxOcpu": 39,  "maxMem": 360,  "tier": "flex"},
+    {"shape": "VM.Standard3.Flex",      "vendor": "intel", "maxOcpu": 32,  "maxMem": 512,  "tier": "flex"},
+    {"shape": "VM.Optimized3.Flex",     "vendor": "intel", "maxOcpu": 18,  "maxMem": 256,  "tier": "flex"},
+    {"shape": "VM.Standard.A1.Flex",    "vendor": "arm",   "maxOcpu": 76,  "maxMem": 472,  "tier": "flex"},
+    {"shape": "VM.Standard.A2.Flex",    "vendor": "arm",   "maxOcpu": 78,  "maxMem": 946,  "tier": "flex"},
+    {"shape": "VM.Standard.A4.Flex",    "vendor": "arm",   "maxOcpu": 45,  "maxMem": 700,  "tier": "flex"},
+    {"shape": "VM.Standard.A4.Ax.Flex", "vendor": "arm",   "maxOcpu": 45,  "maxMem": 720,  "tier": "flex"},
+    {"shape": "VM.DenseIO.E4.Flex",     "vendor": "amd",   "maxOcpu": 32,  "maxMem": 512,  "tier": "denseio"},
+    {"shape": "VM.DenseIO.E5.Flex",     "vendor": "amd",   "maxOcpu": 48,  "maxMem": 576,  "tier": "denseio"},
+    {"shape": "VM.DenseIO.E6.Ax.Flex",  "vendor": "amd",   "maxOcpu": 48,  "maxMem": 576,  "tier": "denseio"},
+    {"shape": "BM.Standard3.64",        "vendor": "intel", "maxOcpu": 64,  "maxMem": 1024, "tier": "baremetal"},
+    {"shape": "BM.Standard4.Ax.120",    "vendor": "intel", "maxOcpu": 120, "maxMem": 1152, "tier": "baremetal"},
+    {"shape": "BM.Standard.E4.128",     "vendor": "amd",   "maxOcpu": 128, "maxMem": 2048, "tier": "baremetal"},
+    {"shape": "BM.Standard.E5.192",     "vendor": "amd",   "maxOcpu": 192, "maxMem": 2304, "tier": "baremetal"},
+    {"shape": "BM.Standard.E6.256",     "vendor": "amd",   "maxOcpu": 256, "maxMem": 3072, "tier": "baremetal"},
+    {"shape": "BM.Standard.E6.Ax.192",  "vendor": "amd",   "maxOcpu": 192, "maxMem": 1536, "tier": "baremetal"},
+    {"shape": "BM.Standard.A1.160",     "vendor": "arm",   "maxOcpu": 160, "maxMem": 1024, "tier": "baremetal"},
+    {"shape": "BM.Standard.A4.48",      "vendor": "arm",   "maxOcpu": 48,  "maxMem": 768,  "tier": "baremetal"},
+    {"shape": "BM.Standard.A4.Ax.48",   "vendor": "arm",   "maxOcpu": 48,  "maxMem": 768,  "tier": "baremetal"}
+  ]
+}

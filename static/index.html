@@ -157,6 +157,22 @@
           <p>Compute and memory rates change by flex shape. Storage rates stay constant across the options.</p>
         </div>
         <div class="shape-actions">
+          <label class="bom-match-toggle" title="Match the BOM script: treat the CPU column as OCPUs directly and floor CPU/RAM so fractions are never priced.">
+            <input id="bomMatchToggle" type="checkbox" />
+            <span>Match BOM script pricing (raw OCPU, floor CPU/RAM)</span>
+          </label>
+          <label class="bom-match-toggle" title="Hide GPU per-GPU-hour pricing in results and the export (GPU shapes still mapped).">
+            <input id="hideGpuToggle" type="checkbox" />
+            <span>Hide GPU pricing</span>
+          </label>
+          <label class="bom-match-toggle" title="Turn off Windows OS licensing (1 license per OCPU) in the OCI estimate, source-cloud estimate, and export.">
+            <input id="hideWindowsToggle" type="checkbox" />
+            <span>Hide Windows pricing</span>
+          </label>
+          <div class="mode-switch" id="rightsizeSwitch" role="group" aria-label="Sizing mode" title="1 to 1 carries over source CPU/memory. Rightsize caps memory at OCI's 8 GB/OCPU target to cut cost.">
+            <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
+            <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
+          </div>
           <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
           <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
         </div>
@@ -202,6 +218,7 @@
         </div>
         <div class="results-actions">
           <button id="backToReview" class="ghost-button" type="button">Back to review</button>
+          <button id="exportExcel" class="ghost-button" type="button">Export to Excel</button>
           <button id="rerunPricing" class="primary-button" type="button">Reprice estimate</button>
         </div>
       </section>
