@@ -173,6 +173,10 @@
             <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
             <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
           </div>
+          <label class="bom-match-toggle" title="Auto: map each workload to the best shape for its own CPU vendor — AMD→E6 Ax, Intel→X12 Ax, Arm→A4 Ax — instead of forcing the single shape selected above.">
+            <input id="autoToggle" type="checkbox" />
+            <span>Auto (best shape per vendor)</span>
+          </label>
           <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
           <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
         </div>

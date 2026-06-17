@@ -18,6 +18,7 @@ const state = {
   hideGpuPricing: false,
   hideWindowsPricing: false,
   rightsize: false,
+  auto: false,
   existingInfraCost: 0,
   showMissingOnly: false,
   openaiApiEnabled: false,
@@ -47,6 +48,11 @@ const PROCESSOR_VENDORS = [
     key: "intel",
     label: "Intel",
     description: "Intel-based X-series standard and Ax shapes.",
+  },
+  {
+    key: "arm",
+    label: "Arm (Ampere)",
+    description: "Ampere Arm-based A-series flexible shapes.",
   },
 ];
 
@@ -139,6 +145,7 @@ const els = {
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
   hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
   rightsizeSwitch: document.querySelector("#rightsizeSwitch"),
+  autoToggle: document.querySelector("#autoToggle"),
   exportExcel: document.querySelector("#exportExcel"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
   processorPicker: document.querySelector("#processorPicker"),
@@ -1259,6 +1266,7 @@ async function priceRows() {
           hideGpuPricing: state.hideGpuPricing,
           hideWindowsPricing: state.hideWindowsPricing,
           rightsize: state.rightsize,
+          auto: state.auto,
         }),
       },
       70000,
@@ -1309,6 +1317,7 @@ async function exportToExcel() {
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
         rightsize: state.rightsize,
+        auto: state.auto,
         ramp,
         existingInfraCost: state.existingInfraCost || 0,
       }),
@@ -2320,6 +2329,12 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       render: (row) => escapeHtml(row.environment || "-"),
     },
     {
+      key: "shape",
+      label: "OCI shape",
+      sortValue: (row) => row.shapeUsed?.label || "",
+      render: (row) => escapeHtml(row.shapeUsed?.label || "-"),
+    },
+    {
       key: "ocpus",
       label: "OCPUs",
       sortValue: (row) => Number(row.specs?.ocpus || 0),
@@ -2430,6 +2445,16 @@ els.rightsizeSwitch?.addEventListener("click", (event) => {
   els.rightsizeSwitch.querySelectorAll(".mode-opt").forEach((b) => {
     b.classList.toggle("is-active", b === opt);
   });
+});
+function applyAutoUI() {
+  const section = els.processorPicker?.closest(".processor-section");
+  [section, els.shapeDropdown].forEach((el) => {
+    if (el) el.classList.toggle("shape-auto-disabled", state.auto);
+  });
+}
+els.autoToggle?.addEventListener("change", (event) => {
+  state.auto = event.target.checked;
+  applyAutoUI();
 });
 els.exportExcel?.addEventListener("click", exportToExcel);
 els.backToReview.addEventListener("click", showIntakePage);

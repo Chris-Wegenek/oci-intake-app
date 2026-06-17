@@ -634,9 +634,38 @@ SHAPE_DEFINITIONS = [
         "summary": "Standard X12 Ax shape using the public OCPU and memory rates from the supplied rate card.",
         "accent": "#8a6f24",
     },
+    {
+        "key": "a4-standard-ax",
+        "label": "A4 Standard Ax",
+        "shortLabel": "A4 Ax",
+        "family": "Ampere Ax flexible shape",
+        "processorVendor": "arm",
+        "computeSku": "A4AX-OCPU",
+        "memorySku": "A4AX-MEMORY",
+        "computeRate": 0.0190,
+        "memoryRate": 0.0084,
+        "summary": "Newest AmpereOne M (Arm) Ax shape; the default target for Arm/Graviton source workloads.",
+        "accent": "#3d6b4f",
+    },
+    {
+        "key": "a1-standard",
+        "label": "Ampere A1",
+        "shortLabel": "A1",
+        "family": "Ampere Altra flexible shape",
+        "processorVendor": "arm",
+        "computeSku": "A1-OCPU",
+        "memorySku": "A1-MEMORY",
+        "computeRate": 0.0100,
+        "memoryRate": 0.0015,
+        "summary": "Ampere Altra (Arm) shape with the lowest OCPU rate; 1 OCPU = 1 core.",
+        "accent": "#2f5d52",
+    },
 ]
 
 SHAPE_LOOKUP = {shape["key"]: shape for shape in SHAPE_DEFINITIONS}
+
+# Best (newest) OCI shape per CPU vendor, used by the "Auto" mapping mode.
+BEST_SHAPE_BY_VENDOR = {"amd": "e6-standard-ax", "intel": "x12-standard-ax", "arm": "a4-standard-ax"}
 
 STORAGE_RATE_ITEMS = [
     {
@@ -919,8 +948,10 @@ def spreadsheet_cpu_label(label):
     text = normalize(label)
     if not text:
         return False
-    if any(term in text for term in ["chipset", "processor family", "cpu type", "architecture", "model"]):
+    if any(term in text for term in ["chipset", "processor family", "cpu type", "architecture", "model", "vendor", "speed", "ghz", "clock", "utiliz", "percent"]):
         return False
+    if text in {"cpu", "cpus", "cores", "core", "vcpu", "vcpus"}:
+        return True
     return any(
         term in text
         for term in [
@@ -929,6 +960,7 @@ def spreadsheet_cpu_label(label):
             "v cpu",
             "virtual cpu",
             "cpu vcpu",
+            "cpu core",
             "cpu cores",
             "number of cpu",
             "num cpu",
@@ -1484,6 +1516,7 @@ def meaningful_inventory_value(value):
 
 def rule_based_row_has_inventory_signal(row, fields):
     has_application = False
+    has_name = False
     has_environment = False
     has_descriptive_detail = False
     has_resource = False
@@ -1495,6 +1528,16 @@ def rule_based_row_has_inventory_signal(row, fields):
         label = normalize(field.get("label"))
         if "application name" in label or label in {"application", "app name"}:
             has_application = True
+        elif (
+            label == "name"
+            or label.endswith(" name")
+            or "hostname" in label
+            or "host name" in label
+            or "resource id" in label
+            or "resource name" in label
+        ):
+            # Identifier-style column (Name, Server Name, Host Name, VM Name, etc.) — but not "per server" resource labels.
+            has_name = True
         elif "environment" in label or label == "env":
             has_environment = True
         elif (
@@ -1509,7 +1552,7 @@ def rule_based_row_has_inventory_signal(row, fields):
         elif any(term in label for term in ["application type", "database type", "server name", "host name", "description"]):
             has_descriptive_detail = True
 
-    if not has_application:
+    if not (has_application or has_name):
         return False
     return has_resource or has_environment or has_descriptive_detail
 
@@ -4214,7 +4257,7 @@ def full_service_line_items(row, fields, rate_card=None):
     return [line_item], mapping, []
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False):
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False):
     def _rightsize_mem(ocpu_value, mem_value):
         # Cap memory at the OCI target ratio of 8 GB/OCPU (never increase it). OCPUs unchanged.
         if not rightsize or not ocpu_value or not mem_value:
@@ -4282,33 +4325,34 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "annual": 0.0,
     }
 
-    def append_compute_memory_items(target_items, ocpus_value, memory_gb_value, mapping_prefix, hours_value=HOURS_PER_MONTH):
+    def append_compute_memory_items(target_items, ocpus_value, memory_gb_value, mapping_prefix, hours_value=HOURS_PER_MONTH, shape=None):
+        shape = shape or selected_shape
         hours = hours_value if hours_value and hours_value > 0 else HOURS_PER_MONTH
         if ocpus_value:
-            rc = rate(selected_shape.get("computeSku", "B97384"), rate_card)
             qty = ocpus_value * hours
+            r = shape.get("computeRate", 0)
             target_items.append(
                 {
-                    "sku": rc["sku"],
-                    "description": rc["description"],
+                    "sku": shape.get("computeSku", "B97384"),
+                    "description": f"OCPU-hr rate ({shape.get('label', 'Compute')})",
                     "quantity": round(qty, 4),
-                    "unit": rc["unit"],
-                    "rate": rc["rate"],
-                    "monthly": money(qty * rc["rate"]),
+                    "unit": "OCPU-hour",
+                    "rate": r,
+                    "monthly": money(qty * r),
                     "mapping": mapping_prefix,
                 }
             )
         if memory_gb_value:
-            rc = rate(selected_shape.get("memorySku", "B97385"), rate_card)
             qty = memory_gb_value * hours
+            r = shape.get("memoryRate", 0)
             target_items.append(
                 {
-                    "sku": rc["sku"],
-                    "description": rc["description"],
+                    "sku": shape.get("memorySku", "B97385"),
+                    "description": f"Memory GB-hr rate ({shape.get('label', 'Memory')})",
                     "quantity": round(qty, 4),
-                    "unit": rc["unit"],
-                    "rate": rc["rate"],
-                    "monthly": money(qty * rc["rate"]),
+                    "unit": "GB-hour",
+                    "rate": r,
+                    "monthly": money(qty * r),
                     "mapping": "Memory is billed as GB-hours.",
                 }
             )
@@ -4364,6 +4408,14 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         block_storage_gb = (local_storage_multiplier * app_local_storage) + db_storage
         file_storage_gb = shared_storage_multiplier * app_shared_storage
 
+        # Auto mode: map each row to the best shape of its detected CPU vendor.
+        row_shape = selected_shape
+        if auto:
+            _srec = lookup_cloud_shape(row_context(row, fields))
+            _v = (_srec or {}).get("ociVendor")
+            if _v in BEST_SHAPE_BY_VENDOR:
+                row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]]
+
         line_items = []
         if not cloud_bill_mode:
             append_compute_memory_items(
@@ -4371,6 +4423,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 ocpus,
                 memory_gb,
                 "Spreadsheet CPU values are assumed to be vCPUs, shown in review as OCPUs using 2 vCPUs = 1 OCPU, then multiplied by 730 monthly hours.",
+                shape=row_shape,
             )
             # Windows OS license: OS recognition scans the row; Windows rows are licensed per OCPU-hour
             # (1 license per OCPU = 1 per 2 vCPUs). Skipped when Windows pricing is toggled off.
@@ -4446,6 +4499,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     0 if "GB-hour" in existing_units else memory_gb,
                     "Cloud bill CPU/vCPU usage was normalized to OCPUs and priced using source usage hours when present.",
                     usage_hours,
+                    shape=row_shape,
                 )
             fallback_items = line_items[fallback_start:]
             source_cost_value = full_service_mapping.get("sourceMonthlyCost", 0) if full_service_mapping else 0
@@ -4492,6 +4546,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             text_for(row, fields, ["application name"])
             or text_for_exact(row, fields, ["application", "app"])
             or text_for(row, fields, ["database name"])
+            or text_for_exact(row, fields, ["name", "server name", "host name", "hostname", "vm name", "instance name"])
             or clean_text(row.get("source_service"))
             or clean_text(row.get("source_product"))
             or fallback_name
@@ -4563,6 +4618,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "sourceCloudEstimate": source_cloud_estimate,
             "rightsized": bool(rightsize and original_memory_gb and memory_gb != original_memory_gb),
             "originalMemoryGb": round(original_memory_gb, 4),
+            "shapeUsed": {"key": row_shape.get("key"), "label": row_shape.get("label")},
             "specs": {
                 "applicationServers": app_servers,
                 "databaseServers": db_servers,
@@ -5131,17 +5187,19 @@ class IntakeHandler(BaseHTTPRequestHandler):
             hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
             rightsize = bool(payload.get("rightsize"))
+            auto = bool(payload.get("auto"))
             if shape_key not in SHAPE_LOOKUP:
                 self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
                 return
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto)
             pricing["bomMatch"] = bom_match
             pricing["hideGpuPricing"] = hide_gpu_pricing
             pricing["hideWindowsPricing"] = hide_windows_pricing
             pricing["rightsize"] = rightsize
+            pricing["auto"] = auto
             llm_payload, llm_warning = call_llm_mapping(pricing)
             pricing = enrich_with_llm(pricing, llm_payload)
             if llm_warning:
@@ -5163,6 +5221,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
             rightsize = bool(payload.get("rightsize"))
+            auto = bool(payload.get("auto"))
             ramp = payload.get("ramp")
             existing_infra_cost = payload.get("existingInfraCost", 0)
             if shape_key not in SHAPE_LOOKUP:
@@ -5171,7 +5230,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Export requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto)
             servers = bom_export.servers_from_pricing(pricing, rows)
             shape = pricing.get("selectedShape") or {}
             shape_for_export = {

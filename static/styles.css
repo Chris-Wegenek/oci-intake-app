@@ -1137,6 +1137,28 @@ td input[type="checkbox"] {
   cursor: pointer;
 }
 
+.shape-auto-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  filter: grayscale(0.4);
+  position: relative;
+}
+
+.shape-auto-disabled::after {
+  content: "Auto mode on — shape chosen per workload";
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #3399ff;
+  background: #eaf4ff;
+  border: 1px solid #cfe6ff;
+  border-radius: 8px;
+  padding: 2px 8px;
+  pointer-events: none;
+}
+
 .mode-switch {
   display: inline-flex;
   border: 1px solid #c9d2dc;
