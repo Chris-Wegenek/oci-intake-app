@@ -61,6 +61,20 @@
             <strong>Choose spreadsheet</strong>
             <span id="dropZoneHint">or drag the workbook onto this upload area</span>
           </label>
+          <div class="load-prev-bom">
+            <button type="button" id="loadPrevBom" class="ghost-button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
+            <span class="load-prev-hint">Restore a saved <strong>.json</strong> or exported <strong>.xlsx</strong> workflow</span>
+          </div>
+          <div id="selectedDocTile" class="selected-doc-tile" hidden>
+            <span class="selected-doc-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v4h4"/></svg>
+            </span>
+            <div class="selected-doc-meta">
+              <strong id="selectedDocName">—</strong>
+              <span id="selectedDocSub"></span>
+            </div>
+            <button type="button" id="selectedDocClear" class="selected-doc-clear" title="Choose a different file" aria-label="Clear selected file">✕</button>
+          </div>
           <div id="uploadProgress" class="upload-progress is-hidden" role="status" aria-live="polite">
             <div class="loading-mark" aria-hidden="true"></div>
             <div>
@@ -72,6 +86,14 @@
         </div>
 
         <div id="reviewPanel" class="review-panel is-hidden">
+          <div id="inventoryNotice" class="inventory-notice" hidden>
+            <span class="inventory-notice-icon" aria-hidden="true">⚠</span>
+            <div class="inventory-notice-text">
+              <strong>This looks like a server inventory, not a cloud bill.</strong>
+              <span>It has CPU/RAM/instance columns but no cost column, so the bill mapping won't produce real costs. Switch to On-prem inventory for accurate sizing and pricing.</span>
+            </div>
+            <button type="button" id="switchToOnPrem" class="primary-button">Switch to On-prem inventory</button>
+          </div>
           <div class="toolbar">
             <div>
               <h2>Adjust your table</h2>
@@ -157,37 +179,36 @@
           <p>Compute and memory rates change by flex shape. Storage rates stay constant across the options.</p>
         </div>
         <div class="shape-actions">
-          <label class="bom-match-toggle" title="Match the BOM script: treat the CPU column as OCPUs directly and floor CPU/RAM so fractions are never priced.">
-            <input id="bomMatchToggle" type="checkbox" />
-            <span>Match BOM script pricing (raw OCPU, floor CPU/RAM)</span>
-          </label>
-          <label class="bom-match-toggle" title="Hide GPU per-GPU-hour pricing in results and the export (GPU shapes still mapped).">
-            <input id="hideGpuToggle" type="checkbox" />
-            <span>Hide GPU pricing</span>
-          </label>
-          <label class="bom-match-toggle" title="Turn off Windows OS licensing (1 license per OCPU) in the OCI estimate, source-cloud estimate, and export.">
-            <input id="hideWindowsToggle" type="checkbox" />
-            <span>Hide Windows pricing</span>
-          </label>
-          <div class="mode-switch" id="rightsizeSwitch" role="group" aria-label="Sizing mode" title="1 to 1 carries over source CPU/memory. Rightsize caps memory at OCI's 8 GB/OCPU target to cut cost.">
-            <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
-            <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
+          <div class="pricing-options" aria-label="Pricing options">
+            <label class="opt-chip" title="Hide GPU per-GPU-hour pricing in results and the export (GPU shapes still mapped).">
+              <input id="hideGpuToggle" type="checkbox" />
+              <span>Hide GPU pricing</span>
+            </label>
+            <label class="opt-chip" title="Turn off Windows OS licensing (1 license per OCPU) in the OCI estimate, source-cloud estimate, and export.">
+              <input id="hideWindowsToggle" type="checkbox" />
+              <span>Hide Windows pricing</span>
+            </label>
           </div>
-          <label class="bom-match-toggle" title="Auto: map each workload to the best shape for its own CPU vendor — AMD→E6 Ax, Intel→X12 Ax, Arm→A4 Ax — instead of forcing the single shape selected above.">
-            <input id="autoToggle" type="checkbox" />
-            <span>Auto (best shape per vendor)</span>
-          </label>
-          <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
-          <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
+          <div class="shape-action-buttons">
+            <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
+            <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
+          </div>
         </div>
       </section>
 
       <section class="processor-section" aria-label="Processor platform">
         <div class="processor-section-copy">
           <span>Processor family</span>
-          <p>Choose a processor logo to reveal the matching OCI shapes and rate card.</p>
+          <p>Choose a processor logo to reveal the matching OCI shapes and rate card, or "Match processor type" to map each workload to the best shape for its own vendor.</p>
         </div>
-        <div id="processorPicker" class="processor-picker" aria-label="Choose AMD or Intel"></div>
+        <div id="processorPicker" class="processor-picker" aria-label="Choose processor family"></div>
+        <div class="sizing-mode-row">
+          <span class="sizing-mode-label">Sizing</span>
+          <div class="mode-switch rightsize-switch" role="group" aria-label="Sizing mode" title="1 to 1 carries over source CPU/memory. Rightsize caps memory at OCI's 8 GB/OCPU target to cut cost.">
+            <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
+            <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
+          </div>
+        </div>
       </section>
 
       <section id="shapeDropdown" class="shape-dropdown" aria-live="polite">
@@ -202,17 +223,21 @@
         <section class="shape-tabs" id="shapeGrid" role="tablist" aria-label="OCI flex shape choices"></section>
 
         <section id="shapeRatePanel" class="shape-detail">
-          <div class="shape-detail-copy">
-            <span id="shapeFamily">AMD flexible shape</span>
-            <h3 id="shapeDetailTitle">E6 Standard Ax</h3>
-            <p id="shapeDetailSummary">Selected shape rates will be applied to approved rows.</p>
-            <div id="shapeDetailRates" class="shape-detail-rates" aria-label="Selected shape rates"></div>
+          <div class="hours-control-box">
+            <label for="hoursPerMonth">Hours per month (all servers)</label>
+            <input id="hoursPerMonth" type="number" min="1" step="1" value="730" />
+            <p class="hours-note">Default 730. If the uploaded file has an "hours running" / "hours per month" column, each server uses its own value.</p>
           </div>
         </section>
       </section>
     </main>
 
     <main id="resultsPage" class="results-page is-hidden">
+      <section class="bom-name-bar">
+        <label for="bomName" class="bom-name-label">BOM name</label>
+        <input id="bomName" type="text" class="bom-name-input" placeholder="Untitled BOM" autocomplete="off" />
+      </section>
+
       <section class="results-hero">
         <div>
           <p class="page-kicker">OCI estimate</p>
@@ -222,12 +247,29 @@
         </div>
         <div class="results-actions">
           <button id="backToReview" class="ghost-button" type="button">Back to review</button>
-          <button id="exportExcel" class="ghost-button" type="button">Export to Excel</button>
+          <div class="export-stack">
+            <button id="exportExcel" class="ghost-button" type="button">Export to Excel</button>
+            <button id="exportJson" class="export-json-btn" type="button">Export .json</button>
+          </div>
+          <button id="loadWorkflow" class="ghost-button" type="button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
+          <input id="loadWorkflowFile" type="file" accept=".json,.xlsx" hidden />
           <button id="rerunPricing" class="primary-button" type="button">Reprice estimate</button>
         </div>
       </section>
 
       <section id="resultsKpis" class="results-kpis" aria-label="Cost summary"></section>
+
+      <section class="cross-cloud-section" aria-label="Other cloud estimate">
+        <button type="button" id="crossCloudTile" class="cross-cloud-tile" aria-expanded="false" aria-controls="crossCloudResults">
+          <span class="cross-cloud-tile-icon">☁</span>
+          <span class="cross-cloud-tile-text">
+            <strong>Estimate on other clouds</strong>
+            <span>Click to compare approximate AWS &amp; Azure on-demand cost for these workloads</span>
+          </span>
+          <span class="cross-cloud-tile-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="crossCloudResults" class="cross-cloud-results" hidden></div>
+      </section>
 
       <section class="insight-panel ramp-panel" aria-labelledby="rampHeading">
         <div class="panel-heading ramp-heading">
@@ -235,7 +277,13 @@
             <h3 id="rampHeading">Build a 3-year ramp</h3>
             <p>Drag any dot to adjust that section of the ramp. Click the graph or add a dot to create another section. The red dashed line is the BOM maximum.</p>
           </div>
-          <span id="rampCeilingLabel">BOM maximum</span>
+          <div class="ramp-heading-right">
+            <div class="mode-switch ramp-years-switch" role="group" aria-label="Ramp length">
+              <button type="button" class="mode-opt is-active" data-ramp-years="3">3 years</button>
+              <button type="button" class="mode-opt" data-ramp-years="5">5 years</button>
+            </div>
+            <span id="rampCeilingLabel">BOM maximum</span>
+          </div>
         </div>
         <div class="ramp-body">
           <div class="ramp-chart-frame">
@@ -264,16 +312,28 @@
                 <small>Cannot exceed the BOM maximum</small>
               </label>
             </div>
+            <div class="ramp-discount" id="ociDiscountControl">
+              <label class="ramp-control">
+                <span>OCI discount (proposal)</span>
+                <div class="pct-input">
+                  <input id="ociDiscount" type="number" min="0" max="100" step="0.5" value="0" inputmode="decimal" aria-label="OCI discount percent" />
+                  <b aria-hidden="true">%</b>
+                </div>
+                <small>Applied to the OCI estimate and the export (cloud and on-prem). Leave at 0 for no discount.</small>
+              </label>
+            </div>
             <div class="ramp-years" aria-label="Annual ramp totals">
               <div><span>Year 1 spend</span><strong id="rampYearOneTotal">$0.00</strong></div>
               <div><span>Year 2 spend</span><strong id="rampYearTwoTotal">$0.00</strong></div>
               <div><span>Year 3 spend</span><strong id="rampYearThreeTotal">$0.00</strong></div>
+              <div id="rampYearFourBox" hidden><span>Year 4 spend</span><strong id="rampYearFourTotal">$0.00</strong></div>
+              <div id="rampYearFiveBox" hidden><span>Year 5 spend</span><strong id="rampYearFiveTotal">$0.00</strong></div>
             </div>
             <div class="ramp-summary">
               <div class="ramp-contract-value">
                 <span>Total Contract Value</span>
                 <strong id="rampThreeYearTotal">$0.00</strong>
-                <small>Year 1 + Year 2 + Year 3</small>
+                <small id="rampContractNote">Year 1 + Year 2 + Year 3</small>
               </div>
               <div class="ramp-average">
                 <span>Average monthly spend</span>
@@ -307,14 +367,58 @@
 
       <section class="insight-panel result-detail-panel">
         <div class="panel-heading">
-          <h3 id="detailHeading">Application cost detail</h3>
+          <div class="detail-heading-left">
+            <div class="column-picker" id="columnPicker">
+              <button type="button" class="ghost-button column-picker-btn" id="columnPickerBtn">Columns ▾</button>
+              <div class="column-picker-menu" id="columnPickerMenu" hidden></div>
+            </div>
+            <h3 id="detailHeading">Application Cost Details</h3>
+          </div>
           <span id="resultRowCount">0 workloads</span>
         </div>
-        <div class="result-detail-wrap">
-          <table id="resultsTable" class="detail-table"></table>
+        <div class="sizing-legend" aria-label="Status key">
+          <span class="legend-item"><span class="size-flag size-flag-rightsized">RIGHTSIZED</span> memory trimmed to 8 GB/OCPU</span>
+          <span class="legend-item"><span class="size-flag size-flag-baremetal">BARE METAL</span> too big for flex</span>
+          <span class="legend-item"><span class="size-flag size-flag-impossible">IMPOSSIBLE</span> exceeds largest OCI shape</span>
+          <span class="legend-item"><span class="size-flag size-flag-gpu">GPU</span> mapped to OCI GPU shape</span>
+        </div>
+        <div class="bulk-action-bar" id="bulkActionBar" hidden>
+          <span class="bulk-sel-count" id="bulkSelCount">0 selected</span>
+          <label class="bulk-action-label">Set cost action:
+            <select id="bulkCostAction" class="cell-select">
+              <option value="estimate">Use OCI estimate</option>
+              <option value="carry">Carry over AWS cost</option>
+              <option value="remove">Remove from BOM</option>
+            </select>
+          </label>
+          <button type="button" class="primary-button bulk-apply-btn" id="bulkApply">Apply to selected</button>
+          <button type="button" class="ghost-button" id="bulkClear">Clear selection</button>
+        </div>
+        <div class="result-detail-layout">
+          <aside class="source-filter-panel" id="sourceFilterPanel" hidden>
+            <div class="source-filter-head">Filter by source service</div>
+            <div class="source-filter-actions">
+              <button type="button" id="sourceFilterAll">All</button>
+              <button type="button" id="sourceFilterNone">None</button>
+            </div>
+            <div class="source-filter-list" id="sourceFilterList"></div>
+          </aside>
+          <div class="result-detail-wrap">
+            <table id="resultsTable" class="detail-table"></table>
+          </div>
         </div>
       </section>
     </main>
+
+    <div id="exportOverlay" class="export-overlay" hidden role="status" aria-live="polite">
+      <div class="export-spinner" aria-hidden="true"></div>
+      <div class="export-overlay-text">Generating your Excel workbook…</div>
+    </div>
+
+    <div id="priceSpinner" class="price-spinner" hidden role="status" aria-live="polite">
+      <span class="price-spinner-circle" aria-hidden="true"></span>
+      <span class="price-spinner-text">Updating…</span>
+    </div>
 
     <template id="rateRowTemplate">
       <div class="rate-row">

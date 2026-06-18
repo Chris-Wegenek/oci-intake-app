@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import collections
 import warnings
 
 warnings.filterwarnings("ignore", message="'cgi' is deprecated.*", category=DeprecationWarning)
@@ -20,6 +21,7 @@ import pandas as pd
 from pypdf import PdfReader
 
 import bom_export
+import aws_pricing
 
 
 ROOT = Path(__file__).resolve().parent
@@ -526,6 +528,19 @@ def normalize_provider_hint(value):
     return PROVIDER_AUTO
 
 
+def guess_provider_from_filename(filename):
+    """Guess the cloud provider from an uploaded bill's filename. Returns
+    'aws' / 'azure' / 'gcp', or PROVIDER_AUTO when ambiguous or unknown."""
+    text = normalize(filename or "")
+    signals = {
+        "aws": ["aws", "amazon", "ec2", "cur", "cost and usage", "costexplorer", "cost explorer"],
+        "azure": ["azure", "microsoft", "msft", "ea ", "enterprise agreement", "consumption"],
+        "gcp": ["gcp", "google", "bigquery", "gce", "cloud billing"],
+    }
+    matched = [p for p, terms in signals.items() if any(term in text for term in terms)]
+    return matched[0] if len(matched) == 1 else PROVIDER_AUTO
+
+
 def inventory_fields(full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM):
     if intake_mode == INTAKE_MODE_CLOUD_BILL:
         return CLOUD_BILL_FIELDS
@@ -596,6 +611,19 @@ SHAPE_DEFINITIONS = [
         "accent": "#365f1c",
     },
     {
+        "key": "e6-standard",
+        "label": "E6 Standard",
+        "shortLabel": "E6",
+        "family": "AMD flexible shape",
+        "processorVendor": "amd",
+        "computeSku": "B111129",
+        "memorySku": "B111130",
+        "computeRate": 0.0300,
+        "memoryRate": 0.0020,
+        "summary": "AMD E6 general-purpose flex shape (non-Ax). OCPU B111129 ($0.03/OCPU-hr), Memory B111130 ($0.002/GB-hr).",
+        "accent": "#2d6a2a",
+    },
+    {
         "key": DEFAULT_SHAPE_KEY,
         "label": "E6 Standard Ax",
         "shortLabel": "E6 Ax",
@@ -640,12 +668,38 @@ SHAPE_DEFINITIONS = [
         "shortLabel": "A4 Ax",
         "family": "Ampere Ax flexible shape",
         "processorVendor": "arm",
-        "computeSku": "A4AX-OCPU",
-        "memorySku": "A4AX-MEMORY",
+        "computeSku": "B112532",
+        "memorySku": "B112533",
         "computeRate": 0.0190,
         "memoryRate": 0.0084,
-        "summary": "Newest AmpereOne M (Arm) Ax shape; the default target for Arm/Graviton source workloads.",
+        "summary": "Newest AmpereOne M (Arm) Ax shape; the default target for Arm/Graviton source workloads. OCPU B112532, Memory B112533.",
         "accent": "#3d6b4f",
+    },
+    {
+        "key": "a4-standard",
+        "label": "A4 Standard",
+        "shortLabel": "A4",
+        "family": "AmpereOne M flexible shape",
+        "processorVendor": "arm",
+        "computeSku": "B112145",
+        "memorySku": "B112146",
+        "computeRate": 0.0138,
+        "memoryRate": 0.0027,
+        "summary": "OCI - Compute - Standard - A4; AmpereOne M (Arm). OCPU B112145, Memory B112146.",
+        "accent": "#347a5c",
+    },
+    {
+        "key": "a2-standard",
+        "label": "A2 Standard",
+        "shortLabel": "A2",
+        "family": "AmpereOne flexible shape",
+        "processorVendor": "arm",
+        "computeSku": "B109529",
+        "memorySku": "B109530",
+        "computeRate": 0.0140,
+        "memoryRate": 0.0020,
+        "summary": "Compute - Standard - A2; AmpereOne (Arm). OCPU B109529, Memory B109530.",
+        "accent": "#356055",
     },
     {
         "key": "a1-standard",
@@ -653,11 +707,11 @@ SHAPE_DEFINITIONS = [
         "shortLabel": "A1",
         "family": "Ampere Altra flexible shape",
         "processorVendor": "arm",
-        "computeSku": "A1-OCPU",
-        "memorySku": "A1-MEMORY",
+        "computeSku": "B93297",
+        "memorySku": "B93298",
         "computeRate": 0.0100,
         "memoryRate": 0.0015,
-        "summary": "Ampere Altra (Arm) shape with the lowest OCPU rate; 1 OCPU = 1 core.",
+        "summary": "Compute - Standard - A1; Ampere Altra (Arm), 1 OCPU = 1 core. OCPU B93297, Memory B93298.",
         "accent": "#2f5d52",
     },
 ]
@@ -666,6 +720,71 @@ SHAPE_LOOKUP = {shape["key"]: shape for shape in SHAPE_DEFINITIONS}
 
 # Best (newest) OCI shape per CPU vendor, used by the "Auto" mapping mode.
 BEST_SHAPE_BY_VENDOR = {"amd": "e6-standard-ax", "intel": "x12-standard-ax", "arm": "a4-standard-ax"}
+
+# Best Match -> equivalent-generation OCI shape for the source instance's chip era.
+# Each list is (min source generation, OCI shape key), checked high-to-low.
+# Generation is the AWS family digit (m7a -> 7) or the Azure/GCP version (Dadsv6 -> 6).
+EQUIV_GEN_MAP = {
+    ("aws", "amd"): [(8, "e6-standard"), (7, "e5-standard"), (6, "e4-standard"), (0, "e4-standard")],
+    ("azure", "amd"): [(7, "e6-standard"), (6, "e5-standard"), (5, "e4-standard"), (0, "e4-standard")],
+    ("gcp", "amd"): [(4, "e6-standard"), (3, "e5-standard"), (0, "e4-standard")],
+    ("aws", "intel"): [(7, "x12-standard-ax"), (0, "x9-standard")],
+    ("azure", "intel"): [(6, "x12-standard-ax"), (0, "x9-standard")],
+    ("gcp", "intel"): [(4, "x12-standard-ax"), (0, "x9-standard")],
+    ("aws", "arm"): [(8, "a4-standard"), (7, "a2-standard"), (0, "a1-standard")],
+    ("azure", "arm"): [(7, "a4-standard"), (6, "a2-standard"), (0, "a1-standard")],
+    ("gcp", "arm"): [(4, "a4-standard"), (0, "a2-standard")],
+}
+
+
+def equivalent_gen_shape_key(provider, vendor, generation):
+    """Map a source instance's generation to the equivalent-generation OCI shape key.
+    Falls back to the newest shape for the vendor when there's no specific rule."""
+    table = EQUIV_GEN_MAP.get((provider, vendor))
+    if table:
+        for threshold, shape_key in table:
+            if (generation or 0) >= threshold:
+                return shape_key
+    return BEST_SHAPE_BY_VENDOR.get(vendor)
+
+
+# OCI shape generation rank within a vendor (higher = newer) for rightsize gen-gap math.
+OCI_GEN_RANK = {
+    "e4-standard": 1, "e5-standard": 2, "e6-standard": 3, "e6-standard-ax": 3,
+    "x9-standard": 1, "x12-standard-ax": 2,
+    "a1-standard": 1, "a2-standard": 2, "a4-standard": 3, "a4-standard-ax": 3,
+}
+BEST_GEN_RANK = {"amd": 3, "intel": 2, "arm": 3}
+
+
+def rightsize_plan(shape_key, src_rec):
+    """Return (ocpu_rate, ram_rate, gens_behind) for the gen-gap rightsize, or None.
+
+    Only the Ax shapes and the regular E6 are rightsized:
+      - Ax shapes (E6 Ax / X12 Ax / A4 Ax): 15% OCPU and 20% RAM per generation behind.
+      - Regular E6 (non-Ax): 10% OCPU and 15% RAM per generation behind.
+    "Generations behind" is how far the source instance's generation sits below the
+    newest OCI generation for the chosen shape's vendor. On-prem / unidentifiable
+    source data is treated as exactly one generation behind."""
+    key = str(shape_key or "")
+    if key.endswith("-ax"):
+        ocpu_rate, ram_rate = 0.15, 0.20
+    elif key == "e6-standard":
+        ocpu_rate, ram_rate = 0.10, 0.15
+    else:
+        return None
+    vendor = SHAPE_LOOKUP.get(shape_key, {}).get("processorVendor")
+    provider = (src_rec or {}).get("provider")
+    if src_rec and provider in ("aws", "azure", "gcp"):
+        gen = _instance_generation(provider, src_rec.get("instance"))
+        src_key = equivalent_gen_shape_key(provider, vendor, gen)
+        src_rank = OCI_GEN_RANK.get(src_key, BEST_GEN_RANK.get(vendor, 1))
+        gens_behind = max(0, BEST_GEN_RANK.get(vendor, src_rank) - src_rank)
+    else:
+        gens_behind = 1  # on-prem / unknown: assume one generation behind
+    if gens_behind <= 0:
+        return None
+    return (ocpu_rate, ram_rate, gens_behind)
 
 STORAGE_RATE_ITEMS = [
     {
@@ -2110,8 +2229,11 @@ CLOUD_COLUMN_ALIASES = {
     },
     "source_product": {
         "aws": [
+            "usagetype",
             "lineitem usagetype",
             "line item usage type",
+            "itemdescription",
+            "item description",
             "lineitem lineitemdescription",
             "line item description",
             "product servicename",
@@ -2152,7 +2274,12 @@ CLOUD_COLUMN_ALIASES = {
         "common": ["memory", "memory gb", "ram", "ram gb", "mem gb", "gb ram"],
     },
     "source_monthly_cost": {
-        "aws": ["lineitem netunblendedcost", "lineitem unblendedcost", "net unblended cost", "unblended cost"],
+        "aws": [
+            "totalcost", "total cost",
+            "costbeforetax", "cost before tax",
+            "lineitem netunblendedcost", "lineitem unblendedcost", "net unblended cost", "unblended cost",
+            "blendedcost", "blended cost",
+        ],
         "azure": ["costinbillingcurrency", "cost in billing currency", "pretaxcost", "pretax cost", "cost"],
         "gcp": ["cost", "net cost"],
         "common": ["cost", "source cost", "amount", "charge"],
@@ -2304,7 +2431,13 @@ def infer_cloud_bill_mappings(headers, detected_provider):
 
 def cloud_bill_value(key, value):
     if key in {"usage_quantity", "source_monthly_cost", "mapping_confidence"}:
-        return compact_number(to_number(value, 0)) if clean_text(value) else ""
+        if not clean_text(value):
+            return ""
+        num = to_number(value, 0)
+        # Cost and usage can't be negative; a negative here is a parse artifact.
+        if key in {"usage_quantity", "source_monthly_cost"} and num < 0:
+            num = 0
+        return compact_number(num)
     if key == "resource_ocpus":
         return compact_number(to_number(value, 0)) if clean_text(value) else ""
     if key == "resource_memory_gb":
@@ -2639,6 +2772,249 @@ OCI_GPU_SHAPES = _load_oci_gpu_shapes()
 GPU_HOURS_PER_MONTH = 730
 
 
+def _load_source_cloud_rates():
+    path = Path(__file__).resolve().parent / "data" / "source_cloud_rates.json"
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+SOURCE_CLOUD_RATES = _load_source_cloud_rates()
+
+
+def _instance_generation(provider, name):
+    """Best-effort generation number for an instance name (higher = newer).
+    AWS: the digit in the family token (m7a -> 7). Azure: the v-number (D16ads v6 -> 6)."""
+    if not name:
+        return 0
+    text = str(name).lower()
+    if provider == "azure":
+        # Azure version is a standalone token like " v6" — must not match the "v"
+        # inside a family name such as "NV72ads".
+        match = re.search(r"(?:\s|_)v(\d+)\b", text)
+        return int(match.group(1)) if match else 1
+    match = re.match(r"[a-z]+(\d+)", text.split(".")[0])
+    return int(match.group(1)) if match else 0
+
+
+def _index_real_priced_instances():
+    """Index every real-priced cloud instance (name + size + price + generation) by
+    cloud and by cloud+OCI-vendor, so the cross-cloud estimate can match real shapes."""
+    from collections import defaultdict
+
+    by_cloud_vendor = defaultdict(list)
+    by_cloud = defaultdict(list)
+    max_gen = {}
+    for s in CLOUD_SHAPE_MAP.values():
+        if s.get("isGpu"):
+            continue
+        vcpu = s.get("vcpu")
+        mem = s.get("memoryGb")
+        hourly = s.get("approxSourceHourly")
+        if not (s.get("sourcePriceReal") and vcpu and mem and hourly):
+            continue
+        provider = s.get("provider")
+        gen = _instance_generation(provider, s.get("instance"))
+        rec = {
+            "instance": s.get("instance"),
+            "vcpu": float(vcpu),
+            "mem": float(mem),
+            "hourly": float(hourly),
+            "monthly": s.get("approxSourceMonthly"),
+            "gen": gen,
+        }
+        by_cloud_vendor[(provider, s.get("ociVendor"))].append(rec)
+        by_cloud[provider].append(rec)
+    for key, lst in by_cloud_vendor.items():
+        lst.sort(key=lambda r: (r["vcpu"], r["mem"]))
+        # "Newest generation" = the highest gen that actually has a family of sizes
+        # (guards against a single mislabeled/outlier instance like "E64i v31").
+        from collections import Counter as _Counter
+
+        gen_counts = _Counter(r["gen"] for r in lst)
+        real_gens = [g for g, c in gen_counts.items() if c >= 3]
+        max_gen[key] = max(real_gens) if real_gens else max((r["gen"] for r in lst), default=0)
+    for lst in by_cloud.values():
+        lst.sort(key=lambda r: (r["vcpu"], r["mem"]))
+    return by_cloud_vendor, by_cloud, max_gen
+
+
+REAL_PRICED_BY_CLOUD_VENDOR, REAL_PRICED_BY_CLOUD, MAX_GEN_BY_CLOUD_VENDOR = _index_real_priced_instances()
+
+
+def equivalent_instance(cloud, vendor, vcpus, mem, top_of_line=False):
+    """Find the equivalent named instance on `cloud` for the OCI shape's vendor,
+    sized to the workload. Prefers an exact match, then the smallest instance that
+    fits both vCPU and memory, then the nearest size. When top_of_line is set, only
+    the newest-generation family for that vendor is considered."""
+    pool = REAL_PRICED_BY_CLOUD_VENDOR.get((cloud, vendor)) or REAL_PRICED_BY_CLOUD.get(cloud) or []
+    if not pool:
+        return None
+    if top_of_line:
+        newest = MAX_GEN_BY_CLOUD_VENDOR.get((cloud, vendor))
+        if newest is not None:
+            top_pool = [rec for rec in pool if rec["gen"] == newest]
+            if top_pool:
+                pool = top_pool
+    # Exact size match (same shape footprint).
+    for rec in pool:
+        if abs(rec["vcpu"] - vcpus) < 0.5 and abs(rec["mem"] - mem) <= max(2.0, 0.1 * mem):
+            return rec
+    # Smallest instance that fits both dimensions (never undersize).
+    fits = [rec for rec in pool if rec["vcpu"] >= vcpus and rec["mem"] >= mem]
+    if fits:
+        return min(fits, key=lambda r: (r["vcpu"], r["mem"]))
+    # Otherwise the nearest available by size.
+    return min(pool, key=lambda r: abs(r["vcpu"] - vcpus) + abs(r["mem"] - mem) / 8.0)
+
+
+def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mode=False, source_cloud=None):
+    """Compute the AWS/Azure totals for one matching mode.
+
+    On-prem inventory: every row is a compute workload, so match a real named
+    instance on each cloud (best fit, or newest generation when top_of_line) and
+    use its on-demand price, plus the Windows add-on rule used for OCI.
+
+    Cloud-bill mode: we already know the real bill, so don't re-estimate it.
+      - The source cloud (the cloud the bill came from) is reported at its ACTUAL
+        billed cost for every line item — no estimate needed.
+      - The other cloud estimates only the compute line items (swapping in an
+        equivalent instance) and carries every non-compute service (storage,
+        data transfer, managed services) at its actual source cost, since
+        cross-cloud per-service pricing isn't modelled.
+    GCP is intentionally sizing-only (no estimated pricing)."""
+    out = {}
+    for cloud in ("aws", "azure"):
+        total = 0.0
+        actual_rows = 0
+        estimated_rows = 0
+        live_rows = 0
+        carried_rows = 0
+        for row in priced_rows:
+            # "Remove from BOM" pulls the line out of both sides, so it must not
+            # count toward the source-cloud (actual bill) or other-cloud totals.
+            if (row.get("costAction") or "") == "remove":
+                continue
+            sce = row.get("sourceCloudEstimate") or {}
+            vendor = (row.get("shapeUsed") or {}).get("vendor")
+            specs = row.get("specs") or {}
+            vcpus = (specs.get("ocpus") or 0) * 2
+            mem = specs.get("memoryGb") or 0
+            is_compute = vcpus > 0 or mem > 0
+            src_cost = to_number(row.get("sourceMonthlyCost"), 0)
+
+            if cloud_bill_mode:
+                # Source cloud = the real bill: use the actual billed cost as-is.
+                if source_cloud and cloud == source_cloud:
+                    total += src_cost
+                    actual_rows += 1
+                    continue
+                # Other cloud: carry non-compute services at their source cost.
+                if not is_compute:
+                    total += src_cost
+                    carried_rows += 1
+                    continue
+                # Compute line items fall through to be estimated below.
+            else:
+                # On-prem inventory: only compute workloads are priced here.
+                if not is_compute:
+                    continue
+
+            hours = row.get("hoursPerMonth") or HOURS_PER_MONTH
+            windows = 0 if hide_windows else (row.get("windowsLicenseMonthly") or 0)
+
+            # AWS: try the live Price List API for this workload's instance type
+            # (its own source instance when marked AWS, otherwise the equivalent),
+            # Linux on-demand, in the workload's region.
+            if cloud == "aws" and aws_pricing.available():
+                inst_type = None
+                if not top_of_line and sce.get("provider") == "aws" and sce.get("instance"):
+                    inst_type = sce.get("instance")
+                if top_of_line or not inst_type:
+                    eq = equivalent_instance("aws", vendor, vcpus, mem, top_of_line)
+                    inst_type = (eq or {}).get("instance") or inst_type
+                live = aws_pricing.ondemand_linux_rate(inst_type, row.get("region")) if inst_type else None
+                if live is not None:
+                    total += live * hours + windows
+                    live_rows += 1
+                    if not top_of_line and sce.get("provider") == "aws":
+                        actual_rows += 1
+                    else:
+                        estimated_rows += 1
+                    continue
+
+            # Marked source-cloud instance with a known price (best-match only).
+            if not top_of_line and sce.get("provider") == cloud and sce.get("totalMonthly") is not None:
+                total += sce["totalMonthly"]
+                actual_rows += 1
+                continue
+            # Equivalent named instance from the bundled price data.
+            inst = equivalent_instance(cloud, vendor, vcpus, mem, top_of_line)
+            if not inst:
+                continue
+            total += inst["hourly"] * hours + windows
+            estimated_rows += 1
+        if cloud_bill_mode and source_cloud and cloud == source_cloud:
+            basis = "actual bill"
+        elif cloud_bill_mode and carried_rows:
+            basis = "compute estimated · other services at source cost"
+        elif live_rows:
+            basis = "live"
+        elif actual_rows and estimated_rows:
+            basis = "mixed"
+        elif actual_rows:
+            basis = "actual"
+        else:
+            basis = "equivalent"
+        out[cloud] = {
+            "label": "AWS" if cloud == "aws" else "Microsoft Azure",
+            "monthlyTotal": money(total),
+            "annualTotal": money(total * 12),
+            "priced": True,
+            "basis": basis,
+            "actualRows": actual_rows,
+            "estimatedRows": estimated_rows,
+            "liveRows": live_rows,
+            "carriedRows": carried_rows,
+        }
+    out["gcp"] = {
+        "label": "Google Cloud",
+        "priced": False,
+        "note": "Sizing only — no estimated pricing",
+    }
+    return out
+
+
+def _dominant_source_cloud(pricing, source_provider=None):
+    """Which cloud the workloads came from (aws/azure), or None.
+    A known bill provider wins; otherwise infer from the priced rows' markers."""
+    known = normalize_provider_hint(source_provider) if source_provider else PROVIDER_AUTO
+    if known in ("aws", "azure"):
+        return known
+    counts = {"aws": 0, "azure": 0}
+    for row in pricing.get("rows", []):
+        prov = (row.get("sourceCloudEstimate") or {}).get("provider")
+        if prov in counts:
+            counts[prov] += 1
+    if counts["aws"] == 0 and counts["azure"] == 0:
+        return None
+    return "aws" if counts["aws"] >= counts["azure"] else "azure"
+
+
+def cross_cloud_estimate(priced_rows, hide_windows=False, cloud_bill_mode=False, source_cloud=None):
+    """Both estimate modes so the UI can toggle without a re-price:
+      - bestMatch: closest equivalent shape (uses actual source-cloud price when known).
+      - topTier:   newest-generation equivalent shape on each cloud.
+    In cloud-bill mode the source cloud is reported at its actual billed cost."""
+    return {
+        "bestMatch": _cross_cloud_one_mode(priced_rows, hide_windows, False, cloud_bill_mode, source_cloud),
+        "topTier": _cross_cloud_one_mode(priced_rows, hide_windows, True, cloud_bill_mode, source_cloud),
+        "sourceCloud": source_cloud,
+        "cloudBillMode": cloud_bill_mode,
+    }
+
+
 def gpu_pricing_for_context(context):
     """If a cloud-bill row maps to a GPU instance, return its OCI GPU shape pricing, else None."""
     rec = lookup_cloud_shape(context)
@@ -2660,6 +3036,7 @@ def gpu_pricing_for_context(context):
 # Map each app flex shape to its OCI shape name, per-VM max OCPU/memory, and CPU vendor.
 SHAPE_KEY_TO_OCI = {
     "e6-standard-ax": ("VM.Standard.E6.Ax.Flex", 94, 712, "amd"),
+    "e6-standard": ("VM.Standard.E6.Flex", 94, 1049, "amd"),
     "e5-standard": ("VM.Standard.E5.Flex", 94, 1049, "amd"),
     "e4-standard": ("VM.Standard.E4.Flex", 64, 1024, "amd"),
     "x9-standard": ("VM.Standard3.Flex", 32, 512, "intel"),
@@ -2675,6 +3052,13 @@ def oci_size_check(shape_key, ocpus, memory_gb):
     'impossible' means it exceeds every OCI shape for that CPU vendor.
     """
     info = SHAPE_KEY_TO_OCI.get(shape_key)
+    if not info:
+        # Derive limits from the vendor's flex tier so shapes without an explicit
+        # entry (the Ampere/ARM shapes: A4 Ax, A4, A2, A1) are still size-checked.
+        vendor = (SHAPE_LOOKUP.get(shape_key) or {}).get("processorVendor")
+        flex_tier = next((t for t in OCI_VENDOR_TIERS.get(vendor, []) if t.get("tier") == "flex"), None)
+        if flex_tier:
+            info = (flex_tier["shape"], flex_tier["maxOcpu"], flex_tier["maxMem"], vendor)
     if not info or (ocpus <= 0 and memory_gb <= 0):
         return {"status": "ok"}
     flex_shape, max_ocpu, max_mem, vendor = info
@@ -2803,7 +3187,290 @@ def infer_instance_shape_resources(context, usage_quantity="", usage_unit=""):
     return 0.0, 0.0
 
 
+def bill_instance_compute_specs(text):
+    """From an instance type / usageType string, return (ocpus, memoryGb) using the
+    offline cloud shape map (vCPU/2 = OCPU). None if not found."""
+    if not text:
+        return None
+    match = _AWS_INSTANCE_RE.search(str(text).lower())
+    if not match:
+        return None
+    key = re.sub(r"[^a-z0-9]", "", match.group(1))
+    rec = CLOUD_SHAPE_MAP.get(key)
+    if not rec or not rec.get("vcpu"):
+        return None
+    return (rec["vcpu"] / 2.0, rec.get("memoryGb") or 0)
+
+
+# ---------------------------------------------------------------------------
+# OCI Base Database (DBaaS) pricing for AWS RDS / Aurora bill lines.
+#
+# AWS RDS lines today fall through to the generic catalog/storage fallback and
+# price to ~$0 ("Block Volume Storage"). We instead map RDS -> OCI Base Database
+# and price each line directly off the OCI price list:
+#   - Open-source engines (MySQL / PostgreSQL / MariaDB / Aurora) instance hours
+#     -> OCI Database with PostgreSQL OCPU rate (SKU B99060, $0.098/OCPU-hour).
+#     OCPU = instance vCPU / 2.
+#   - Aurora Serverless v2 (ACU-hours): 1 ACU ~= 0.25 vCPU = 0.125 OCPU (an ACU is
+#     ~2 GiB memory + a fractional vCPU), so OCPU-hours ~= ACU-hours * 0.125,
+#     priced at $0.098/OCPU-hour.
+#   - SQL Server RDS has NO managed equivalent on OCI -> CARRY the line (OCI cost
+#     = source cost), since it would have to be self-managed on a VM at comparable
+#     spend. Detected via "SQL Server" in the description/usage type.
+#   - Provisioned DB storage (RDS GP2/GP3 storage, Aurora StorageUsage) -> priced
+#     at the OCI Block Volume storage rate ($0.0255/GB-month).
+#   - Aurora StorageIOUsage (per-I/O) and Backup/ChargedBackupUsage are I/O and
+#     backup charges with no clean OCI line-item equivalent; OCI Base Database
+#     bundles I/O and includes a backup allowance, but to avoid understating cost
+#     we conservatively CARRY these (OCI cost = source cost) rather than zeroing
+#     them.
+OCI_BASE_DB_OCPU_RATE = 0.098       # OCI Database with PostgreSQL, SKU B99060, $/OCPU-hour
+OCI_BASE_DB_OCPU_SKU = "B99060"
+OCI_BASE_DB_ORACLE_OCPU_RATE = 0.215  # Oracle Base Database Standard Edition, SKU B88293 (unused default; open-source rate preferred)
+OCI_BASE_DB_STORAGE_RATE = 0.0255   # OCI Block Volume GB-month (reused for DB storage)
+OCI_BASE_DB_STORAGE_SKU = "B91961"
+OCI_BASE_DB_PRODUCT = "OCI Base Database"
+# Aurora Serverless v2: 1 ACU ~= 0.25 vCPU = 0.125 OCPU (ACU ~= 2 GiB + fractional vCPU).
+ACU_TO_OCPU = 0.125
+
+# RDS size suffixes are abbreviated in this bill (e.g. "db.t3.xl" = db.t3.xlarge,
+# "db.r5.2xl" = db.r5.2xlarge). Expand the suffix so the type resolves in CLOUD_SHAPE_MAP.
+_RDS_SIZE_ABBREV = {
+    "xl": "xlarge",
+    "2xl": "2xlarge",
+    "3xl": "3xlarge",
+    "4xl": "4xlarge",
+    "6xl": "6xlarge",
+    "8xl": "8xlarge",
+    "9xl": "9xlarge",
+    "10xl": "10xlarge",
+    "12xl": "12xlarge",
+    "16xl": "16xlarge",
+    "18xl": "18xlarge",
+    "24xl": "24xlarge",
+    "32xl": "32xlarge",
+}
+
+
+def _expand_rds_instance_type(text):
+    """From an RDS usageType like 'InstanceUsage:db.t3.xl' or 'HeavyUsage:db.r5.2xl',
+    return a normalized full instance type ('t3.xlarge', 'r5.2xlarge'). The leading
+    'db.' is stripped and abbreviated size suffixes are expanded. None if no match."""
+    if not text:
+        return None
+    m = re.search(r"db\.([a-z0-9]+\.[a-z0-9]+)", str(text).lower())
+    if not m:
+        return None
+    inst = m.group(1)  # e.g. "t3.xl", "t4g.micro", "r5.2xl"
+    family, _, size = inst.partition(".")
+    size = _RDS_SIZE_ABBREV.get(size, size)
+    return f"{family}.{size}"
+
+
+def _is_rds_row(row):
+    """True if this cloud-bill row is an AWS RDS / Aurora line."""
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                             ["source_service", "source_product", "__usageType"]))
+    return ("amazonrds" in blob.replace(" ", "")
+            or "relational database" in blob
+            or blob.startswith("aurora")
+            or ":aurora" in normalize(row.get("__usageType")))
+
+
+def _rds_is_sql_server(row):
+    # Match "sql server" as words, but NOT the "postgresql serverless" case:
+    # normalize() turns "PostgreSQL Serverless" into "postgresql serverless",
+    # which contains the substring "sql server". Exclude that with a lookbehind.
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["source_product", "__usageType", "source_service"]))
+    return bool(re.search(r"(?<!postgre)sql server\b", blob))
+
+
+def collect_sql_server_rds_instances(rows):
+    """Scan all bill rows once and return the set of normalized instance types
+    (e.g. 't3.xlarge') whose RDS engine is SQL Server. Lets license / reserved-
+    instance upfront fees (which don't name the engine, e.g. 'Sign up charge for
+    subscription') be carried as SQL Server too."""
+    out = set()
+    for r in rows:
+        if not _is_rds_row(r) or not _rds_is_sql_server(r):
+            continue
+        inst = _expand_rds_instance_type(r.get("__usageType")) or _expand_rds_instance_type(r.get("source_product"))
+        if inst:
+            out.add(inst)
+    return out
+
+
+def price_rds_row(row, sql_server_instances=None):
+    """Price one AWS RDS / Aurora bill row as OCI Base Database (DBaaS).
+
+    Returns (line_items, oci_product_label, carried) or None if the row isn't an
+    RDS line that we can price/carry here. 'carried' means OCI cost == source cost
+    (SQL Server, Aurora I/O, backups) and the line items reflect that carry.
+
+    sql_server_instances is the set of instance types known (from a full-bill scan)
+    to run SQL Server, so license / reserved-instance upfront fees that don't name
+    the engine still get carried as SQL Server."""
+    if not _is_rds_row(row):
+        return None
+
+    ut = clean_text(row.get("__usageType"))
+    ut_n = normalize(ut)
+    qty = to_number(row.get("usage_quantity"), 0)
+    src_cost = to_number(row.get("source_monthly_cost"), 0)
+    _row_inst = _expand_rds_instance_type(ut) or _expand_rds_instance_type(row.get("source_product"))
+    _is_sqlserver_inst = bool(sql_server_instances and _row_inst and _row_inst in sql_server_instances)
+
+    def carry_items(reason, label):
+        return ([{
+            "sku": "",
+            "description": "Carried over from source AWS cost",
+            "quantity": 0,
+            "unit": "",
+            "rate": 0,
+            "monthly": money(src_cost),
+            "mapping": reason,
+            "carriedOver": True,
+        }], label, True)
+
+    # 1) SQL Server: no managed OCI equivalent -> carry the source cost. Covers
+    #    both engine-named lines and license / reserved-instance upfront fees on a
+    #    db.<type> known to run SQL Server.
+    if _rds_is_sql_server(row) or _is_sqlserver_inst:
+        return carry_items(
+            "SQL Server has no managed OCI equivalent; OCI cost carried equal to the source AWS cost (would be self-managed on a VM).",
+            "OCI Base Database (SQL Server carried)",
+        )
+
+    # 2) Aurora Serverless v2 (ACU-hours) -> OCPU-hours at 1 ACU = 0.125 OCPU.
+    if "serverlessv2" in ut_n:
+        ocpu_hours = qty * ACU_TO_OCPU
+        return ([{
+            "sku": OCI_BASE_DB_OCPU_SKU,
+            "description": "OCI Base Database - OCPU (PostgreSQL)",
+            "quantity": round(ocpu_hours, 4),
+            "unit": "OCPU-hour",
+            "rate": OCI_BASE_DB_OCPU_RATE,
+            "monthly": money(ocpu_hours * OCI_BASE_DB_OCPU_RATE),
+            "mapping": f"Aurora Serverless v2: {qty:,.1f} ACU-hours x {ACU_TO_OCPU} OCPU/ACU (1 ACU ~= 0.25 vCPU) priced at ${OCI_BASE_DB_OCPU_RATE}/OCPU-hour.",
+        }], OCI_BASE_DB_PRODUCT, False)
+
+    # 3) Aurora storage I/O and backup charges: carry (OCI DBaaS bundles I/O and
+    #    includes a backup allowance, but carry conservatively to avoid understating).
+    if "storageiousage" in ut_n or "backupusage" in ut_n:
+        return carry_items(
+            "Aurora I/O / backup charge: OCI Base Database bundles I/O and includes a backup allowance; carried conservatively at the source cost.",
+            OCI_BASE_DB_PRODUCT,
+        )
+
+    # 4) Provisioned DB storage (RDS GP2/GP3, Aurora StorageUsage) -> OCI block rate.
+    if "storage" in ut_n or "gp2" in ut_n or "gp3" in ut_n:
+        return ([{
+            "sku": OCI_BASE_DB_STORAGE_SKU,
+            "description": "OCI Base Database - Storage (GB-mo)",
+            "quantity": round(qty, 4),
+            "unit": "GB-month",
+            "rate": OCI_BASE_DB_STORAGE_RATE,
+            "monthly": money(qty * OCI_BASE_DB_STORAGE_RATE),
+            "mapping": f"DB provisioned storage re-priced at the OCI block/DB storage rate (${OCI_BASE_DB_STORAGE_RATE}/GB-month).",
+        }], OCI_BASE_DB_PRODUCT, False)
+
+    # 5a) HeavyUsage:db.<type> is a reserved-instance / license hourly FEE that
+    #     accompanies the matching InstanceUsage compute line. Pricing it as OCPU
+    #     hours too would double-count the instance, so carry it at its (small)
+    #     source cost. (SQL Server HeavyUsage was already carried above.)
+    if "heavyusage" in ut_n:
+        if src_cost > 0:
+            return carry_items(
+                "RDS reserved-instance / license fee carried at the source cost (instance compute is priced on the matching InstanceUsage line; not double-counted).",
+                OCI_BASE_DB_PRODUCT,
+            )
+        return ([], OCI_BASE_DB_PRODUCT, False)
+
+    # 5b) Engine instance hours (InstanceUsage:db.<type>) -> OCPU-hours.
+    inst = _row_inst
+    if inst:
+        specs = bill_instance_compute_specs(inst)
+        if specs and specs[0] > 0:
+            ocpus = specs[0]  # already vCPU/2
+            ocpu_hours = ocpus * qty
+            return ([{
+                "sku": OCI_BASE_DB_OCPU_SKU,
+                "description": f"OCI Base Database - OCPU (PostgreSQL, {inst})",
+                "quantity": round(ocpu_hours, 4),
+                "unit": "OCPU-hour",
+                "rate": OCI_BASE_DB_OCPU_RATE,
+                "monthly": money(ocpu_hours * OCI_BASE_DB_OCPU_RATE),
+                "mapping": f"RDS {inst} ({ocpus:g} OCPU = vCPU/2) x {qty:,.0f} instance-hours priced at ${OCI_BASE_DB_OCPU_RATE}/OCPU-hour.",
+            }], OCI_BASE_DB_PRODUCT, False)
+        # Reserved-instance / $0 instance lines (qty>0 but cost 0) still resolve to
+        # an instance type but carry no cost; price as 0 OCPU so they don't fall
+        # through to the storage/catalog fallback.
+        if qty <= 0 or src_cost <= 0:
+            return ([], OCI_BASE_DB_PRODUCT, False)
+
+    # 6) Anything else RDS (Data-API requests, unrecognized) -> carry if it has a
+    #    cost, otherwise treat as included (no OCI line) so it isn't re-priced as storage.
+    if src_cost > 0:
+        return carry_items(
+            "RDS charge with no direct OCI line-item equivalent; carried at the source cost.",
+            OCI_BASE_DB_PRODUCT,
+        )
+    return ([], OCI_BASE_DB_PRODUCT, False)
+
+
+FREE_OCI_SOURCE_TERMS = [
+    "virtual private cloud", "amazonvpc", " vpc", "cloudtrail",
+    "aws support", "savings plan", "savingsplan",
+    # EBS direct API requests are API-call charges (not capacity) and free on OCI.
+    "ebs direct",
+]
+
+
+def is_free_oci_service(row):
+    """Services the migration treats as free on OCI (VPC, CloudTrail, Support,
+    Savings Plans, plus every service the reference Service Comp List flags as
+    FREE: Config, Systems Manager, Cost Explorer, GuardDuty, Security Hub,
+    CloudFormation, Certificate Manager, etc.), matching the reference."""
+    text = normalize(" ".join(clean_text(row.get(k)) for k in ["source_service", "source_product", "__usageType"]))
+    if "support" in normalize(row.get("source_service")):
+        return True
+    if any(t.strip() in text for t in FREE_OCI_SOURCE_TERMS):
+        return True
+    ref = ref_service_lookup(row.get("source_service"), row.get("source_product"), row.get("__usageType"))
+    return bool(ref and ref.get("free"))
+
+
 def enrich_cloud_bill_resource_fields(row):
+    # Detailed bills carry a usageType — use it to decide what is real compute.
+    # Only EC2 instance-run lines (BoxUsage/SpotUsage/DedicatedUsage) are OCI compute;
+    # everything else (EBS-optimized surcharges, CPU credits, RDS instance hours, etc.)
+    # must not be priced as compute. OCPU/memory come from the instance's REAL specs
+    # in the shape data repository (cloud_shape_map) — never inferred from the meter.
+    inst = extract_aws_instance_type(row)
+    specs = bill_instance_compute_specs(row.get("__usageType")) or (bill_instance_compute_specs(inst) if inst else None)
+    ut = normalize(row.get("__usageType"))
+    svc = normalize(row.get("source_service"))
+
+    if ut:
+        # Detailed bill: compute only for EC2 instance-running lines, sized from the repo.
+        is_ec2_run = "ec2" in svc and any(k in ut for k in ["boxusage", "spotusage", "dedicatedusage", "reservedhostusage", "heavyusage"])
+        if is_ec2_run and specs:
+            row["resource_ocpus"] = compact_number(specs[0])
+            row["resource_memory_gb"] = compact_number(specs[1])
+        else:
+            row["resource_ocpus"] = ""
+            row["resource_memory_gb"] = ""
+        return
+
+    # Any other cloud row that names a known instance type: use the repo's real specs.
+    if specs:
+        row["resource_ocpus"] = compact_number(specs[0])
+        row["resource_memory_gb"] = compact_number(specs[1])
+        return
+
+    # Last resort ONLY when no instance type is identifiable anywhere (e.g. a bill
+    # format with no instance column). Meter inference is the fallback, not the default.
     raw_context = " ".join(
         clean_text(row.get(key))
         for key in [
@@ -2928,13 +3595,212 @@ def clear_resource_fields_for_storage(row):
     row["resource_memory_gb"] = ""
 
 
+def _load_service_mapping():
+    path = Path(__file__).resolve().parent / "data" / "service_mapping.json"
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+SERVICE_MAPPING = _load_service_mapping()
+
+
+def _load_service_comp_list():
+    """Reference AWS->OCI->group lookup (extracted from the reference's Service
+    Comp List). Used as a fallback so recognized AWS services get an OCI target +
+    group (and a free flag) instead of being left as 'Needs review'."""
+    path = Path(__file__).resolve().parent / "data" / "service_comp_list.json"
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return {}, []
+    by_norm = {}
+    for e in data.get("entries", []):
+        key = e.get("awsNorm")
+        if key and key not in by_norm:
+            by_norm[key] = e
+    keys_by_len = sorted(by_norm.keys(), key=len, reverse=True)
+    return by_norm, keys_by_len
+
+
+SERVICE_COMP_BY_NORM, SERVICE_COMP_KEYS = _load_service_comp_list()
+
+
+def ref_service_lookup(*texts):
+    """Match AWS source text against the reference Service Comp List.
+    Exact normalized match first, then longest known service name that is a
+    substring (also tolerant of space-removed concatenated bill names like
+    'AmazonRDS'). Returns the entry dict or None."""
+    norm = normalize(" ".join(clean_text(t) for t in texts if t))
+    if not norm:
+        return None
+    hit = SERVICE_COMP_BY_NORM.get(norm)
+    if hit:
+        return hit
+    nospace = norm.replace(" ", "")
+    for key in SERVICE_COMP_KEYS:
+        if len(key) < 4:
+            continue
+        if key in norm or key.replace(" ", "") in nospace:
+            return SERVICE_COMP_BY_NORM[key]
+    return None
+
+
+def _load_oci_service_prices():
+    path = Path(__file__).resolve().parent / "data" / "oci_service_prices.json"
+    try:
+        return json.loads(path.read_text()).get("services", {})
+    except Exception:
+        return {}
+
+
+OCI_SERVICE_PRICES = _load_oci_service_prices()
+
+
+# OCI Outbound Data Transfer: each origin region group gets its own 10 TB/month free
+# allowance, then a per-group over-10TB rate (from the OCI price list).
+DT_REGION_RATES = {
+    "na_eu_uk": {"rate": 0.0085, "label": "North America / Europe / UK"},
+    "apac_sa": {"rate": 0.025, "label": "APAC / Japan / South America"},
+    "me_africa": {"rate": 0.05, "label": "Middle East / Africa"},
+}
+DT_FREE_GB_PER_REGION = 10000.0
+
+
+def dt_region_group(region, usagetype=""):
+    """Classify a source region (or AWS usageType prefix like 'APS2-') into one of the
+    three OCI outbound-data-transfer pricing groups."""
+    code = normalize(region)
+    if not code:
+        match = re.match(r"([a-z]{2})", normalize(usagetype))
+        code = match.group(1) if match else ""
+    head = code[:2]
+    if head in ("ap", "sa") or "japan" in code:
+        return "apac_sa"
+    if head in ("me", "af"):
+        return "me_africa"
+    return "na_eu_uk"  # us, ca, eu, uk and default
+
+
+def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, region="", usagetype=""):
+    """Re-price a source-cloud usage quantity on the equivalent OCI service
+    (same quantity x OCI rate). Returns a list of priced line items, or [].
+
+    transfer_pools is a dict {region_group: [remaining_free_gb]} for OCI Outbound
+    Data Transfer, giving each origin region its own 10 TB/month free allowance and
+    per-region over-10TB rate."""
+    base = clean_text(oci_product).split(" (approximate")[0].strip()
+    svc = OCI_SERVICE_PRICES.get(base)
+    qty = to_number(usage_quantity, 0)
+    if not svc or qty <= 0 or not svc.get("rate"):
+        return []
+    chargeable = qty
+    rate = svc["rate"]
+    free_note = ""
+    if svc.get("basis") == "transfer" and transfer_pools is not None:
+        group = dt_region_group(region, usagetype)
+        rate = DT_REGION_RATES[group]["rate"]
+        pool = transfer_pools.setdefault(group, [DT_FREE_GB_PER_REGION])
+        free_here = min(pool[0], qty)
+        pool[0] -= free_here
+        chargeable = qty - free_here
+        free_note = f" {DT_REGION_RATES[group]['label']}: first 10 TB/mo free" + (f" ({free_here:,.0f} GB free here)" if free_here > 0 else "") + f"; over-10TB ${rate}/GB."
+    items = [{
+        "sku": svc.get("sku", ""),
+        "description": f"{base} ({svc.get('unit', '')})",
+        "quantity": round(qty, 4),
+        "unit": svc.get("unit", ""),
+        "rate": rate,
+        "monthly": money(chargeable * rate),
+        "mapping": f"Source usage re-priced on {base} at the OCI rate (same quantity x ${rate}/{svc.get('unit', 'unit')}).{free_note}",
+        "ociServiceUsage": True,
+    }]
+    # Block Volume also carries performance units (10 per GB) like the BOM.
+    if svc.get("perfUnitsRate"):
+        perf_qty = qty * BLOCK_PERFORMANCE_UNITS_PER_GB
+        items.append({
+            "sku": svc.get("perfUnitsSku", ""),
+            "description": f"{base} - Performance Units",
+            "quantity": round(perf_qty, 4),
+            "unit": "Performance Units per month",
+            "rate": svc["perfUnitsRate"],
+            "monthly": money(perf_qty * svc["perfUnitsRate"]),
+            "mapping": "Block Volume performance units (10 per GB) at the OCI rate.",
+            "ociServiceUsage": True,
+        })
+    return items
+
+
+def map_service_comparison(provider, *texts):
+    """Map a source-cloud service to its OCI equivalent using Oracle's Service
+    Comparison guides. provider is 'aws'/'azure'; texts are the bill's service/
+    product strings. Returns {'category', 'product'} or None."""
+    prov = normalize_provider_hint(provider)
+    entries = SERVICE_MAPPING.get(prov)
+    if not entries:
+        return None
+    haystack = normalize(" ".join(clean_text(t) for t in texts if t))
+    if not haystack:
+        return None
+    for entry in entries:
+        for kw in entry.get("keywords", []):
+            if normalize(kw) in haystack:
+                return {
+                    "category": entry.get("category", ""),
+                    "product": entry.get("ociProduct", ""),
+                    "note": entry.get("note", ""),
+                }
+    return None
+
+
 def seed_cloud_bill_mapping(row, fields, rate_card):
+    # Oracle Service Comparison guide is authoritative for OCI service identity, so it
+    # sets the displayed OCI Service/Product even when a priceable catalog item also
+    # matches (e.g. EFS -> File Storage, Redshift -> Autonomous Lakehouse). Pricing
+    # line items are computed separately, so this only relabels the mapping.
+    svc = map_service_comparison(
+        row.get("source_provider"),
+        row.get("source_service"),
+        row.get("source_product"),
+        row.get("__usageType"),
+    )
+
+    # Approximate maps carry a disclaimer (e.g. AWS FSx, AWS WorkSpaces).
+    svc_note = (svc or {}).get("note")
+    svc_product = svc.get("product") if svc else ""
+    if svc_product and svc_note:
+        svc_product = f"{svc_product} (approximate match)"
+    svc_conf = ("Service guide — approximate" if svc_note else "Service guide") if svc else ""
+
+    # Reference Service Comp List as a higher-priority target than the generic
+    # catalog fallback (so e.g. RDS -> DBaaS instead of "Block Volume Storage").
+    _ref = ref_service_lookup(row.get("source_service"), row.get("source_product"), row.get("__usageType"))
+    ref_product = ((_ref.get("ociEquivalent") or "").lstrip("*").strip() if (_ref and not _ref.get("free")) else "")
+    ref_group = (_ref.get("group", "") if (_ref and not _ref.get("free")) else "")
+    # For non-infra services (Database, Networking, Security, DevOps, etc.) the
+    # reference target wins over a generic storage/compute catalog guess so e.g.
+    # RDS -> DBaaS, not "Block Volume Storage". Storage/Compute ref matches stay
+    # low priority so working storage/compute pricing labels aren't disturbed.
+    noninfra_product = ref_product if (ref_product and ref_group not in ("Storage", "Compute")) else ""
+
     item, confidence = classify_full_service_item(row, fields)
     if item:
-        row["oci_service_category"] = row.get("oci_service_category") or item.get("category", "")
-        row["oci_product"] = row.get("oci_product") or item.get("description", "")
+        row["oci_service_category"] = (svc["category"] if svc else "") or (ref_group if noninfra_product else "") or row.get("oci_service_category") or ref_group or item.get("category", "")
+        row["oci_product"] = svc_product or noninfra_product or row.get("oci_product") or ref_product or item.get("description", "")
+        if svc_note:
+            row["mapping_note"] = svc_note
         if not clean_text(row.get("mapping_confidence")):
-            row["mapping_confidence"] = f"{round(confidence * 100)}%"
+            row["mapping_confidence"] = svc_conf if svc else f"{round(confidence * 100)}%"
+        clear_resource_fields_for_storage(row)
+        return
+
+    if svc and svc_product:
+        row["oci_service_category"] = svc["category"]
+        row["oci_product"] = svc_product
+        if svc_note:
+            row["mapping_note"] = svc_note
+        row["mapping_confidence"] = row.get("mapping_confidence") or svc_conf
         clear_resource_fields_for_storage(row)
         return
 
@@ -2945,6 +3811,18 @@ def seed_cloud_bill_mapping(row, fields, rate_card):
         row["mapping_confidence"] = row.get("mapping_confidence") or confidence_label(target["confidence"], target.get("reviewRequired", True))
         clear_resource_fields_for_storage(row)
         return
+
+    # Fallback: the reference Service Comp List recognizes far more AWS services
+    # than the keyword maps above. If a recognized service still has no OCI target,
+    # use the reference's OCI equivalent + product group so it stops showing as
+    # "Needs review" (pricing for non-compute/non-storage stays as-is).
+    if not clean_text(row.get("oci_product")):
+        ref = ref_service_lookup(row.get("source_service"), row.get("source_product"), row.get("__usageType"))
+        if ref and not ref.get("free"):
+            row["oci_service_category"] = row.get("oci_service_category") or ref.get("group", "")
+            row["oci_product"] = (ref.get("ociEquivalent") or "").lstrip("*").strip() or row.get("oci_product")
+            row["mapping_confidence"] = row.get("mapping_confidence") or "Service comparison"
+            return
 
     row["mapping_confidence"] = row.get("mapping_confidence") or "Needs review"
 
@@ -3572,6 +4450,103 @@ def parse_pdf_cloud_bill(path, provider_hint=PROVIDER_AUTO):
     return call_llm_cloud_bill_mapping(parsed)
 
 
+_AWS_INSTANCE_RE = re.compile(r"\b([a-z][0-9][a-z\-]*\.(?:nano|micro|small|medium|metal|[0-9]*xlarge|large))\b")
+
+
+def extract_aws_instance_type(row):
+    """Pull an EC2 instance type (e.g. 't2.medium', 'm5.xlarge') from a bill row's
+    SKU/meter/description text, so we can look up its specs via the Price List API."""
+    for key in ("source_product", "source_service"):
+        text = clean_text(row.get(key)).lower()
+        match = _AWS_INSTANCE_RE.search(text)
+        if match:
+            return match.group(1)
+    blob = " ".join(clean_text(v) for v in row.values() if isinstance(v, str)).lower()
+    match = _AWS_INSTANCE_RE.search(blob)
+    return match.group(1) if match else None
+
+
+def looks_like_inventory(raw, mappings=None, max_scan=25):
+    """True when a 'cloud bill' upload actually looks like a server inventory:
+    short header-like cells mention CPU/RAM/instance-type but there is no cost
+    column. Scans short cells only so JSON tag blobs (e.g. 'costCenter=...') and
+    descriptions don't trip the cost check, and works even if the header row was
+    mis-detected."""
+    inv_signals = ["vcpu", "ocpu", "cpu", "cores", "memory", "ram", "gib",
+                   "instancetype", "instance type"]
+    cost_signals = ["cost", "charge", "amount", "price", "unblended", "blended",
+                    "lineitem", "line item", "meter", "billed", "spend", "invoice"]
+    inv_hits = set()
+    cost_hit = False
+    try:
+        n = min(len(raw.index), max_scan)
+        for i in range(n):
+            for cell in raw.iloc[i].tolist():
+                t = normalize(cell)
+                if not t or len(t) > 40:  # skip long cells (JSON tags, descriptions)
+                    continue
+                for sig in inv_signals:
+                    if sig in t:
+                        inv_hits.add(sig)
+                if any(sig in t for sig in cost_signals):
+                    cost_hit = True
+    except Exception:
+        return False
+    # Note: a column mapping to cost isn't trusted here — a mis-detected header row
+    # can fabricate one. The short-cell cost-signal scan is the reliable signal.
+    return len(inv_hits) >= 2 and not cost_hit
+
+
+def enrich_aws_skus_from_api(rows, max_lookups=400):
+    """Fill the AWS product SKU for bill lines via the Price List API, keyed by
+    ServiceCode (ProductCode) + usageType. De-duplicated and cached, so only distinct
+    combinations hit the API. No-op when the API isn't available."""
+    if not rows or not aws_pricing.available():
+        return
+    combos = {}
+    for row in rows:
+        svc = clean_text(row.get("source_service"))
+        ut = clean_text(row.get("__usageType"))
+        if svc and ut:
+            combos.setdefault((svc, ut), None)
+    looked_up = 0
+    for combo in list(combos):
+        if looked_up >= max_lookups:
+            break
+        combos[combo] = aws_pricing.service_sku(combo[0], combo[1])
+        looked_up += 1
+    for row in rows:
+        info = combos.get((clean_text(row.get("source_service")), clean_text(row.get("__usageType"))))
+        if not info or not info.get("sku"):
+            continue
+        row["aws_sku"] = info["sku"]
+        current = clean_text(row.get("source_product"))
+        if not current or current == clean_text(row.get("__usageType")):
+            row["source_product"] = info["sku"]
+        elif info["sku"] not in current:
+            row["source_product"] = f"{info['sku']} · {current}"
+
+
+def filter_bill_record_types(rows):
+    """AWS detailed billing reports stack record-type levels (LineItem, PayerLineItem,
+    AccountTotal, InvoiceTotal, StatementTotal, ...) that each re-total the whole bill.
+    Summing all of them multiplies the cost. Keep only the most granular line-item
+    level and drop rollup/total rows. No-op when there's no RecordType column."""
+    types = [clean_text(r.get("__recordType")) for r in rows if clean_text(r.get("__recordType"))]
+    if not types:
+        return rows
+    # Drop any rollup/total rows outright.
+    rollup = ("total", "rounding", "invoice", "statement", "account")
+    kept = [r for r in rows if not any(k in normalize(r.get("__recordType")) for k in rollup)]
+    # Among the remaining line-item levels, prefer the single most granular (most rows),
+    # e.g. LinkedLineItem over PayerLineItem when both are present.
+    remaining = collections.Counter(normalize(r.get("__recordType")) for r in kept if clean_text(r.get("__recordType")))
+    if len(remaining) > 1:
+        best = max(remaining, key=lambda k: remaining[k])
+        kept = [r for r in kept if not clean_text(r.get("__recordType")) or normalize(r.get("__recordType")) == best]
+    return kept or rows
+
+
 def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
     suffix = Path(path).suffix.lower()
     if suffix == ".pdf":
@@ -3612,6 +4587,11 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
             field["sourceHeader"] = mapping["sourceHeader"]
 
     tag_columns = detect_tag_columns(headers)
+    # Raw usageType column (used to resolve AWS SKUs via the Price List API).
+    usagetype_idx = next((i for i, h in enumerate(headers) if normalize(h).replace(" ", "") == "usagetype"), None)
+    # RecordType column (AWS detailed billing reports stack rollup levels that each
+    # re-total the whole bill — we keep only the most granular line-item level).
+    recordtype_idx = next((i for i, h in enumerate(headers) if normalize(h).replace(" ", "") == "recordtype"), None)
     rows = []
     rate_card = build_rate_card(DEFAULT_SHAPE_KEY, True)
     provider_label = detected_provider if detected_provider != "Unknown" else ""
@@ -3631,6 +4611,10 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
         row["source_provider"] = row.get("source_provider") or provider_label
         row["source_currency"] = row.get("source_currency") or "USD"
         row["source_tags"] = summarize_source_tags(values, tag_columns, row.get("source_tags"))
+        if usagetype_idx is not None and usagetype_idx < len(values):
+            row["__usageType"] = clean_text(values[usagetype_idx])
+        if recordtype_idx is not None and recordtype_idx < len(values):
+            row["__recordType"] = clean_text(values[recordtype_idx])
         enrich_cloud_bill_resource_fields(row)
         seed_cloud_bill_mapping(row, fields, rate_card)
         if cloud_row_has_signal(row):
@@ -3638,6 +4622,9 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
 
     if not rows:
         raise ValueError("The cloud bill parser did not find usable bill line rows.")
+
+    rows = filter_bill_record_types(rows)
+    enrich_aws_skus_from_api(rows)
 
     mapped_count = sum(1 for row in rows if row_mapping_is_confident(row))
     currency_values = [clean_text(row.get("source_currency")) for row in rows if clean_text(row.get("source_currency"))]
@@ -3661,6 +4648,7 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
             "sourceCurrency": source_currency,
             "mappedCount": mapped_count,
             "unmappedCount": len(rows) - mapped_count,
+            "inventorySuspected": looks_like_inventory(raw, mappings),
             "headerRows": [header_row + 1],
             "dataStartRow": data_start_idx + 1,
             "rowCount": len(rows),
@@ -3744,6 +4732,27 @@ def field_text(fields, key):
     return normalize(" ".join(clean_text(field.get(item)) for item in ["label", "sourceHeader", "description"]))
 
 
+GIB_TO_GB = 1.073741824
+
+
+def field_is_gib(fields, key):
+    """True when a storage column is expressed in GiB (binary) rather than GB."""
+    if not key:
+        return False
+    text = field_text(fields, key)
+    return "gib" in text or "gibibyte" in text
+
+
+def storage_gb_value(fields, key, value):
+    """Return storage in GB. If the column is GiB, convert (x1.073741824) and floor;
+    if it is already GB, use the given value as-is."""
+    if not value:
+        return 0.0
+    if field_is_gib(fields, key):
+        return float(math.floor(value * GIB_TO_GB))
+    return value
+
+
 def storage_field_is_row_total(fields, key):
     text = field_text(fields, key)
     if not key or not text:
@@ -3757,6 +4766,25 @@ def ocpus_for_review_value(fields, key, value):
     if not key or not value:
         return 0.0
     return value if field_is_ocpu(fields, key) else value / 2
+
+
+# Only the AmpereOne A1/A2 shapes can be priced in 0.5-OCPU increments.
+FRACTIONAL_OCPU_SHAPES = {"a1-standard", "a2-standard"}
+
+
+def round_ocpu_for_shape(ocpu, shape_key):
+    """OCI OCPU granularity rules (per VM):
+      - A1 / A2 (Ampere) allow half OCPUs -> snap to the nearest 0.5.
+      - Every other shape needs whole OCPUs: anything below 1 rounds UP to 1,
+        and 1 or more rounds DOWN to the whole number (e.g. 1.5 -> 1)."""
+    value = float(ocpu or 0)
+    if value <= 0:
+        return 0.0
+    if shape_key in FRACTIONAL_OCPU_SHAPES:
+        return round(value * 2) / 2
+    if value < 1:
+        return 1.0
+    return float(math.floor(value))
 
 
 def text_for(row, fields, contains, section=None):
@@ -4203,6 +5231,17 @@ def full_service_line_items(row, fields, rate_card=None):
         }, [note]
 
     quantity = quantity_for_full_service_item(item, quantity_text, unit_text, context, row)
+    # On detailed bills, storage services have many non-capacity meters (requests,
+    # retrieval, data transfer, select, notifications). Only the storage-capacity
+    # meter should be priced as GB-month, otherwise storage is wildly over-counted.
+    ut = normalize(row.get("__usageType"))
+    if ut and "month" in normalize(item.get("unit")):
+        non_capacity = ["request", "retrieval", "datatransfer", "data transfer", "select",
+                        "notification", "earlydelete", "early delete", "lifecycle", "tagging",
+                        "monitor", "inventory", "replication", "apicall", "api call"]
+        is_capacity = any(k in ut for k in ["timedstorage", "bytehrs", "storage", "gb-mo", "gbmo", "volumeusage", "snapshotusage"])
+        if not is_capacity and any(k in ut for k in non_capacity):
+            quantity = 0
     if quantity <= 0:
         note = f"{item['description']} was inferred, but no usable usage quantity was present for OCI pricing."
         return [], {
@@ -4257,12 +5296,20 @@ def full_service_line_items(row, fields, rate_card=None):
     return [line_item], mapping, []
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False):
-    def _rightsize_mem(ocpu_value, mem_value):
-        # Cap memory at the OCI target ratio of 8 GB/OCPU (never increase it). OCPUs unchanged.
-        if not rightsize or not ocpu_value or not mem_value:
-            return mem_value
-        return min(mem_value, math.ceil(ocpu_value * RIGHTSIZE_MEM_PER_OCPU))
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None):
+    eff_hours = hours_per_month if (hours_per_month and hours_per_month > 0) else HOURS_PER_MONTH
+    def _apply_rightsize(ocpu_value, mem_value, plan):
+        # Generation-gap rightsize: reduce OCPUs and RAM by a per-generation percentage
+        # (set by rightsize_plan), rounding down. Never zero out a non-empty value.
+        if not rightsize or not plan:
+            return ocpu_value, mem_value
+        ocpu_rate, ram_rate, gens = plan
+        o, m = ocpu_value, mem_value
+        if ocpu_value:
+            o = math.floor(ocpu_value * max(0.0, 1 - ocpu_rate * gens)) or 1
+        if mem_value:
+            m = math.floor(mem_value * max(0.0, 1 - ram_rate * gens)) or 1
+        return o, m
     cloud_bill_mode = intake_mode == INTAKE_MODE_CLOUD_BILL
     service_catalog_enabled = bool(full_service_beta or cloud_bill_mode)
     selected_shape = shape_payload(shape_key, service_catalog_enabled)
@@ -4305,7 +5352,16 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "db_total_allocated": find_key(fields, ["total allocated storage"], "Database Details"),
         "db_total_storage": find_key(fields, ["total storage"], "Database Details"),
         "db_size": find_key(fields, ["database size"], "Database Details"),
+        "hours": find_key_any(
+            fields,
+            [["hours per month"], ["hours/month"], ["hours month"], ["monthly hours"], ["hours running"], ["running hours"], ["usage hours"], ["uptime hours"], ["hours"]],
+        ),
+        "region": find_key_any(
+            fields,
+            [["aws region"], ["region"], ["location"], ["datacenter"], ["data center"], ["availability domain"], ["availability zone"]],
+        ),
     }
+    data_has = {"region": False, "environment": False, "hours": bool(keys.get("hours"))}
 
     priced_rows = []
     totals = {
@@ -4313,6 +5369,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "memoryGb": 0.0,
         "blockStorageGb": 0.0,
         "fileStorageGb": 0.0,
+        "cloudStorageGb": 0.0,
         "fullServiceMonthly": 0.0,
         "mappedServiceRows": 0,
         "unpricedServiceRows": 0,
@@ -4357,6 +5414,14 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 }
             )
 
+    # OCI Outbound Data Transfer: each origin region group gets its own 10 TB/month
+    # free allowance, consumed across rows.
+    oci_transfer_pools = {}
+
+    # RDS instance types known to run SQL Server (scanned once) so license /
+    # reserved-instance upfront fees that don't name the engine are carried too.
+    rds_sql_server_instances = collect_sql_server_rds_instances(rows) if cloud_bill_mode else set()
+
     for row_index, row in enumerate(rows, start=1):
         if row.get("__approved") is False:
             continue
@@ -4371,50 +5436,90 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             app_servers = 1.0
         if not cloud_bill_mode and not keys["db_servers"] and (db_cpu or db_memory):
             db_servers = 1.0
-        app_local_storage = 0.0 if cloud_bill_mode else value_for(row, keys["app_local_storage"])
-        app_shared_storage = 0.0 if cloud_bill_mode else value_for(row, keys["app_shared_storage"])
+        # Storage: convert GiB columns to GB (floored); GB columns are used as-is.
+        app_local_storage = 0.0 if cloud_bill_mode else storage_gb_value(fields, keys["app_local_storage"], value_for(row, keys["app_local_storage"]))
+        app_shared_storage = 0.0 if cloud_bill_mode else storage_gb_value(fields, keys["app_shared_storage"], value_for(row, keys["app_shared_storage"]))
 
         storage_key = keys["db_total_allocated"] or keys["db_total_storage"] or keys["db_size"]
-        db_storage = 0.0 if cloud_bill_mode else value_for(row, storage_key)
+        db_storage = 0.0 if cloud_bill_mode else storage_gb_value(fields, storage_key, value_for(row, storage_key))
+
+        # Source instance lookup (used for Best Match mapping, rightsize gen-gap, and
+        # the source-cloud estimate). Computed once per row.
+        src_rec = lookup_cloud_shape(row_context(row, fields))
+
+        # Best Match (auto) maps each row to the best shape of its detected CPU vendor;
+        # otherwise every row uses the selected shape. Determined up front so OCPU
+        # rounding can respect the shape's granularity rules.
+        row_shape = selected_shape
+        if auto:
+            _v = (src_rec or {}).get("ociVendor")
+            if _v in BEST_SHAPE_BY_VENDOR:
+                if auto_tier == "top":
+                    # Top of the line: newest OCI shape for the vendor (E6 Ax / X12 Ax / A4 Ax).
+                    row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]]
+                else:
+                    # Best match: equivalent-generation OCI shape for the source instance.
+                    _prov = (src_rec or {}).get("provider")
+                    _gen = _instance_generation(_prov, (src_rec or {}).get("instance"))
+                    _key = equivalent_gen_shape_key(_prov, _v, _gen)
+                    row_shape = SHAPE_LOOKUP.get(_key, SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]])
+        # A per-row override (set from the editable results table) wins over everything.
+        _override = (shape_overrides or {}).get(str(row.get("__id")))
+        if _override and _override in SHAPE_LOOKUP:
+            row_shape = SHAPE_LOOKUP[_override]
+        row_shape_key = row_shape.get("key")
+
+        # Rightsize plan: generation-gap OCPU/RAM reduction for this row's shape.
+        rs_plan = rightsize_plan(row_shape_key, src_rec) if rightsize else None
 
         if cloud_bill_mode:
-            app_ocpus = value_for(row, "resource_ocpus")
+            raw_ocpu = value_for(row, "resource_ocpus")
+            raw_mem = value_for(row, "resource_memory_gb")
+            # Bills rarely carry vCPU/RAM. If the row names an EC2 instance type, fill
+            # the missing sizing from the AWS Price List API so it can map/price on page 4.
+            if (not raw_ocpu or not raw_mem) and aws_pricing.available():
+                inst_type = extract_aws_instance_type(row)
+                if inst_type:
+                    specs = aws_pricing.instance_specs(inst_type, clean_text(row.get("source_region")))
+                    if specs:
+                        if not raw_ocpu and specs.get("vcpu"):
+                            raw_ocpu = specs["vcpu"] / 2  # 2 vCPU = 1 OCPU
+                        if not raw_mem and specs.get("memoryGb"):
+                            raw_mem = specs["memoryGb"]
+                        row["_apiInstanceType"] = inst_type
+            app_vm_ocpu = round_ocpu_for_shape(raw_ocpu, row_shape_key)
+            app_vm_mem = math.floor(raw_mem) if raw_mem else 0.0
+            original_ocpus = app_vm_ocpu
+            original_memory_gb = app_vm_mem
+            app_vm_ocpu, app_vm_mem = _apply_rightsize(app_vm_ocpu, app_vm_mem, rs_plan)
             db_ocpus = 0.0
-            ocpus = app_ocpus
-            memory_gb = value_for(row, "resource_memory_gb")
-        elif bom_match:
-            # BOM-script mode: CPU column is treated as OCPUs directly (no vCPU/2),
-            # and CPU/RAM are floored so fractions are never priced (matches the script).
-            app_cpu_units = math.floor(app_cpu) if app_cpu else 0.0
-            db_cpu_units = math.floor(db_cpu) if db_cpu else 0.0
-            app_mem_units = math.floor(app_memory) if app_memory else 0.0
-            db_mem_units = math.floor(db_memory) if db_memory else 0.0
-            app_ocpus = app_servers * app_cpu_units if app_servers and app_cpu_units else 0.0
-            db_ocpus = db_servers * db_cpu_units if db_servers and db_cpu_units else 0.0
-            ocpus = app_ocpus + db_ocpus
-            memory_gb = (app_servers * app_mem_units) + (db_servers * db_mem_units)
+            ocpus = app_vm_ocpu
+            memory_gb = app_vm_mem
         else:
-            app_ocpus = app_servers * ocpus_for_review_value(fields, keys["app_cpu"], app_cpu) if app_servers and app_cpu else 0.0
-            db_ocpus = db_servers * ocpus_for_review_value(fields, keys["db_cpu"], db_cpu) if db_servers and db_cpu else 0.0
+            # OCPU: 2 vCPU = 1 OCPU, rounded per-VM; RAM floored like the BOM script.
+            # Rightsize (gen-gap) reduction is then applied per VM before aggregating.
+            app_vm_ocpu = round_ocpu_for_shape(ocpus_for_review_value(fields, keys["app_cpu"], app_cpu), row_shape_key) if app_cpu else 0.0
+            db_vm_ocpu = round_ocpu_for_shape(ocpus_for_review_value(fields, keys["db_cpu"], db_cpu), row_shape_key) if db_cpu else 0.0
+            app_vm_mem = math.floor(app_memory) if app_memory else 0.0
+            db_vm_mem = math.floor(db_memory) if db_memory else 0.0
+            original_ocpus = (app_servers * app_vm_ocpu if app_servers else 0.0) + (db_servers * db_vm_ocpu if db_servers else 0.0)
+            original_memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
+            app_vm_ocpu, app_vm_mem = _apply_rightsize(app_vm_ocpu, app_vm_mem, rs_plan)
+            db_vm_ocpu, db_vm_mem = _apply_rightsize(db_vm_ocpu, db_vm_mem, rs_plan)
+            app_ocpus = app_servers * app_vm_ocpu if app_servers else 0.0
+            db_ocpus = db_servers * db_vm_ocpu if db_servers else 0.0
             ocpus = app_ocpus + db_ocpus
-            memory_gb = (app_servers * app_memory) + (db_servers * db_memory)
+            memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
 
-        # Rightsize and Cut Costs: cap memory at 8 GB/OCPU (OCPUs unchanged) when enabled.
-        original_memory_gb = memory_gb
-        memory_gb = _rightsize_mem(ocpus, memory_gb)
+        # Per-server running hours: use an "hours running"/"hours per month" column if present,
+        # otherwise the global hours setting (default 730).
+        row_hours = value_for(row, keys["hours"]) if keys.get("hours") else 0
+        row_hours = row_hours if row_hours and row_hours > 0 else eff_hours
 
         local_storage_multiplier = 1.0 if storage_field_is_row_total(fields, keys["app_local_storage"]) else app_servers
         shared_storage_multiplier = 1.0 if storage_field_is_row_total(fields, keys["app_shared_storage"]) else app_servers
         block_storage_gb = (local_storage_multiplier * app_local_storage) + db_storage
         file_storage_gb = shared_storage_multiplier * app_shared_storage
-
-        # Auto mode: map each row to the best shape of its detected CPU vendor.
-        row_shape = selected_shape
-        if auto:
-            _srec = lookup_cloud_shape(row_context(row, fields))
-            _v = (_srec or {}).get("ociVendor")
-            if _v in BEST_SHAPE_BY_VENDOR:
-                row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]]
 
         line_items = []
         if not cloud_bill_mode:
@@ -4422,14 +5527,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 line_items,
                 ocpus,
                 memory_gb,
-                "Spreadsheet CPU values are assumed to be vCPUs, shown in review as OCPUs using 2 vCPUs = 1 OCPU, then multiplied by 730 monthly hours.",
+                f"Spreadsheet CPU values are assumed to be vCPUs, shown in review as OCPUs using 2 vCPUs = 1 OCPU, then multiplied by {row_hours:g} monthly hours.",
+                row_hours,
                 shape=row_shape,
             )
             # Windows OS license: OS recognition scans the row; Windows rows are licensed per OCPU-hour
             # (1 license per OCPU = 1 per 2 vCPUs). Skipped when Windows pricing is toggled off.
             if ocpus and not hide_windows_pricing and row_operating_system(row) == "windows":
                 win_rc = rate(WINDOWS_LICENSE_SKU, rate_card)
-                win_qty = ocpus * HOURS_PER_MONTH
+                win_qty = ocpus * row_hours
                 line_items.append(
                     {
                         "sku": win_rc["sku"],
@@ -4484,7 +5590,114 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         full_service_mapping = None
         full_service_notes = []
-        if service_catalog_enabled:
+        row_free_on_oci = cloud_bill_mode and is_free_oci_service(row)
+        if row_free_on_oci:
+            # Free on OCI (VPC, CloudTrail, Support, Savings Plans) — $0 OCI cost, but the
+            # AWS spend still counts toward the source total.
+            row["oci_product"] = clean_text(row.get("oci_product")) or "Included (free on OCI)"
+            row["mapping_confidence"] = row.get("mapping_confidence") or "Included (free)"
+            sc = to_number(row.get("source_monthly_cost"), 0)
+            totals["sourceMonthlyCost"] += sc
+            totals["mappedSourceMonthlyCost"] += sc
+            totals["mappedServiceRows"] += 1
+
+        # AWS RDS / Aurora -> OCI Base Database (DBaaS). Priced here (before the
+        # generic storage/catalog fallback) so RDS rows are priced as a database
+        # service and never relabeled/priced as "Block Volume Storage".
+        rds_handled = False
+        if cloud_bill_mode and not row_free_on_oci:
+            rds_result = price_rds_row(row, rds_sql_server_instances)
+            if rds_result is not None:
+                rds_items, rds_label, rds_carried = rds_result
+                line_items.extend(rds_items)
+                row["oci_product"] = rds_label
+                row["oci_service_category"] = "Database"
+                _rds_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": OCI_BASE_DB_OCPU_SKU,
+                    "ociProduct": rds_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_rds_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (rds_items[0].get("unit") if rds_items else ""),
+                    "confidence": 0.85,
+                    "reviewRequired": False,
+                }
+                if rds_carried:
+                    full_service_notes.append("OCI cost set equal to the source AWS cost (no managed OCI equivalent / bundled charge).")
+                totals["sourceMonthlyCost"] += _rds_src
+                totals["mappedSourceMonthlyCost"] += _rds_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in rds_items)
+                rds_handled = True
+
+        # Authoritative storage pricing: a storage service maps to ONE OCI storage
+        # product at its real rate (S3->Object Storage, EFS/FSx->File Storage,
+        # EBS->Block Volume), priced on the actual storage-capacity quantity from the
+        # bill — not scattered across catalog items per line.
+        storage_handled = rds_handled
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled:
+            ut2 = normalize(row.get("__usageType"))
+            base = clean_text(row.get("oci_product")).split(" (approx")[0].strip()
+            # EBS volumes/snapshots bill under EC2 — route them to Block Volume.
+            if base not in OCI_SERVICE_PRICES and any(k in ut2 for k in ["volumeusage", "ebs:", "snapshotusage", "ebsoptimized"]):
+                if "ebsoptimized" not in ut2:  # EBS-optimized throughput is bundled/free on OCI
+                    base = "OCI Block Volumes"
+                    row["oci_product"] = base
+                    row["oci_service_category"] = "Storage"
+            svc_price = OCI_SERVICE_PRICES.get(base)
+            if svc_price and svc_price.get("basis") == "storage":
+                is_capacity = (
+                    any(k in ut2 for k in ["timedstorage", "bytehrs", "volumeusage", "snapshotusage", "storage"])
+                    or normalize(row.get("usage_unit")) in ("gb", "gib", "gbmonth", "gbmo", "gigabyte", "gigabytemonth")
+                    or not ut2
+                )
+                if is_capacity:
+                    line_items.extend(oci_service_usage_items(base, row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType")))
+                sc = to_number(row.get("source_monthly_cost"), 0)
+                # Label every line of this service with its single OCI product so the
+                # results page always shows e.g. S3 -> OCI Object Storage.
+                # Surface the billed usage so the Usage column isn't blank for
+                # storage/transfer lines (these aren't block/file GB on specs).
+                _usage_qty = to_number(row.get("usage_quantity"), 0)
+                if _usage_qty <= 0:
+                    _usage_qty = sum(
+                        to_number(li.get("quantity"), 0)
+                        for li in line_items
+                        if "performance" not in str(li.get("unit", "")).lower()
+                    )
+                _usage_unit = clean_text(row.get("usage_unit")) or svc_price.get("unit", "")
+                full_service_mapping = {
+                    "sku": svc_price.get("sku", ""),
+                    "ociProduct": base,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(sc),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(_usage_qty, 4) if _usage_qty else 0,
+                    "unit": _usage_unit,
+                    "confidence": 0.9,
+                    "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += sc
+                totals["mappedSourceMonthlyCost"] += sc
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in line_items)
+                # Surface storage capacity (GB) for the Storage KPI, which is defined
+                # as Block Volume + File Storage only (to match the label and the
+                # on-prem KPI). Object/Archive storage is excluded, and request/API
+                # charges (non-capacity) are excluded too.
+                _base_l = base.lower()
+                if (is_capacity and svc_price.get("unit", "").lower().startswith(("gb", "gib"))
+                        and ("block volume" in _base_l or "file storage" in _base_l)):
+                    totals["cloudStorageGb"] += _usage_qty
+                storage_handled = True
+
+        if service_catalog_enabled and not row_free_on_oci and not storage_handled:
             service_items, full_service_mapping, full_service_notes = full_service_line_items(row, fields, rate_card)
             line_items.extend(service_items)
             fallback_start = len(line_items)
@@ -4501,6 +5714,10 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     usage_hours,
                     shape=row_shape,
                 )
+            # Re-price the source usage on the mapped OCI service (same quantity x OCI
+            # rate) when nothing else priced this row (e.g. S3 GB -> OCI Object Storage GB).
+            if cloud_bill_mode and sum(li.get("monthly", 0) for li in line_items) == 0:
+                line_items.extend(oci_service_usage_items(row.get("oci_product"), row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType")))
             fallback_items = line_items[fallback_start:]
             source_cost_value = full_service_mapping.get("sourceMonthlyCost", 0) if full_service_mapping else 0
             totals["sourceMonthlyCost"] += source_cost_value
@@ -4540,6 +5757,50 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         monthly = money(sum(item["monthly"] for item in line_items))
         annual = money(monthly * 12)
+        # Flag mappings where the OCI estimate runs >10% above the source-cloud cost
+        # (e.g. FSx -> File Storage) so they can be reviewed for a better fit.
+        _src_cost = to_number(row.get("source_monthly_cost"), 0)
+        mapping_flag = ""
+        if cloud_bill_mode and _src_cost > 0 and monthly > _src_cost * 1.10:
+            # Standard S3 -> Object Storage is a clean, expected mapping; don't
+            # flag it as non-optimal unless it's a sizable footprint (> 1 TB).
+            _prod_l = (clean_text(row.get("oci_product")) or "").lower()
+            _src_l = (clean_text(row.get("source_service")) or "").lower()
+            _is_std_s3_object = (
+                "object storage" in _prod_l
+                and ("s3" in _src_l or "simple storage" in _src_l)
+                and not any(t in _src_l for t in ("glacier", "archive", "deep"))
+            )
+            _storage_gb = sum(
+                to_number(li.get("quantity"), 0)
+                for li in line_items
+                if "gb" in str(li.get("unit", "")).lower()
+            )
+            if _is_std_s3_object and _storage_gb <= 1000:
+                mapping_flag = ""
+            else:
+                mapping_flag = "May not be an optimal mapping"
+
+        # Per-row cost actions for flagged rows: carry the AWS cost over to OCI, or
+        # remove the line from both sides of the BOM.
+        cost_action = (cost_overrides or {}).get(str(row.get("__id"))) if cost_overrides else None
+        if cost_action == "carry":
+            line_items = [{
+                "sku": "", "description": "Carried over from source AWS cost",
+                "quantity": 0, "unit": "", "rate": 0, "monthly": money(_src_cost),
+                "mapping": "OCI cost set equal to the source AWS cost (mapping flagged as non-optimal).",
+                "carriedOver": True,
+            }]
+            monthly = money(_src_cost)
+            annual = money(monthly * 12)
+        elif cost_action == "remove":
+            line_items = []
+            monthly = 0.0
+            annual = 0.0
+            # Pull this line's source cost back out of the totals (removed from both sides).
+            totals["sourceMonthlyCost"] -= _src_cost
+            totals["mappedSourceMonthlyCost"] -= _src_cost
+
         source_row_label = clean_text(row.get("__sourceRow"))
         fallback_name = f"Workload {source_row_label}" if source_row_label.isdigit() else f"Workload {row_index}"
         name = (
@@ -4552,6 +5813,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             or fallback_name
         )
         environment = text_for(row, fields, ["environment"]) or clean_text(row.get("source_account")) or clean_text(row.get("source_region"))
+        region = ""
+        if keys.get("region"):
+            region = clean_text(row.get(keys["region"], ""))
+        if not region:
+            region = clean_text(row.get("source_region"))
+        if region:
+            data_has["region"] = True
+        if environment:
+            data_has["environment"] = True
         assumptions = [
             "Spreadsheet CPU values are assumed to be vCPUs and converted in review using 2 vCPUs = 1 OCPU.",
             "OCPU and memory prices are converted to monthly estimates using 730 hours.",
@@ -4562,26 +5832,18 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             assumptions.append("Recognized AWS, Azure, GCP, and on-prem rows are mapped to a curated Oracle price-list subset.")
             assumptions.extend(full_service_notes)
 
-        # Per-VM feasibility against the selected OCI shape (single VM, not the row aggregate).
+        # Per-VM feasibility against the selected OCI shape (single VM, not the row aggregate),
+        # using the same rightsize reduction applied above.
         if cloud_bill_mode:
-            per_vm_specs = [(value_for(row, "resource_ocpus"), value_for(row, "resource_memory_gb"))]
-        elif bom_match:
-            per_vm_specs = [
-                (math.floor(app_cpu) if app_cpu else 0, math.floor(app_memory) if app_memory else 0),
-                (math.floor(db_cpu) if db_cpu else 0, math.floor(db_memory) if db_memory else 0),
-            ]
+            per_vm_specs = [(app_vm_ocpu, app_vm_mem)]
         else:
-            per_vm_specs = [
-                (ocpus_for_review_value(fields, keys["app_cpu"], app_cpu), app_memory),
-                (ocpus_for_review_value(fields, keys["db_cpu"], db_cpu), db_memory),
-            ]
+            per_vm_specs = [(app_vm_ocpu, app_vm_mem), (db_vm_ocpu, db_vm_mem)]
         size_check = {"status": "ok"}
         _rank = {"ok": 0, "baremetal": 1, "impossible": 2}
         for vm_ocpu, vm_mem in per_vm_specs:
-            vm_mem = _rightsize_mem(vm_ocpu, vm_mem)
             if (vm_ocpu or 0) <= 0 and (vm_mem or 0) <= 0:
                 continue
-            chk = oci_size_check(shape_key, float(vm_ocpu or 0), float(vm_mem or 0))
+            chk = oci_size_check(row_shape_key, float(vm_ocpu or 0), float(vm_mem or 0))
             if _rank[chk["status"]] > _rank[size_check["status"]]:
                 size_check = chk
         if size_check["status"] == "impossible":
@@ -4593,13 +5855,16 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # Windows add-on mirrors the OCI rule (1 license per OCPU) and is gated by the Windows toggle.
         is_windows_row = row_operating_system(row) == "windows"
         windows_addon = money(ocpus * WINDOWS_LICENSE_RATE * HOURS_PER_MONTH) if (is_windows_row and not hide_windows_pricing and ocpus) else 0.0
-        src_rec = lookup_cloud_shape(row_context(row, fields))
         source_cloud_estimate = None
+        # Once the bill's provider is known (from filename/toggle), trust it for the
+        # whole file instead of re-deciding per server.
+        known_provider = normalize_provider_hint(source_provider) if source_provider else PROVIDER_AUTO
+        row_provider = known_provider if known_provider != PROVIDER_AUTO else (src_rec.get("provider") if src_rec else None)
         # GCP: keep sizing/mapping only, no estimated source-cloud pricing.
-        if src_rec and src_rec.get("provider") != "gcp" and src_rec.get("approxSourceMonthly") is not None:
+        if src_rec and row_provider != "gcp" and src_rec.get("approxSourceMonthly") is not None:
             base = src_rec["approxSourceMonthly"]
             source_cloud_estimate = {
-                "provider": src_rec.get("provider"),
+                "provider": row_provider,
                 "instance": src_rec.get("instance"),
                 "osDetected": "windows" if is_windows_row else "linux",
                 "linuxMonthly": base,
@@ -4613,12 +5878,30 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "sourceRow": row.get("__sourceRow"),
             "name": name,
             "environment": environment,
+            "region": region,
             "sizeCheck": size_check,
+            "mappingFlag": mapping_flag,
+            "costAction": cost_action or "",
+            "ociServiceCategory": clean_text(row.get("oci_service_category")),
+            "ociProduct": clean_text(row.get("oci_product")),
+            "sourceService": clean_text(row.get("source_service")),
+            "sourceMonthlyCost": money(_src_cost),
             "windowsLicenseMonthly": windows_addon,
             "sourceCloudEstimate": source_cloud_estimate,
-            "rightsized": bool(rightsize and original_memory_gb and memory_gb != original_memory_gb),
+            "rightsized": bool(rightsize and ((original_memory_gb and memory_gb != original_memory_gb) or (original_ocpus and ocpus != original_ocpus))),
             "originalMemoryGb": round(original_memory_gb, 4),
-            "shapeUsed": {"key": row_shape.get("key"), "label": row_shape.get("label")},
+            "originalOcpus": round(original_ocpus, 4),
+            "hoursPerMonth": row_hours,
+            "shapeUsed": {
+                "key": row_shape.get("key"),
+                "label": row_shape.get("label"),
+                "shortLabel": row_shape.get("shortLabel"),
+                "vendor": row_shape.get("processorVendor"),
+                "computeSku": row_shape.get("computeSku"),
+                "memorySku": row_shape.get("memorySku", row_shape.get("computeSku")),
+                "computeRate": row_shape.get("computeRate"),
+                "memoryRate": row_shape.get("memoryRate"),
+            },
             "specs": {
                 "applicationServers": app_servers,
                 "databaseServers": db_servers,
@@ -4654,13 +5937,20 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "intakeMode": intake_mode,
         "fullServiceBeta": service_catalog_enabled,
         "cloudBillMode": cloud_bill_mode,
-        "hoursPerMonth": HOURS_PER_MONTH,
+        "hoursPerMonth": eff_hours,
         "selectedShape": selected_shape,
         "rateCard": rate_card,
         "rateCards": all_shape_payloads(service_catalog_enabled),
         "totals": totals,
         "rows": priced_rows,
         "fieldMap": keys,
+        "dataFlags": data_has,
+        "crossCloud": cross_cloud_estimate(
+            priced_rows,
+            hide_windows_pricing,
+            cloud_bill_mode,
+            _dominant_source_cloud({"rows": priced_rows}, source_provider) if cloud_bill_mode else None,
+        ),
         "priceCatalog": price_catalog_payload() if service_catalog_enabled else [],
     }
 
@@ -5127,7 +6417,43 @@ class IntakeHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/export":
             self.handle_export()
             return
+        if parsed.path == "/api/load-workflow":
+            self.handle_load_workflow()
+            return
         self.send_error_json(404, "Not found.")
+
+    def handle_load_workflow(self):
+        """Accept an uploaded workflow file (.json, or an exported .xlsx with the
+        hidden _workflow sheet) and return the embedded app state so the frontend
+        can recreate the window."""
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            self.send_error_json(400, "Upload must be multipart/form-data.")
+            return
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type,
+                     "CONTENT_LENGTH": self.headers.get("Content-Length", "0")},
+        )
+        if "file" not in form:
+            self.send_error_json(400, "Missing file field.")
+            return
+        file_item = form["file"]
+        filename = clean_text(getattr(file_item, "filename", "")) or "workflow"
+        if not filename.lower().endswith((".json", ".xlsx")):
+            self.send_error_json(400, "Please upload a .json or exported .xlsx workflow file.")
+            return
+        saved_path = UPLOAD_DIR / f"{int(time.time())}_wf_{re.sub(r'[^A-Za-z0-9_.-]+', '_', filename)}"
+        saved_path.write_bytes(file_item.file.read())
+        try:
+            state = bom_export.read_workflow_state(str(saved_path))
+            if not state:
+                self.send_error_json(400, "No saved workflow found in that file. Export one first (the .xlsx must include the hidden _workflow sheet).")
+                return
+            self.send_json(200, {"workflow": state})
+        except Exception as exc:
+            self.send_error_json(500, f"Could not read workflow: {exc}")
 
     def handle_upload(self):
         content_type = self.headers.get("Content-Type", "")
@@ -5166,10 +6492,24 @@ class IntakeHandler(BaseHTTPRequestHandler):
         saved_path = UPLOAD_DIR / f"{int(time.time())}_{safe_name}"
         saved_path.write_bytes(file_item.file.read())
 
+        # In cloud-bill mode, when the user hasn't forced a provider, guess from the
+        # filename so parsing/mapping starts from the right cloud.
+        filename_guess = guess_provider_from_filename(filename) if intake_mode == INTAKE_MODE_CLOUD_BILL else PROVIDER_AUTO
+        effective_hint = provider_hint if provider_hint != PROVIDER_AUTO else filename_guess
+
         try:
-            parsed = parse_workbook(saved_path, full_service_beta, intake_mode, provider_hint)
+            parsed = parse_workbook(saved_path, full_service_beta, intake_mode, effective_hint)
             parsed["fileName"] = filename
             parsed["uploadedPath"] = str(saved_path)
+            meta = parsed.get("metadata")
+            if isinstance(meta, dict):
+                meta["filenameGuess"] = filename_guess
+                meta["providerHint"] = provider_hint
+                meta["providerSource"] = (
+                    "user" if provider_hint != PROVIDER_AUTO
+                    else "filename" if filename_guess != PROVIDER_AUTO
+                    else "content"
+                )
             self.send_json(200, parsed)
         except Exception as exc:
             self.send_error_json(500, f"Could not parse workbook: {exc}")
@@ -5188,13 +6528,18 @@ class IntakeHandler(BaseHTTPRequestHandler):
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
+            auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
+            hours_per_month = to_number(payload.get("hoursPerMonth"), 0) or None
+            source_provider = normalize_provider_hint(payload.get("providerHint"))
+            shape_overrides = payload.get("shapeOverrides") if isinstance(payload.get("shapeOverrides"), dict) else {}
+            cost_overrides = payload.get("costOverrides") if isinstance(payload.get("costOverrides"), dict) else {}
             if shape_key not in SHAPE_LOOKUP:
                 self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
                 return
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides)
             pricing["bomMatch"] = bom_match
             pricing["hideGpuPricing"] = hide_gpu_pricing
             pricing["hideWindowsPricing"] = hide_windows_pricing
@@ -5222,15 +6567,46 @@ class IntakeHandler(BaseHTTPRequestHandler):
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
+            hours_per_month = to_number(payload.get("hoursPerMonth"), 0) or None
+            source_provider = normalize_provider_hint(payload.get("providerHint"))
+            auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
+            shape_overrides = payload.get("shapeOverrides") if isinstance(payload.get("shapeOverrides"), dict) else {}
+            cost_overrides = payload.get("costOverrides") if isinstance(payload.get("costOverrides"), dict) else {}
+            bom_name = clean_text(payload.get("bomName"))
+            oci_discount = to_number(payload.get("ociDiscount"), 0)
+            if oci_discount < 0:
+                oci_discount = 0.0
+            if oci_discount > 1:
+                oci_discount = oci_discount / 100.0  # accept either fraction or percent
             ramp = payload.get("ramp")
             existing_infra_cost = payload.get("existingInfraCost", 0)
+            # Full app workflow state to embed (so the file can be re-imported to
+            # recreate the window). Sent by the frontend as a JSON-serializable object.
+            workflow_state = payload.get("workflowState")
+            workflow_json = json.dumps(workflow_state) if workflow_state else None
             if shape_key not in SHAPE_LOOKUP:
                 self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
                 return
             if not fields or not rows:
                 self.send_error_json(400, "Export requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides)
+
+            # Cloud bill mode exports the AWS->OCI comparison workbook (reference style),
+            # not the on-prem BOM-script workbook.
+            if intake_mode == INTAKE_MODE_CLOUD_BILL:
+                content = bom_export.build_cloud_comparison_bytes(pricing, payload.get("ramp"), bom_name, oci_discount, workflow_json)
+                safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
+                download_name = f"{safe_name}.xlsx" if safe_name else "OCI_Cloud_Bill_Comparison.xlsx"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+            eff_hours = hours_per_month if (hours_per_month and hours_per_month > 0) else HOURS_PER_MONTH
             servers = bom_export.servers_from_pricing(pricing, rows)
             shape = pricing.get("selectedShape") or {}
             shape_for_export = {
@@ -5241,13 +6617,25 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 "computeRate": shape.get("computeRate"),
                 "memoryRate": shape.get("memoryRate"),
             }
-            content = bom_export.build_workbook_bytes(servers, ramp, existing_infra_cost, shape_for_export, hide_windows_pricing)
+            # If the source data is AWS/Azure, prefill the Overview's existing-cost cell
+            # with that cloud's estimated annual spend and relabel it accordingly.
+            existing_label = "Existing Infra Cost (enter):"
+            source_cloud = _dominant_source_cloud(pricing, source_provider)
+            if source_cloud:
+                cc_best = (pricing.get("crossCloud") or {}).get("bestMatch") or {}
+                annual = (cc_best.get(source_cloud) or {}).get("annualTotal")
+                if annual:
+                    existing_infra_cost = annual
+                    existing_label = f"Existing {'AWS' if source_cloud == 'aws' else 'Azure'} Cost:"
+            content = bom_export.build_workbook_bytes(servers, ramp, existing_infra_cost, shape_for_export, hide_windows_pricing, eff_hours, bom_name, auto, existing_label, oci_discount)
+            safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
+            download_name = f"{safe_name}.xlsx" if safe_name else "OCI_BOM_Export.xlsx"
             self.send_response(200)
             self.send_header(
                 "Content-Type",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
-            self.send_header("Content-Disposition", 'attachment; filename="OCI_BOM_Export.xlsx"')
+            self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)

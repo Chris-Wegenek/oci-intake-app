@@ -14,11 +14,22 @@ const state = {
   providerHint: "auto",
   uploadMetadata: {},
   fullServiceBeta: false,
-  bomMatch: false,
   hideGpuPricing: false,
   hideWindowsPricing: false,
   rightsize: false,
   auto: false,
+  hoursPerMonth: 730,
+  bomName: "",
+  ociDiscount: 0,
+  autoTier: "best",
+  shapeOverrides: {},
+  costOverrides: {},
+  approvedFlags: {},
+  flagMenuRow: null,
+  hiddenSources: {},
+  selectedRows: {},
+  crossCloudTopTier: false,
+  columnPrefs: {},
   existingInfraCost: 0,
   showMissingOnly: false,
   openaiApiEnabled: false,
@@ -26,8 +37,8 @@ const state = {
   openaiApiConnected: false,
   openaiModel: "",
   resultSort: {
-    key: "monthly",
-    direction: "desc",
+    key: "document",
+    direction: "asc",
   },
   ramp: {
     months: 36,
@@ -37,6 +48,41 @@ const state = {
     points: [],
   },
 };
+
+// Restore per-session column visibility choices.
+try {
+  const savedPrefs = sessionStorage.getItem("ociColumnPrefs");
+  if (savedPrefs) state.columnPrefs = JSON.parse(savedPrefs) || {};
+} catch (err) {
+  state.columnPrefs = {};
+}
+
+// Columns that auto-hide when the input has no data for them.
+const AUTO_HIDE_COLUMNS = { region: "region", environment: "environment", hours: "hours" };
+
+function autoHiddenColumnSet() {
+  const flags = state.pricing?.dataFlags || {};
+  const set = new Set();
+  for (const [colKey, flagKey] of Object.entries(AUTO_HIDE_COLUMNS)) {
+    if (!flags[flagKey]) set.add(colKey);
+  }
+  return set;
+}
+
+function isColumnHidden(key) {
+  const pref = state.columnPrefs?.[key];
+  if (pref === "show") return false;
+  if (pref === "hide") return true;
+  return autoHiddenColumnSet().has(key);
+}
+
+function saveColumnPrefs() {
+  try {
+    sessionStorage.setItem("ociColumnPrefs", JSON.stringify(state.columnPrefs || {}));
+  } catch (err) {
+    /* sessionStorage unavailable */
+  }
+}
 
 const PROCESSOR_VENDORS = [
   {
@@ -141,12 +187,25 @@ const els = {
   tableEditStatus: document.querySelector("#tableEditStatus"),
   priceButton: document.querySelector("#priceButton"),
   priceShapeButton: document.querySelector("#priceShapeButton"),
-  bomMatchToggle: document.querySelector("#bomMatchToggle"),
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
   hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
-  rightsizeSwitch: document.querySelector("#rightsizeSwitch"),
-  autoToggle: document.querySelector("#autoToggle"),
+  rightsizeSwitches: document.querySelectorAll(".rightsize-switch"),
+  hoursPerMonth: document.querySelector("#hoursPerMonth"),
   exportExcel: document.querySelector("#exportExcel"),
+  exportJson: document.querySelector("#exportJson"),
+  loadWorkflow: document.querySelector("#loadWorkflow"),
+  loadWorkflowFile: document.querySelector("#loadWorkflowFile"),
+  loadPrevBom: document.querySelector("#loadPrevBom"),
+  bomName: document.querySelector("#bomName"),
+  ociDiscount: document.querySelector("#ociDiscount"),
+  crossCloudTile: document.querySelector("#crossCloudTile"),
+  crossCloudResults: document.querySelector("#crossCloudResults"),
+  selectedDocTile: document.querySelector("#selectedDocTile"),
+  selectedDocName: document.querySelector("#selectedDocName"),
+  selectedDocSub: document.querySelector("#selectedDocSub"),
+  selectedDocClear: document.querySelector("#selectedDocClear"),
+  inventoryNotice: document.querySelector("#inventoryNotice"),
+  switchToOnPrem: document.querySelector("#switchToOnPrem"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
   processorPicker: document.querySelector("#processorPicker"),
   shapeDropdown: document.querySelector("#shapeDropdown"),
@@ -178,6 +237,12 @@ const els = {
   rampYearOneTotal: document.querySelector("#rampYearOneTotal"),
   rampYearTwoTotal: document.querySelector("#rampYearTwoTotal"),
   rampYearThreeTotal: document.querySelector("#rampYearThreeTotal"),
+  rampYearFourTotal: document.querySelector("#rampYearFourTotal"),
+  rampYearFiveTotal: document.querySelector("#rampYearFiveTotal"),
+  rampYearFourBox: document.querySelector("#rampYearFourBox"),
+  rampYearFiveBox: document.querySelector("#rampYearFiveBox"),
+  rampContractNote: document.querySelector("#rampContractNote"),
+  rampHeading: document.querySelector("#rampHeading"),
   costDonut: document.querySelector("#costDonut"),
   costLegend: document.querySelector("#costLegend"),
   topListHeading: document.querySelector("#topListHeading"),
@@ -185,8 +250,22 @@ const els = {
   detailHeading: document.querySelector("#detailHeading"),
   resultRowCount: document.querySelector("#resultRowCount"),
   resultsTable: document.querySelector("#resultsTable"),
+  priceSpinner: document.querySelector("#priceSpinner"),
+  sourceFilterPanel: document.querySelector("#sourceFilterPanel"),
+  sourceFilterList: document.querySelector("#sourceFilterList"),
+  sourceFilterAll: document.querySelector("#sourceFilterAll"),
+  sourceFilterNone: document.querySelector("#sourceFilterNone"),
+  bulkActionBar: document.querySelector("#bulkActionBar"),
+  bulkSelCount: document.querySelector("#bulkSelCount"),
+  bulkCostAction: document.querySelector("#bulkCostAction"),
+  bulkApply: document.querySelector("#bulkApply"),
+  bulkClear: document.querySelector("#bulkClear"),
   steps: document.querySelectorAll(".step"),
 };
+
+function rowSourceName(row) {
+  return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
+}
 
 function setStep(step) {
   els.steps.forEach((item) => {
@@ -288,6 +367,19 @@ function hasCellContent(value) {
   return value !== null && value !== undefined && String(value).trim() !== "";
 }
 
+// OCPU / RAM only count as "missing" for compute rows. In cloud-bill mode a storage,
+// network, or other non-compute line legitimately has no OCPU/RAM, so leave it blank.
+function cellIsMissing(row, fieldKey, valueOverride) {
+  const value = valueOverride !== undefined ? valueOverride : row[fieldKey];
+  if (hasCellContent(value)) return false;
+  if (state.intakeMode === "cloud_bill" && (fieldKey === "resource_ocpus" || fieldKey === "resource_memory_gb")) {
+    const prod = String(row.oci_product || "").toLowerCase();
+    const isCompute = prod.includes("virtual machine") || prod.includes("compute") || prod.includes("container instance");
+    return isCompute; // blank OCPU/RAM is only "missing" when the row is compute
+  }
+  return true;
+}
+
 function fieldHasContent(field) {
   if (!field?.key) return false;
   return state.rows.some((row) => hasCellContent(row[field.key]));
@@ -298,7 +390,7 @@ function shouldShowField(field) {
 }
 
 function rowHasMissingData(row, fields = previewFields()) {
-  return fields.some((field) => !hasCellContent(row[field.key]));
+  return fields.some((field) => cellIsMissing(row, field.key));
 }
 
 function reviewRowEntries(fields = previewFields()) {
@@ -344,6 +436,7 @@ function normalizeVendorKey(value) {
   const vendor = String(value || "").toLowerCase();
   if (vendor.includes("intel")) return "intel";
   if (vendor.includes("amd")) return "amd";
+  if (vendor.includes("arm") || vendor.includes("ampere")) return "arm";
   return "";
 }
 
@@ -427,17 +520,19 @@ function syncApiUi() {
   }
 }
 
+function processorLogo(key) {
+  if (key === "amd") return `<span class="processor-logo amd-logo"><span>AMD</span><i aria-hidden="true"></i></span>`;
+  if (key === "intel") return `<span class="processor-logo intel-logo"><span>intel</span></span>`;
+  if (key === "arm") return `<span class="processor-logo arm-logo"><span>Ampere</span></span>`;
+  return `<span class="processor-logo match-logo"><span>Best&nbsp;Match</span></span>`;
+}
+
 function renderProcessorPicker() {
   if (!els.processorPicker) return;
-  els.processorPicker.innerHTML = PROCESSOR_VENDORS.map((vendor) => {
-    const shapes = shapesForVendor(vendor.key);
-    const isSelected = vendor.key === state.selectedVendor;
-    const shapeCount = shapes.length;
+  const vendorTiles = PROCESSOR_VENDORS.map((vendor) => {
+    const shapeCount = shapesForVendor(vendor.key).length;
     const countLabel = `${formatNumber(shapeCount)} ${shapeCount === 1 ? "shape" : "shapes"}`;
-    const logo =
-      vendor.key === "amd"
-        ? `<span class="processor-logo amd-logo"><span>AMD</span><i aria-hidden="true"></i></span>`
-        : `<span class="processor-logo intel-logo"><span>intel</span></span>`;
+    const isSelected = !state.auto && vendor.key === state.selectedVendor;
     return `
       <button
         class="processor-button ${isSelected ? "is-selected" : ""}"
@@ -446,14 +541,55 @@ function renderProcessorPicker() {
         aria-expanded="${isSelected ? "true" : "false"}"
         aria-controls="shapeDropdown"
       >
-        ${logo}
+        ${processorLogo(vendor.key)}
         <em>${escapeHtml(countLabel)}</em>
       </button>
     `;
   }).join("");
 
+  const matchTile = `
+    <button
+      class="processor-button processor-match ${state.auto ? "is-selected" : ""}"
+      type="button"
+      data-processor-match="1"
+      title="Map each workload to the best OCI shape for its own CPU vendor and generation."
+    >
+      ${processorLogo("match")}
+      <em>auto per workload</em>
+    </button>
+  `;
+
+  const tierToggle = state.auto
+    ? `<div class="match-tier-toggle">
+         <span class="match-tier-label">Best Match maps to</span>
+         <div class="mode-switch match-tier-switch" role="group" aria-label="Best Match shape generation">
+           <button type="button" class="mode-opt ${state.autoTier === "top" ? "" : "is-active"}" data-auto-tier="best" title="Map each workload to the OCI shape of the equivalent processor generation to its source.">Equivalent generation</button>
+           <button type="button" class="mode-opt ${state.autoTier === "top" ? "is-active" : ""}" data-auto-tier="top" title="Map every workload to OCI's newest shape (E6 Ax / X12 Ax / A4 Ax).">Top of the line</button>
+         </div>
+       </div>`
+    : "";
+
+  els.processorPicker.innerHTML = vendorTiles + matchTile + tierToggle;
+
+  els.processorPicker.querySelectorAll("[data-auto-tier]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.autoTier = button.dataset.autoTier === "top" ? "top" : "best";
+      renderProcessorPicker();
+    });
+  });
+
   els.processorPicker.querySelectorAll("[data-processor-vendor]").forEach((button) => {
-    button.addEventListener("click", () => setProcessorVendor(button.dataset.processorVendor));
+    button.addEventListener("click", () => {
+      state.auto = false;
+      setProcessorVendor(button.dataset.processorVendor);
+      applyAutoUI();
+      renderProcessorPicker();
+    });
+  });
+  els.processorPicker.querySelector("[data-processor-match]")?.addEventListener("click", () => {
+    state.auto = true;
+    applyAutoUI();
+    renderProcessorPicker();
   });
 }
 
@@ -566,7 +702,9 @@ function syncModeUi() {
   if (els.providerHint) {
     els.providerHint.value = state.providerHint;
   }
-  els.fileInput.accept = cloudBill ? ".pdf,.csv,.tsv,.xlsx,.xls" : ".xlsx,.xls";
+  // Cloud bill accepts several formats; Chrome can grey out CSV/TSV even when listed,
+  // so don't filter at all here — the backend validates the file type on upload.
+  els.fileInput.accept = cloudBill ? "" : ".xlsx,.xls";
   els.modeEyebrow.textContent = cloudBill ? "Cloud bill" : "On-prem inventory";
   els.uploadHeading.textContent = cloudBill ? "Upload cloud bill" : "Upload inventory";
   els.uploadDescription.textContent = cloudBill
@@ -696,9 +834,9 @@ function renderShapeChoices() {
 
 function renderShapeDetail() {
   const shape = selectedShape();
-  els.shapeFamily.textContent = shape.family || "OCI flex shape";
-  els.shapeDetailTitle.textContent = shape.label || "Selected shape";
-  els.shapeDetailSummary.textContent = shape.summary || "Selected shape rates will be applied to approved rows.";
+  if (els.shapeFamily) els.shapeFamily.textContent = shape.family || "OCI flex shape";
+  if (els.shapeDetailTitle) els.shapeDetailTitle.textContent = shape.label || "Selected shape";
+  if (els.shapeDetailSummary) els.shapeDetailSummary.textContent = shape.summary || "Selected shape rates will be applied to approved rows.";
   if (els.shapeDetailRates) {
     els.shapeDetailRates.innerHTML = `
       <table class="shape-rate-card-table">
@@ -776,19 +914,19 @@ function renderTable() {
       const td = document.createElement("td");
       td.dataset.rowIndex = String(rowIndex);
       td.dataset.fieldKey = field.key;
-      td.classList.toggle("is-missing-data", !hasCellContent(row[field.key]));
+      td.classList.toggle("is-missing-data", cellIsMissing(row, field.key));
       const cellEditor = document.createElement("div");
       cellEditor.className = "cell-editor";
       const input = document.createElement("input");
       input.type = "text";
       input.value = row[field.key] ?? "";
-      input.placeholder = hasCellContent(row[field.key]) ? "" : "Missing data";
+      input.placeholder = cellIsMissing(row, field.key) ? "Missing data" : "";
       input.dataset.rowIndex = String(rowIndex);
       input.dataset.fieldKey = field.key;
       input.setAttribute("aria-label", `${field.label}, row ${rowIndex + 1}`);
       input.addEventListener("input", () => {
         row[field.key] = input.value;
-        const isMissing = !hasCellContent(input.value);
+        const isMissing = cellIsMissing(row, field.key, input.value);
         td.classList.toggle("is-missing-data", isMissing);
         input.placeholder = isMissing ? "Missing data" : "";
         syncMissingFilterUi(fields);
@@ -978,8 +1116,23 @@ function startCellFill(event) {
   document.addEventListener("pointercancel", cancelCellFill);
 }
 
+const PROVIDER_NAME_TO_VALUE = { aws: "aws", azure: "azure", gcp: "gcp" };
+
+function showSelectedDoc(name, sub) {
+  if (!els.selectedDocTile) return;
+  if (!name) {
+    els.selectedDocTile.hidden = true;
+    return;
+  }
+  els.selectedDocTile.hidden = false;
+  if (els.selectedDocName) els.selectedDocName.textContent = name;
+  if (els.selectedDocSub) els.selectedDocSub.textContent = sub || "";
+}
+
 async function uploadFile(file) {
   if (!file) return;
+  state.lastUploadFile = file;
+  showSelectedDoc(file.name, "Reading file…");
   setUploadLoading(true, file.name);
   const body = new FormData();
   body.append("file", file);
@@ -1010,6 +1163,20 @@ async function uploadFile(file) {
     state.uploadMetadata = payload.metadata || {};
     state.intakeMode = payload.metadata?.intakeMode || state.intakeMode;
     state.fullServiceBeta = state.intakeMode === "cloud_bill";
+    const docModeLabel = state.intakeMode === "cloud_bill"
+      ? `${payload.metadata?.detectedProvider || "Cloud"} bill`
+      : "On-prem inventory";
+    showSelectedDoc(payload.fileName, `${formatNumber(payload.rows.length)} rows · ${docModeLabel}`);
+    if (els.inventoryNotice) els.inventoryNotice.hidden = !payload.metadata?.inventorySuspected;
+    // Reflect the detected/guessed provider in the toggle so the user sees the guess
+    // and can override it. (Only when they hadn't already forced a provider.)
+    if (state.intakeMode === "cloud_bill" && state.providerHint === "auto") {
+      const guessed = PROVIDER_NAME_TO_VALUE[(payload.metadata?.detectedProvider || "").toLowerCase()];
+      if (guessed) {
+        state.providerHint = guessed;
+        if (els.providerHint) els.providerHint.value = guessed;
+      }
+    }
     state.showMissingOnly = false;
     state.pricing = null;
     syncModeUi();
@@ -1238,7 +1405,12 @@ async function applyTableEdit() {
   }
 }
 
-async function priceRows() {
+async function priceRows({ keepView = false } = {}) {
+  // Non-fading floating spinner so in-place edits (e.g. removing a large
+  // selection from the BOM) show progress without blanking the screen.
+  if (els.priceSpinner) els.priceSpinner.hidden = false;
+  // Let the spinner paint before any heavy synchronous render that follows.
+  await new Promise((r) => requestAnimationFrame(() => r()));
   els.priceButton.disabled = true;
   els.priceButton.textContent = "Pricing...";
   els.priceShapeButton.disabled = true;
@@ -1262,11 +1434,14 @@ async function priceRows() {
           intakeMode: state.intakeMode,
           providerHint: state.providerHint,
           fullServiceBeta: state.fullServiceBeta,
-          bomMatch: state.bomMatch,
           hideGpuPricing: state.hideGpuPricing,
           hideWindowsPricing: state.hideWindowsPricing,
           rightsize: state.rightsize,
           auto: state.auto,
+          autoTier: state.autoTier,
+          shapeOverrides: state.shapeOverrides,
+          costOverrides: state.costOverrides,
+          hoursPerMonth: state.hoursPerMonth,
         }),
       },
       70000,
@@ -1277,8 +1452,14 @@ async function priceRows() {
     state.pricing = payload;
     renderPricing(payload);
     renderResults(payload);
-    showResultsPage();
-    setStep("price");
+    // When re-pricing in place (e.g. editing a shape dropdown), don't jump the page.
+    if (keepView) {
+      const y = window.scrollY;
+      requestAnimationFrame(() => window.scrollTo({ top: y }));
+    } else {
+      showResultsPage();
+      setStep("price");
+    }
   } catch (error) {
     els.engineStatus.textContent = "Pricing error";
     els.pricingSummary.className = "empty-state";
@@ -1290,6 +1471,7 @@ async function priceRows() {
     els.priceShapeButton.textContent = pricingActionLabel("price");
     els.rerunPricing.disabled = false;
     els.rerunPricing.textContent = pricingActionLabel("rerun");
+    if (els.priceSpinner) els.priceSpinner.hidden = true;
   }
 }
 
@@ -1297,8 +1479,10 @@ async function exportToExcel() {
   if (!state.pricing) return;
   const button = els.exportExcel;
   const original = button.textContent;
+  const overlay = document.querySelector("#exportOverlay");
   button.disabled = true;
   button.textContent = "Exporting...";
+  if (overlay) overlay.hidden = false;
   try {
     const monthly = (typeof rampMonthlyValues === "function" && state.ramp.points.length)
       ? rampMonthlyValues()
@@ -1312,14 +1496,21 @@ async function exportToExcel() {
         rows: state.rows,
         shape: state.selectedShape,
         intakeMode: state.intakeMode,
+        providerHint: state.providerHint,
         fullServiceBeta: state.fullServiceBeta,
-        bomMatch: state.bomMatch,
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
         rightsize: state.rightsize,
         auto: state.auto,
+        autoTier: state.autoTier,
+        shapeOverrides: state.shapeOverrides,
+        costOverrides: state.costOverrides,
+        hoursPerMonth: state.hoursPerMonth,
+        bomName: state.bomName || "",
+        ociDiscount: (state.ociDiscount || 0) / 100,
         ramp,
         existingInfraCost: state.existingInfraCost || 0,
+        workflowState: collectWorkflowState(),
       }),
     });
     if (!response.ok) {
@@ -1335,7 +1526,8 @@ async function exportToExcel() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "OCI_BOM_Export.xlsx";
+    const safeName = (state.bomName || "").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_");
+    link.download = safeName ? `${safeName}.xlsx` : "OCI_BOM_Export.xlsx";
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -1345,6 +1537,130 @@ async function exportToExcel() {
   } finally {
     button.disabled = false;
     button.textContent = original;
+    if (overlay) overlay.hidden = true;
+  }
+}
+
+// Capture the COMPLETE app state so a saved workflow restores the window exactly:
+// the table data plus every user modification (shape/cost overrides, approvals,
+// filters, selections, discount, ramp, column choices, mode, etc.).
+function collectWorkflowState() {
+  return {
+    __workflow: "oci-bom-app",
+    version: 1,
+    savedAt: new Date().toISOString(),
+    intakeMode: state.intakeMode,
+    providerHint: state.providerHint,
+    fullServiceBeta: state.fullServiceBeta,
+    hideGpuPricing: state.hideGpuPricing,
+    hideWindowsPricing: state.hideWindowsPricing,
+    rightsize: state.rightsize,
+    auto: state.auto,
+    autoTier: state.autoTier,
+    hoursPerMonth: state.hoursPerMonth,
+    bomName: state.bomName,
+    ociDiscount: state.ociDiscount,
+    selectedShape: state.selectedShape,
+    existingInfraCost: state.existingInfraCost,
+    crossCloudTopTier: state.crossCloudTopTier,
+    fields: state.fields,
+    rows: state.rows,
+    shapeOverrides: state.shapeOverrides,
+    costOverrides: state.costOverrides,
+    approvedFlags: state.approvedFlags,
+    hiddenSources: state.hiddenSources,
+    selectedRows: state.selectedRows,
+    columnPrefs: state.columnPrefs,
+    resultSort: state.resultSort,
+    ramp: {
+      months: state.ramp.months,
+      ceiling: state.ramp.ceiling,
+      points: state.ramp.points,
+    },
+  };
+}
+
+async function exportWorkflowJson() {
+  if (!state.rows || !state.rows.length) return;
+  const btn = els.exportJson;
+  const original = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  if (els.priceSpinner) {
+    els.priceSpinner.querySelector(".price-spinner-text").textContent = "Saving workflow…";
+    els.priceSpinner.hidden = false;
+  }
+  // Let the spinner paint before the (potentially large) serialize/stringify.
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  try {
+    const blob = new Blob([JSON.stringify(collectWorkflowState(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const safe = (state.bomName || "workflow").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_") || "workflow";
+    link.download = `${safe}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+    if (els.priceSpinner) {
+      els.priceSpinner.hidden = true;
+      els.priceSpinner.querySelector(".price-spinner-text").textContent = "Updating…";
+    }
+  }
+}
+
+// Restore a saved workflow object into state, then re-price to rebuild the window.
+async function applyWorkflowState(wf) {
+  if (!wf || !wf.rows) throw new Error("That file has no saved workflow data.");
+  const assign = [
+    "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
+    "hideWindowsPricing", "rightsize", "auto", "autoTier", "hoursPerMonth",
+    "bomName", "ociDiscount", "selectedShape", "existingInfraCost",
+    "crossCloudTopTier", "fields", "rows", "shapeOverrides", "costOverrides",
+    "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs", "resultSort",
+  ];
+  assign.forEach((k) => { if (wf[k] !== undefined) state[k] = wf[k]; });
+  if (wf.ramp) {
+    state.ramp.months = wf.ramp.months || state.ramp.months;
+    state.ramp.ceiling = wf.ramp.ceiling || 0;
+    state.ramp.points = Array.isArray(wf.ramp.points) ? wf.ramp.points : [];
+    state.ramp.signature = null; // force the ramp to honor the restored points
+  }
+  // Reflect restored simple inputs back into their controls if present.
+  if (els.bomName) els.bomName.value = state.bomName || "";
+  if (els.ociDiscount) els.ociDiscount.value = state.ociDiscount || 0;
+  if (typeof renderTable === "function") renderTable();
+  await priceRows();
+  // Opening a previous BOM jumps straight to the results page (page 4).
+  if (state.pricing) showResultsPage();
+}
+
+async function loadWorkflowFromFile(file) {
+  if (!file) return;
+  if (els.priceSpinner) {
+    els.priceSpinner.querySelector(".price-spinner-text").textContent = "Loading workflow…";
+    els.priceSpinner.hidden = false;
+  }
+  try {
+    let wf;
+    if (file.name.toLowerCase().endsWith(".json")) {
+      wf = JSON.parse(await file.text());
+    } else {
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch("/api/load-workflow", { method: "POST", body: fd });
+      const payload = await resp.json();
+      if (!resp.ok) throw new Error(payload.error || "Could not read workflow.");
+      wf = payload.workflow;
+    }
+    await applyWorkflowState(wf);
+  } catch (error) {
+    els.engineStatus.textContent = `Workflow load failed: ${error.message}`;
+    if (els.priceSpinner) els.priceSpinner.hidden = true;
+  } finally {
+    if (els.priceSpinner) els.priceSpinner.querySelector(".price-spinner-text").textContent = "Updating…";
   }
 }
 
@@ -1384,7 +1700,7 @@ function renderPricing(pricing) {
           ? `<div class="kpi"><span>Mapped services</span><strong>${formatNumber(pricing.totals.mappedServiceRows)}</strong></div>
              <div class="kpi"><span>Review rows</span><strong>${formatNumber(pricing.totals.unpricedServiceRows)}</strong></div>`
           : `<div class="kpi"><span>OCPUs</span><strong>${formatNumber(pricing.totals.ocpus)}</strong></div>
-             <div class="kpi"><span>Shape</span><strong>${escapeHtml(shape.shortLabel || shape.label)}</strong></div>`
+             <div class="kpi"><span>Shape</span><strong>${pricing.auto ? "Best Match" : escapeHtml(shape.shortLabel || shape.label)}</strong></div>`
       }
     </div>
     <table class="result-table">
@@ -1665,6 +1981,23 @@ function rampMonthlyValues() {
   return values;
 }
 
+// OCI monthly total after the user's OCI discount (set near the ramp graph),
+// using the same per-row rule as the export: carried/free lines stay at cost,
+// everything else is reduced by the discount. At 0% this equals totals.monthly.
+function ociEffectiveMonthly(pricing) {
+  if (!pricing || !pricing.totals) return 0;
+  const d = (state.ociDiscount || 0) / 100;
+  if (!d) return Number(pricing.totals.monthly || 0);
+  const rows = pricing.rows || [];
+  let t = 0;
+  for (const r of rows) {
+    const m = Number(r.monthly || 0);
+    if ((r.costAction || "") === "carry" || !m) t += m;
+    else t += m * (1 - d);
+  }
+  return t;
+}
+
 function initializeConsumptionRamp(pricing) {
   const ceiling = Math.max(0, Number(pricing.totals?.monthly || 0));
   const shapeKey = pricing.selectedShape?.key || state.selectedShape;
@@ -1673,11 +2006,10 @@ function initializeConsumptionRamp(pricing) {
     state.ramp.signature = signature;
     state.ramp.ceiling = ceiling;
     state.ramp.nextPointId = 1;
-    state.ramp.points = [
-      newRampPoint(12, ceiling * 0.35),
-      newRampPoint(24, ceiling * 0.7),
-      newRampPoint(36, ceiling),
-    ];
+    const years = Math.max(1, Math.round((state.ramp.months || 36) / 12));
+    state.ramp.points = Array.from({ length: years }, (_, i) =>
+      newRampPoint((i + 1) * 12, ceiling * ((i + 1) / years)),
+    );
     state.ramp.selectedPointId = state.ramp.points.at(-1).id;
   } else {
     state.ramp.ceiling = ceiling;
@@ -1716,7 +2048,8 @@ function renderConsumptionRamp() {
   const labelY = selectedY == null ? 0 : Math.max(pad.top + 18, selectedY - 14);
   const labelAnchor = labelOnLeft ? "end" : "start";
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
-  const xTicks = [0, 12, 24, 36];
+  const xTicks = [];
+  for (let m = 0; m <= months; m += 12) xTicks.push(m);
 
   els.rampChart.setAttribute("viewBox", `0 0 ${width} ${height}`);
   els.rampCeilingLabel.textContent = `BOM maximum ${formatCurrency(ceiling)}/mo`;
@@ -1728,20 +2061,29 @@ function renderConsumptionRamp() {
 
   const values = rampMonthlyValues();
   const total = values.reduce((sum, value) => sum + value, 0);
-  const yearOne = values.slice(0, 12).reduce((sum, value) => sum + value, 0);
-  const yearTwo = values.slice(12, 24).reduce((sum, value) => sum + value, 0);
-  const yearThree = values.slice(24, 36).reduce((sum, value) => sum + value, 0);
+  const years = Math.round(months / 12);
+  const yearSpend = (y) => values.slice(y * 12, (y + 1) * 12).reduce((sum, value) => sum + value, 0);
 
   els.rampThreeYearTotal.textContent = formatCurrency(total);
   els.rampAvgMonthly.textContent = formatCurrency(total / months);
   [
-    [els.rampYearOneTotal, yearOne],
-    [els.rampYearTwoTotal, yearTwo],
-    [els.rampYearThreeTotal, yearThree],
+    [els.rampYearOneTotal, yearSpend(0)],
+    [els.rampYearTwoTotal, yearSpend(1)],
+    [els.rampYearThreeTotal, yearSpend(2)],
+    [els.rampYearFourTotal, yearSpend(3)],
+    [els.rampYearFiveTotal, yearSpend(4)],
   ].forEach(([element, value]) => {
+    if (!element) return;
     element.textContent = formatCompactCurrency(value);
     element.title = formatCurrency(value);
   });
+  // Show/hide years 4-5 and update labels for the chosen ramp length.
+  if (els.rampYearFourBox) els.rampYearFourBox.hidden = years < 4;
+  if (els.rampYearFiveBox) els.rampYearFiveBox.hidden = years < 5;
+  if (els.rampHeading) els.rampHeading.textContent = `Build a ${years}-year ramp`;
+  if (els.rampContractNote) {
+    els.rampContractNote.textContent = Array.from({ length: years }, (_, i) => `Year ${i + 1}`).join(" + ");
+  }
 
   const handleMarkup = sortedRampPoints(false)
     .map((point) => {
@@ -1899,14 +2241,14 @@ function renderResults(pricing) {
   const serviceRows = pricing.totals.mappedServiceRows || 0;
   const reviewRows = pricing.totals.unpricedServiceRows || 0;
 
-  els.resultsShape.textContent = shape.label || "Selected shape";
+  els.resultsShape.textContent = pricing.auto ? "Best Match" : (shape.label || "Selected shape");
   els.resultsSubtitle.textContent = cloudBill
     ? `${pricing.rows.length} source bill lines reviewed; ${serviceRows} mapped to OCI-equivalent products and ${reviewRows} need review before they affect totals.`
     : pricing.fullServiceBeta
     ? `${pricing.rows.length} approved items priced with OCI service mapping; ${serviceRows} service mappings priced and ${reviewRows} items need review.`
     : `${pricing.rows.length} approved workloads priced on ${shape.label} with ${engineLabel} SKU validation.`;
   els.topListHeading.textContent = cloudBill ? "Top source lines" : "Top workloads";
-  els.detailHeading.textContent = cloudBill ? "Cloud bill mapping detail" : "Application cost detail";
+  els.detailHeading.textContent = cloudBill ? "Cloud bill mapping detail" : "Application Cost Details";
   els.resultRowCount.textContent = cloudBill
     ? `${pricing.rows.length} source lines`
     : pricing.fullServiceBeta
@@ -1918,22 +2260,32 @@ function renderResults(pricing) {
   const monthlyScale = Math.min(100, Math.max(18, Math.log10(Math.max(10, pricing.totals.monthly || 0)) * 22));
   const computeScale = Math.min(100, Math.max(10, (pricing.totals.ocpus || serviceRows || 0) / Math.max(1, pricing.totals.ocpus || serviceRows || reviewRows || 1) * 100));
   const memoryScale = Math.min(100, Math.max(12, (pricing.totals.memoryGb || reviewRows || 0) / Math.max(1, pricing.totals.memoryGb || serviceRows || reviewRows || 1) * 100));
-  const storageGb = Number(pricing.totals.blockStorageGb || 0) + Number(pricing.totals.fileStorageGb || 0);
+  const storageGb = Number(pricing.totals.blockStorageGb || 0) + Number(pricing.totals.fileStorageGb || 0)
+    + Number(pricing.totals.cloudStorageGb || 0);
   const storageScale = Math.min(100, Math.max(12, Math.log10(Math.max(10, storageGb || 0)) * 20));
+  const discPct = state.ociDiscount || 0;
+  const ociEff = ociEffectiveMonthly(pricing);
+  const ociEffAnnual = ociEff * 12;
   const pricingCards = `
     ${resultKpiCard({
-      label: cloudBill ? "OCI-equivalent monthly" : "Monthly run rate",
-      value: formatCompactCurrency(pricing.totals.monthly),
-      meta: `${formatCompactCurrency(pricing.totals.annual)} annualized`,
+      label: (cloudBill ? "OCI-equivalent monthly" : "Monthly run rate") + (discPct ? ` (after ${discPct}% discount)` : ""),
+      value: formatCompactCurrency(ociEff),
+      meta: discPct
+        ? `${formatCompactCurrency(ociEffAnnual)} annualized · ${formatCompactCurrency(pricing.totals.monthly)} list before discount`
+        : `${formatCompactCurrency(ociEffAnnual)} annualized`,
       accent: "#c74634",
       fill: monthlyScale,
       primary: true,
-      title: `${formatCurrency(pricing.totals.monthly)} monthly; ${formatCurrency(pricing.totals.annual)} annualized`,
+      title: discPct
+        ? `${formatCurrency(ociEff)} monthly after ${discPct}% OCI discount (list ${formatCurrency(pricing.totals.monthly)})`
+        : `${formatCurrency(pricing.totals.monthly)} monthly; ${formatCurrency(pricing.totals.annual)} annualized`,
     })}
     ${resultKpiCard({
       label: "Flex shape",
-      value: shape.shortLabel || shape.label,
-      meta: `$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr`,
+      value: pricing.auto ? "Best Match" : (shape.shortLabel || shape.label),
+      meta: pricing.auto
+        ? "Each workload mapped to its best OCI shape"
+        : `$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr`,
       accent: shape.accent || "#164f68",
       fill: 62,
     })}
@@ -2018,7 +2370,10 @@ function renderResults(pricing) {
   initializeConsumptionRamp(pricing);
   renderCostMix(skuCosts, pricing.totals.monthly);
   renderTopWorkloads(topRows, maxMonthly, cloudBill);
-  renderResultsTable(topRows, pricing.fullServiceBeta, cloudBill);
+  // Detail table defaults to the document's VM order (not cost-sorted).
+  renderResultsTable(pricing.rows.slice(), pricing.fullServiceBeta, cloudBill);
+  // Refresh the other-cloud tile if it's currently expanded.
+  if (els.crossCloudResults && !els.crossCloudResults.hidden) renderCrossCloud();
 }
 
 function renderCostMix(skuCosts, total) {
@@ -2139,13 +2494,11 @@ function compareSortValues(left, right, direction = "asc") {
 }
 
 function activeResultSort(columns) {
+  // "document" (the default) means keep the original upload/order — no column sort.
+  if (state.resultSort.key === "document") return { column: null, direction: "asc" };
   const requestedColumn = columns.find((column) => column.key === state.resultSort.key);
-  const fallbackColumn = columns.find((column) => column.key === "monthly") || columns[0];
-  const column = requestedColumn || fallbackColumn;
-  const direction = requestedColumn
-    ? state.resultSort.direction === "asc" ? "asc" : "desc"
-    : column?.key === "monthly" ? "desc" : "asc";
-  return { column, direction };
+  if (!requestedColumn) return { column: null, direction: "asc" };
+  return { column: requestedColumn, direction: state.resultSort.direction === "asc" ? "asc" : "desc" };
 }
 
 function sortResultRows(rows, columns) {
@@ -2171,6 +2524,9 @@ function renderSortableHead(columns) {
       <tr>
         ${columns
           .map((column) => {
+            if (column.selector) {
+              return `<th class="select-col"><input type="checkbox" id="selectAllRows" aria-label="Select all rows"/></th>`;
+            }
             const active = activeColumn?.key === column.key;
             const ariaSort = active ? (direction === "asc" ? "ascending" : "descending") : "none";
             return `
@@ -2188,37 +2544,216 @@ function renderSortableHead(columns) {
   `;
 }
 
+function renderColumnPicker(allColumnsRaw) {
+  const menu = document.querySelector("#columnPickerMenu");
+  if (!menu) return;
+  const allColumns = allColumnsRaw.filter((c) => !c.selector);
+  const hiddenCount = allColumns.filter((c) => isColumnHidden(c.key)).length;
+  const heading = hiddenCount
+    ? `<div class="column-picker-head">${hiddenCount} column${hiddenCount === 1 ? "" : "s"} hidden &mdash; check to show</div>`
+    : `<div class="column-picker-head">All columns shown</div>`;
+  menu.innerHTML =
+    heading +
+    allColumns
+      .map((c) => {
+        const checked = isColumnHidden(c.key) ? "" : "checked";
+        return `<label class="column-picker-item"><input type="checkbox" data-col-key="${escapeHtml(c.key)}" ${checked}/> <span>${escapeHtml(c.label)}</span></label>`;
+      })
+      .join("");
+  menu.querySelectorAll("input[data-col-key]").forEach((cb) => {
+    cb.addEventListener("change", (e) => {
+      const key = e.target.dataset.colKey;
+      if (!state.columnPrefs) state.columnPrefs = {};
+      state.columnPrefs[key] = e.target.checked ? "show" : "hide";
+      saveColumnPrefs();
+      rerenderResultsTable();
+    });
+  });
+}
+
+function rerenderResultsTable() {
+  if (!state.pricing) return;
+  renderResultsTable(
+    state.pricing.rows || [],
+    state.pricing.fullServiceBeta,
+    state.pricing.intakeMode === "cloud_bill" || state.pricing.cloudBillMode,
+  );
+}
+
+// Build the left-hand source-service filter (distinct names + row counts).
+function renderSourceFilter(rows) {
+  if (!els.sourceFilterPanel || !els.sourceFilterList) return;
+  els.sourceFilterPanel.hidden = false;
+  const counts = new Map();
+  rows.forEach((r) => {
+    const name = rowSourceName(r);
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+  const names = [...counts.keys()].sort((a, b) => a.localeCompare(b));
+  els.sourceFilterList.innerHTML = names
+    .map((name) => {
+      const checked = state.hiddenSources[name] ? "" : "checked";
+      return `<label class="source-filter-item"><input type="checkbox" data-source-name="${escapeHtml(name)}" ${checked}/> <span class="source-filter-name">${escapeHtml(name)}</span> <span class="source-filter-count">${counts.get(name)}</span></label>`;
+    })
+    .join("");
+}
+
+// Show/refresh the bulk-action bar based on current selection.
+function syncBulkBar() {
+  if (!els.bulkActionBar) return;
+  const ids = Object.keys(state.selectedRows).filter((id) => state.selectedRows[id]);
+  const n = ids.length;
+  els.bulkActionBar.hidden = n === 0;
+  if (els.bulkSelCount) els.bulkSelCount.textContent = `${n} selected`;
+  const selectAll = document.querySelector("#selectAllRows");
+  if (selectAll) {
+    const visibleIds = (state.pricing?.rows || [])
+      .filter((r) => !state.hiddenSources[rowSourceName(r)])
+      .map((r) => String(r.rowId));
+    const selectedVisible = visibleIds.filter((id) => state.selectedRows[id]).length;
+    selectAll.checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+  }
+}
+
+function applyBulkCostAction(value) {
+  const ids = Object.keys(state.selectedRows).filter((id) => state.selectedRows[id]);
+  if (!ids.length) return;
+  ids.forEach((id) => {
+    if (value === "estimate" || !value) delete state.costOverrides[id];
+    else state.costOverrides[id] = value;
+  });
+  priceRows({ keepView: true });
+}
+
 function renderResultTableFromColumns(rows, columns) {
-  const sortedRows = sortResultRows(rows, columns);
+  renderColumnPicker(columns);
+  const visible = columns.filter((c) => !isColumnHidden(c.key));
+  const cols = visible.length ? visible : columns;
+  const sortedRows = sortResultRows(rows, cols);
   const body = sortedRows
     .map((row) => `
       <tr>
-        ${columns.map((column) => `<td>${column.render(row)}</td>`).join("")}
+        ${cols.map((column) => `<td>${column.render(row)}</td>`).join("")}
       </tr>
     `)
     .join("");
-  els.resultsTable.innerHTML = `${renderSortableHead(columns)}<tbody>${body}</tbody>`;
+  els.resultsTable.innerHTML = `${renderSortableHead(cols)}<tbody>${body}</tbody>`;
 }
 
-function sizeFlagBadge(row) {
-  const check = row.sizeCheck || {};
-  if (check.status === "impossible") {
-    return ` <span class="size-flag size-flag-impossible" title="${escapeHtml(check.message || "")}">IMPOSSIBLE</span>`;
+const BEST_SHAPE_BY_VENDOR_JS = { amd: "e6-standard-ax", intel: "x12-standard-ax", arm: "a4-standard-ax" };
+
+function familySelectHtml(row) {
+  const cur = normalizeVendorKey(row.shapeUsed?.vendor) || "amd";
+  const opts = [["amd", "AMD"], ["intel", "Intel"], ["arm", "Arm"]]
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`)
+    .join("");
+  return `<select class="cell-select" data-shape-row="${escapeHtml(String(row.rowId))}" data-shape-kind="family">${opts}</select>`;
+}
+
+function shapeSelectHtml(row) {
+  const vendor = normalizeVendorKey(row.shapeUsed?.vendor) || "amd";
+  const cur = row.shapeUsed?.key;
+  const shapes = (state.rateCards || []).filter((s) => normalizeVendorKey(s.processorVendor) === vendor);
+  const list = shapes.length ? shapes : state.rateCards || [];
+  const opts = list
+    .map((s) => `<option value="${escapeHtml(s.key)}" ${s.key === cur ? "selected" : ""}>${escapeHtml(s.shortLabel || s.label)}</option>`)
+    .join("");
+  return `<select class="cell-select" data-shape-row="${escapeHtml(String(row.rowId))}" data-shape-kind="shape">${opts}</select>`;
+}
+
+function applyShapeOverride(rowId, kind, value) {
+  if (!rowId) return;
+  if (kind === "family") {
+    const vendor = normalizeVendorKey(value) || "amd";
+    const shapes = (state.rateCards || []).filter((s) => normalizeVendorKey(s.processorVendor) === vendor);
+    const def = shapes.find((s) => s.key === BEST_SHAPE_BY_VENDOR_JS[vendor]) || shapes[0];
+    if (def) state.shapeOverrides[rowId] = def.key;
+  } else {
+    state.shapeOverrides[rowId] = value;
   }
-  if (check.status === "baremetal") {
-    return ` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">BARE METAL</span>`;
+  priceRows({ keepView: true });
+}
+
+function flagActive(row) {
+  return Boolean(row.mappingFlag) && !state.approvedFlags[row.rowId];
+}
+
+function mappingFlagBadge(row) {
+  if (row.costAction === "remove") {
+    return ` <span class="size-flag size-flag-removed" title="Removed from both sides of the BOM">REMOVED</span>`;
+  }
+  if (row.costAction === "carry") {
+    return ` <span class="size-flag size-flag-carried" title="OCI cost set equal to the source AWS cost">CARRIED OVER</span>`;
+  }
+  if (state.approvedFlags[row.rowId]) {
+    return ` <span class="size-flag size-flag-approved" title="Mapping approved">✓ approved</span>`;
+  }
+  if (row.mappingFlag) {
+    let html = ` <span class="size-flag size-flag-review flag-clickable" data-flag-row="${escapeHtml(String(row.rowId))}" title="Click to approve this mapping">⚠ ${escapeHtml(row.mappingFlag)}</span>`;
+    if (String(state.flagMenuRow) === String(row.rowId)) {
+      html += ` <button type="button" class="flag-approve-btn" data-approve-row="${escapeHtml(String(row.rowId))}">Approve mapping</button>`;
+    }
+    return html;
   }
   return "";
 }
 
+function costActionSelectHtml(row) {
+  const cur = row.costAction || "estimate";
+  const opts = [
+    ["estimate", "Use OCI estimate"],
+    ["carry", "Carry over AWS cost"],
+    ["remove", "Remove from BOM"],
+  ].map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`).join("");
+  return `<select class="cell-select cost-action-select" data-cost-row="${escapeHtml(String(row.rowId))}">${opts}</select>`;
+}
+
+function applyCostOverride(rowId, value) {
+  if (!rowId) return;
+  if (value === "estimate" || !value) delete state.costOverrides[rowId];
+  else state.costOverrides[rowId] = value;
+  priceRows({ keepView: true });
+}
+
+function sizeFlagBadge(row) {
+  const badges = [];
+  const check = row.sizeCheck || {};
+  if (check.status === "impossible") {
+    badges.push(` <span class="size-flag size-flag-impossible" title="${escapeHtml(check.message || "")}">IMPOSSIBLE</span>`);
+  } else if (check.status === "baremetal") {
+    badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">BARE METAL</span>`);
+  }
+  if (row.rightsized) {
+    const orig = row.originalMemoryGb ? `from ${formatNumber(row.originalMemoryGb)} GB` : "to 8 GB/OCPU";
+    badges.push(` <span class="size-flag size-flag-rightsized" title="Memory trimmed ${escapeHtml(orig)}">RIGHTSIZED</span>`);
+  }
+  if (Array.isArray(row.lineItems) && row.lineItems.some((li) => li && li.isGpu)) {
+    badges.push(` <span class="size-flag size-flag-gpu" title="Mapped to an OCI GPU shape">GPU</span>`);
+  }
+  return badges.join("");
+}
+
 function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
+  // Source-service filter + bulk row actions are cloud-bill only.
+  if (!cloudBill) {
+    if (els.sourceFilterPanel) els.sourceFilterPanel.hidden = true;
+    if (els.bulkActionBar) els.bulkActionBar.hidden = true;
+  }
   if (cloudBill) {
     const columns = [
       {
+        key: "select",
+        label: "",
+        selector: true,
+        sortValue: () => 0,
+        render: (row) => `<input type="checkbox" class="row-select" data-row-select="${escapeHtml(String(row.rowId))}" ${state.selectedRows[row.rowId] ? "checked" : ""} aria-label="Select row"/>`,
+      },
+      {
         key: "sourceService",
         label: "Source service",
-        sortValue: (row) => row.fullServiceMapping?.sourceService || fallbackEntityName(row, "Source line"),
-        render: (row) => escapeHtml(row.fullServiceMapping?.sourceService || fallbackEntityName(row, "Source line")),
+        sortValue: (row) => rowSourceName(row),
+        render: (row) => escapeHtml(rowSourceName(row)),
       },
       {
         key: "sourceProduct",
@@ -2230,7 +2765,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
         key: "ociTarget",
         label: "OCI target",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
-        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review"),
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + mappingFlagBadge(row),
       },
       {
         key: "usage",
@@ -2251,6 +2786,12 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
         render: (row) => formatCurrency(row.monthly),
       },
       {
+        key: "costAction",
+        label: "Cost action",
+        sortValue: (row) => row.costAction || "",
+        render: (row) => costActionSelectHtml(row),
+      },
+      {
         key: "status",
         label: "Status",
         sortValue: (row) => {
@@ -2268,7 +2809,20 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
         },
       },
     ];
-    renderResultTableFromColumns(rows, columns);
+    // Left-sidebar source-service filter (built from ALL rows so you can re-check).
+    renderSourceFilter(rows);
+    const filtered = rows.filter((r) => !state.hiddenSources[rowSourceName(r)]);
+    // Default order: flagged ("may not be optimal") rows on top, then everything
+    // by total cost on the bill (source cost) descending.
+    const billCost = (r) => Number(r.sourceMonthlyCost || 0);
+    const ordered = filtered.slice().sort((a, b) => {
+      const fa = flagActive(a) ? 1 : 0;
+      const fb = flagActive(b) ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      return billCost(b) - billCost(a);
+    });
+    renderResultTableFromColumns(ordered, columns);
+    syncBulkBar();
     return;
   }
 
@@ -2329,10 +2883,22 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       render: (row) => escapeHtml(row.environment || "-"),
     },
     {
+      key: "region",
+      label: "Region",
+      sortValue: (row) => row.region || "",
+      render: (row) => escapeHtml(row.region || "-"),
+    },
+    {
+      key: "family",
+      label: "Processor Family",
+      sortValue: (row) => row.shapeUsed?.vendor || "",
+      render: (row) => familySelectHtml(row),
+    },
+    {
       key: "shape",
       label: "OCI shape",
       sortValue: (row) => row.shapeUsed?.label || "",
-      render: (row) => escapeHtml(row.shapeUsed?.label || "-"),
+      render: (row) => shapeSelectHtml(row),
     },
     {
       key: "ocpus",
@@ -2353,6 +2919,12 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       render: (row) => `${formatNumber(Number(row.specs?.blockStorageGb || 0) + Number(row.specs?.fileStorageGb || 0))} GB`,
     },
     {
+      key: "hours",
+      label: "Hrs/mo",
+      sortValue: (row) => Number(row.hoursPerMonth || 0),
+      render: (row) => formatNumber(row.hoursPerMonth || 730),
+    },
+    {
       key: "monthly",
       label: "Monthly",
       sortValue: (row) => Number(row.monthly || 0),
@@ -2370,22 +2942,123 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
 
 if (els.resultsTable) {
   els.resultsTable.addEventListener("click", (event) => {
+    // Approve an "may not be optimal" mapping (clears the flag for that row).
+    const approveBtn = event.target.closest("[data-approve-row]");
+    if (approveBtn) {
+      state.approvedFlags[approveBtn.dataset.approveRow] = true;
+      state.flagMenuRow = null;
+      rerenderResultsTable();
+      return;
+    }
+    // Click the flag badge to reveal the "Approve mapping" action.
+    const flagBadge = event.target.closest("[data-flag-row]");
+    if (flagBadge) {
+      const rid = flagBadge.dataset.flagRow;
+      state.flagMenuRow = String(state.flagMenuRow) === String(rid) ? null : rid;
+      rerenderResultsTable();
+      return;
+    }
     const button = event.target.closest("[data-result-sort]");
     if (!button) return;
     const key = button.dataset.resultSort;
     const direction = state.resultSort.key === key && state.resultSort.direction === "asc" ? "desc" : "asc";
     state.resultSort = { key, direction };
-    if (!state.pricing) return;
-    renderResultsTable(
-      state.pricing.rows || [],
-      state.pricing.fullServiceBeta,
-      state.pricing.intakeMode === "cloud_bill" || state.pricing.cloudBillMode,
-    );
+    rerenderResultsTable();
+  });
+  // Editable shape / shape-family dropdowns -> set per-row override and re-price.
+  els.resultsTable.addEventListener("change", (event) => {
+    const shapeSel = event.target.closest("select[data-shape-row]");
+    if (shapeSel) {
+      applyShapeOverride(shapeSel.dataset.shapeRow, shapeSel.dataset.shapeKind, shapeSel.value);
+      return;
+    }
+    const costSel = event.target.closest("select[data-cost-row]");
+    if (costSel) {
+      applyCostOverride(costSel.dataset.costRow, costSel.value);
+      return;
+    }
+    // Per-row selection checkbox.
+    const rowCb = event.target.closest("input[data-row-select]");
+    if (rowCb) {
+      const id = rowCb.dataset.rowSelect;
+      if (rowCb.checked) state.selectedRows[id] = true;
+      else delete state.selectedRows[id];
+      syncBulkBar();
+      return;
+    }
+    // Select-all (currently visible rows).
+    if (event.target.id === "selectAllRows") {
+      const visible = (state.pricing?.rows || []).filter((r) => !state.hiddenSources[rowSourceName(r)]);
+      if (event.target.checked) visible.forEach((r) => { state.selectedRows[r.rowId] = true; });
+      else visible.forEach((r) => { delete state.selectedRows[r.rowId]; });
+      rerenderResultsTable();
+    }
   });
 }
 
+// Source-service filter (left sidebar).
+els.sourceFilterList?.addEventListener("change", (event) => {
+  const cb = event.target.closest("input[data-source-name]");
+  if (!cb) return;
+  const name = cb.dataset.sourceName;
+  if (cb.checked) delete state.hiddenSources[name];
+  else state.hiddenSources[name] = true;
+  rerenderResultsTable();
+});
+els.sourceFilterAll?.addEventListener("click", () => {
+  state.hiddenSources = {};
+  rerenderResultsTable();
+});
+els.sourceFilterNone?.addEventListener("click", () => {
+  (state.pricing?.rows || []).forEach((r) => { state.hiddenSources[rowSourceName(r)] = true; });
+  rerenderResultsTable();
+});
+
+// Bulk cost-action controls.
+els.bulkApply?.addEventListener("click", () => {
+  applyBulkCostAction(els.bulkCostAction ? els.bulkCostAction.value : "estimate");
+});
+els.bulkClear?.addEventListener("click", () => {
+  state.selectedRows = {};
+  rerenderResultsTable();
+});
+
+const columnPickerBtn = document.querySelector("#columnPickerBtn");
+const columnPickerMenu = document.querySelector("#columnPickerMenu");
+function setColumnPickerOpen(open) {
+  if (!columnPickerMenu) return;
+  columnPickerMenu.hidden = !open;
+  if (columnPickerBtn) {
+    columnPickerBtn.textContent = open ? "Columns ▴" : "Columns ▾";
+    columnPickerBtn.setAttribute("aria-expanded", String(open));
+    columnPickerBtn.classList.toggle("is-open", open);
+  }
+}
+columnPickerBtn?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  setColumnPickerOpen(columnPickerMenu ? columnPickerMenu.hidden : false);
+});
+document.addEventListener("click", (e) => {
+  if (columnPickerMenu && !columnPickerMenu.hidden && !e.target.closest("#columnPicker")) {
+    setColumnPickerOpen(false);
+  }
+});
+
 els.fileInput.addEventListener("change", () => {
   uploadFile(els.fileInput.files[0]).catch(setUploadingError);
+});
+els.selectedDocClear?.addEventListener("click", () => {
+  state.lastUploadFile = null;
+  if (els.fileInput) els.fileInput.value = "";
+  showSelectedDoc(null);
+});
+els.switchToOnPrem?.addEventListener("click", () => {
+  state.intakeMode = "on_prem";
+  state.providerHint = "auto";
+  state.fullServiceBeta = false;
+  syncModeUi();
+  if (els.inventoryNotice) els.inventoryNotice.hidden = true;
+  if (state.lastUploadFile) uploadFile(state.lastUploadFile).catch(setUploadingError);
 });
 
 ["dragenter", "dragover"].forEach((eventName) => {
@@ -2429,34 +3102,178 @@ els.tableEditPrompt.addEventListener("keydown", (event) => {
 els.priceButton.addEventListener("click", showShapePage);
 els.priceShapeButton.addEventListener("click", priceRows);
 els.rerunPricing.addEventListener("click", priceRows);
-els.bomMatchToggle?.addEventListener("change", (event) => {
-  state.bomMatch = event.target.checked;
-});
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
 });
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
 });
-els.rightsizeSwitch?.addEventListener("click", (event) => {
-  const opt = event.target.closest("[data-rightsize]");
-  if (!opt) return;
-  state.rightsize = opt.dataset.rightsize === "true";
-  els.rightsizeSwitch.querySelectorAll(".mode-opt").forEach((b) => {
-    b.classList.toggle("is-active", b === opt);
-  });
-});
-function applyAutoUI() {
-  const section = els.processorPicker?.closest(".processor-section");
-  [section, els.shapeDropdown].forEach((el) => {
-    if (el) el.classList.toggle("shape-auto-disabled", state.auto);
+function setRightsizeMode(value) {
+  state.rightsize = value;
+  document.querySelectorAll(".rightsize-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", (b.dataset.rightsize === "true") === value);
   });
 }
-els.autoToggle?.addEventListener("change", (event) => {
-  state.auto = event.target.checked;
-  applyAutoUI();
+els.rightsizeSwitches?.forEach((sw) => {
+  sw.addEventListener("click", (event) => {
+    const opt = event.target.closest("[data-rightsize]");
+    if (!opt) return;
+    setRightsizeMode(opt.dataset.rightsize === "true");
+  });
 });
+
+function setRampYears(years) {
+  const newMonths = Math.max(12, Math.round(years) * 12);
+  const oldMonths = state.ramp.months || 36;
+  if (newMonths === oldMonths) return;
+  const factor = newMonths / oldMonths;
+  state.ramp.months = newMonths;
+  // Rescale existing dots so the curve shape is preserved over the new horizon.
+  state.ramp.points = (state.ramp.points || []).map((point) => ({
+    ...point,
+    month: Math.min(newMonths, Math.max(1, Math.round(point.month * factor))),
+  }));
+  // Make sure the final dot lands on the last month at the ceiling.
+  const sorted = state.ramp.points.slice().sort((a, b) => a.month - b.month);
+  if (sorted.length) {
+    sorted[sorted.length - 1].month = newMonths;
+    sorted[sorted.length - 1].monthly = state.ramp.ceiling;
+  }
+  if (els.rampPeakMonth) els.rampPeakMonth.max = String(newMonths);
+  document.querySelectorAll(".ramp-years-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", Number(b.dataset.rampYears) * 12 === newMonths);
+  });
+  renderConsumptionRamp();
+}
+document.querySelector(".ramp-years-switch")?.addEventListener("click", (event) => {
+  const opt = event.target.closest("[data-ramp-years]");
+  if (!opt) return;
+  setRampYears(Number(opt.dataset.rampYears));
+});
+els.hoursPerMonth?.addEventListener("change", (event) => {
+  const v = Number(event.target.value);
+  state.hoursPerMonth = v > 0 ? v : 730;
+  if (!(v > 0)) event.target.value = 730;
+});
+function applyAutoUI() {
+  // Grey out only the shape grid/detail (keep the processor picker clickable so you can switch back).
+  if (els.shapeDropdown) els.shapeDropdown.classList.toggle("shape-auto-disabled", state.auto);
+}
 els.exportExcel?.addEventListener("click", exportToExcel);
+els.exportJson?.addEventListener("click", exportWorkflowJson);
+els.loadWorkflow?.addEventListener("click", () => els.loadWorkflowFile?.click());
+els.loadPrevBom?.addEventListener("click", () => els.loadWorkflowFile?.click());
+els.loadWorkflowFile?.addEventListener("change", (event) => {
+  const file = event.target.files && event.target.files[0];
+  loadWorkflowFromFile(file);
+  event.target.value = "";
+});
+els.bomName?.addEventListener("input", (event) => {
+  state.bomName = event.target.value;
+});
+els.ociDiscount?.addEventListener("input", (event) => {
+  let v = Number(event.target.value);
+  if (!(v >= 0)) v = 0;
+  if (v > 100) v = 100;
+  state.ociDiscount = v;
+  // Reflect the discount immediately in the OCI total + ramp so the app matches
+  // the printout (which applies the same discount).
+  if (state.pricing) renderResults(state.pricing);
+});
+
+function renderCrossCloud() {
+  const wrap = els.crossCloudResults;
+  if (!wrap) return;
+  const raw = state.pricing?.crossCloud;
+  const ociMonthly = Number(state.pricing?.totals?.monthly || 0);
+  if (!raw) {
+    wrap.innerHTML = `<p class="cross-cloud-empty">Run a pricing estimate first to compare other clouds.</p>`;
+    return;
+  }
+  // Support both the new {bestMatch, topTier} shape and the older flat shape.
+  const hasModes = raw.bestMatch || raw.topTier;
+  const cc = hasModes ? (state.crossCloudTopTier ? raw.topTier : raw.bestMatch) : raw;
+  const toggle = hasModes
+    ? `<div class="mode-switch cross-cloud-switch" role="group" aria-label="Equivalent shape mode">
+         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "" : "is-active"}" data-cc-tier="best">Best match</button>
+         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "is-active" : ""}" data-cc-tier="top">Top of the line</button>
+       </div>`
+    : "";
+  const cards = [];
+  cards.push(`
+    <div class="cross-cloud-card cross-cloud-oci">
+      <span class="cross-cloud-card-name">Oracle Cloud (this estimate)</span>
+      <span class="cross-cloud-card-monthly">${formatCurrency(ociMonthly)}<small>/mo</small></span>
+      <span class="cross-cloud-card-annual">${formatCurrency(ociMonthly * 12)}/yr</span>
+    </div>
+  `);
+  const tier = state.crossCloudTopTier;
+  const basisLabel = (v) => {
+    if (v.basis === "actual bill") return "your actual billed cost";
+    if (v.carriedRows) return `compute estimated · ${v.carriedRows} services at billed cost`;
+    if (v.liveRows) return `live AWS Price List API (${v.liveRows} priced live)`;
+    if (tier) return "newest-generation equivalent shape";
+    if (v.basis === "actual") return "from your source-cloud instances";
+    if (v.basis === "mixed") return `${v.actualRows} actual · ${v.estimatedRows} equivalent`;
+    return "equivalent shape match";
+  };
+  ["aws", "azure"].forEach((key) => {
+    const v = cc[key];
+    if (!v || !v.priced) return;
+    const monthly = Number(v.monthlyTotal || 0);
+    const delta = monthly - ociMonthly;
+    const deltaLabel = ociMonthly > 0
+      ? `${delta >= 0 ? "+" : "−"}${formatCurrency(Math.abs(delta))}/mo vs OCI`
+      : "";
+    // Reversed: other cloud cheaper than OCI (negative) = red; pricier = green.
+    const deltaClass = delta >= 0 ? "cross-cloud-down" : "cross-cloud-up";
+    cards.push(`
+      <div class="cross-cloud-card">
+        <span class="cross-cloud-card-name">${escapeHtml(v.label || key.toUpperCase())}</span>
+        <span class="cross-cloud-card-monthly">${formatCurrency(monthly)}<small>/mo</small></span>
+        <span class="cross-cloud-card-annual">${formatCurrency(Number(v.annualTotal || monthly * 12))}/yr</span>
+        ${deltaLabel ? `<span class="cross-cloud-delta ${deltaClass}">${deltaLabel}</span>` : ""}
+        <span class="cross-cloud-basis">${escapeHtml(basisLabel(v))}</span>
+      </div>
+    `);
+  });
+  const gcp = cc.gcp;
+  if (gcp && !gcp.priced) {
+    cards.push(`
+      <div class="cross-cloud-card cross-cloud-muted">
+        <span class="cross-cloud-card-name">${escapeHtml(gcp.label || "Google Cloud")}</span>
+        <span class="cross-cloud-card-note">${escapeHtml(gcp.note || "Sizing only")}</span>
+      </div>
+    `);
+  }
+  const srcCloud = raw.sourceCloud;
+  const note = raw.cloudBillMode
+    ? `Your ${srcCloud === "azure" ? "Azure" : "AWS"} total is your actual billed cost — no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services (storage, data transfer, managed services) at their billed cost. For directional comparison only — not a quote.`
+    : tier
+    ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote."
+    : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote.";
+  wrap.innerHTML = `
+    ${toggle ? `<div class="cross-cloud-toolbar">${toggle}</div>` : ""}
+    <div class="cross-cloud-grid">${cards.join("")}</div>
+    <p class="cross-cloud-note">${note}</p>
+  `;
+  wrap.querySelectorAll("[data-cc-tier]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.crossCloudTopTier = btn.dataset.ccTier === "top";
+      renderCrossCloud();
+    });
+  });
+}
+
+els.crossCloudTile?.addEventListener("click", () => {
+  const wrap = els.crossCloudResults;
+  if (!wrap) return;
+  const willShow = wrap.hidden;
+  if (willShow) renderCrossCloud();
+  wrap.hidden = !willShow;
+  els.crossCloudTile.setAttribute("aria-expanded", String(willShow));
+  els.crossCloudTile.classList.toggle("is-open", willShow);
+});
 els.backToReview.addEventListener("click", showIntakePage);
 els.backToReviewFromShape.addEventListener("click", showIntakePage);
 els.steps.forEach((step) => {
@@ -2467,6 +3284,11 @@ els.modeCloudBill?.addEventListener("click", () => setIntakeMode("cloud_bill"));
 els.providerHint?.addEventListener("change", () => {
   state.providerHint = els.providerHint.value || "auto";
   syncModeUi();
+  // If a cloud bill is already loaded, re-parse it with the chosen provider so
+  // mapping uses the right cloud (no need to re-pick the file).
+  if (state.intakeMode === "cloud_bill" && state.lastUploadFile) {
+    uploadFile(state.lastUploadFile);
+  }
 });
 syncModeUi();
 

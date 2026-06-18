@@ -1,6 +1,25 @@
+# OS / editor junk
+.DS_Store
+~$*
+
+# Python
 __pycache__/
+.venv/
 .env.local
+
+# Node
 node_modules
+
+# QA scratch
 qa/
+
+# Uploaded bills / inventory (keep the folder, not its contents)
 uploads/*
 !uploads/.gitkeep
+
+# Generated / preview workbooks
+*.xlsx
+
+# Reference docs and test data (not source)
+*.pdf
+*.csv

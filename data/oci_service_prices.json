@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "source": "OCI_PaaSIaaS_PriceList_20260611.pdf (Oracle PaaS/IaaS Global Price List, 11 Jun 2026)",
+    "currency": "USD",
+    "purpose": "Per-unit OCI rates for the services the cloud-bill mapping resolves to, so a source-cloud usage quantity can be re-priced on OCI (e.g. GB of S3 -> same GB on OCI Object Storage). Rates are pay-as-you-go / metered. Keyed by the ociProduct names used in service_mapping.json.",
+    "usageBasis": "storage = usage quantity treated as GB-month; transfer = GB; count = per-unit/month"
+  },
+  "services": {
+    "OCI Object Storage": {"sku": "B86080", "rate": 0.0300, "unit": "GB per month", "basis": "storage"},
+    "OCI Block Volumes": {"sku": "B91961", "rate": 0.0255, "unit": "GB per month", "basis": "storage", "perfUnitsSku": "B91962", "perfUnitsRate": 0.0017},
+    "OCI File Storage": {"sku": "B89057", "rate": 0.3000, "unit": "GB per month", "basis": "storage", "note": "Standard File Storage tier."},
+    "OCI Archive Storage": {"sku": "B89145", "rate": 0.0030, "unit": "GB per month", "basis": "storage"},
+    "OCI Outbound Data Transfer": {"sku": "B87062", "rate": 0.0085, "unit": "GB", "basis": "transfer", "note": "First 10 TB/month is free."},
+    "OCI Secure Desktops": {"sku": "B95518", "rate": 20.00, "unit": "desktop per month", "basis": "count"}
+  }
+}

@@ -1,0 +1,1913 @@
+{
+ "groupOrder": [
+  "Compute",
+  "Database",
+  "Storage",
+  "Networking",
+  "Support",
+  "Obs. & Management",
+  "Security",
+  "AI & Machine Learning",
+  "DevOps",
+  "Other Services",
+  "Marketplace"
+ ],
+ "groupsFromRef": [
+  "Compute",
+  "Database",
+  "Storage",
+  "Networking",
+  "Security",
+  "Obs. & Management",
+  "AI & Machine Learning",
+  "DevOps",
+  "Other Services",
+  "Support",
+  "Marketplace"
+ ],
+ "entries": [
+  {
+   "aws": "Compute Savings Plans",
+   "awsNorm": "computesavingsplans",
+   "ociEquivalent": "Included",
+   "group": "Compute",
+   "free": true
+  },
+  {
+   "aws": "Savings Plans",
+   "awsNorm": "savingsplans",
+   "ociEquivalent": "Included",
+   "group": "Compute",
+   "free": true
+  },
+  {
+   "aws": "EC2 Instance Savings Plans",
+   "awsNorm": "ec2instancesavingsplans",
+   "ociEquivalent": "Included",
+   "group": "Compute",
+   "free": true
+  },
+  {
+   "aws": "Amazon WorkSpaces Applications",
+   "awsNorm": "amazon workspaces applications",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "WorkSpaces Applications",
+   "awsNorm": "workspaces applications",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Elastic Compute Cloud",
+   "awsNorm": "elastic compute cloud",
+   "ociEquivalent": "Compute, Storage, & Networking",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "Savings Plans for AWS Compute usage",
+   "awsNorm": "savings plans for aws compute usage",
+   "ociEquivalent": "Included",
+   "group": "Compute",
+   "free": true
+  },
+  {
+   "aws": "VMware Aria Cost powered by CloudHealth",
+   "awsNorm": "vmware aria cost powered by cloudhealth",
+   "ociEquivalent": "VMware Aria Cost powered by CloudHealth",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "RDS",
+   "awsNorm": "rds",
+   "ociEquivalent": "DBaaS",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Simple Storage Service",
+   "awsNorm": "simple storage service",
+   "ociEquivalent": "Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Support (Enterprise)",
+   "awsNorm": "support enterprise",
+   "ociEquivalent": "Support",
+   "group": "Support",
+   "free": true
+  },
+  {
+   "aws": "Data Transfer",
+   "awsNorm": "data transfer",
+   "ociEquivalent": "Data Transfer (10TB egress FREE)",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "Elastic Container Service",
+   "awsNorm": "elastic container service",
+   "ociEquivalent": "Container Instances",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "CloudWatch",
+   "awsNorm": "cloudwatch",
+   "ociEquivalent": "Observability and Management",
+   "group": "Obs. & Management",
+   "free": false
+  },
+  {
+   "aws": "OpenSearch",
+   "awsNorm": "opensearch",
+   "ociEquivalent": "Search with OpenSearch",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Elasticache",
+   "awsNorm": "elasticache",
+   "ociEquivalent": "Cache with Redis",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Direct Connect",
+   "awsNorm": "direct connect",
+   "ociEquivalent": "FastConnect",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "CloudTrail",
+   "awsNorm": "cloudtrail",
+   "ociEquivalent": "Observability and Management - Audit",
+   "group": "Obs. & Management",
+   "free": true
+  },
+  {
+   "aws": "Transfer Family",
+   "awsNorm": "transfer family",
+   "ociEquivalent": "*SOA Suite on Marketplace in OCI/SFTP Go",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "Elastic Load Balancing",
+   "awsNorm": "elastic load balancing",
+   "ociEquivalent": "Load Balancer",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "Virtual Private Cloud",
+   "awsNorm": "virtual private cloud",
+   "ociEquivalent": "Virtual Cloud Network (VCN)",
+   "group": "Networking",
+   "free": true
+  },
+  {
+   "aws": "Amplify",
+   "awsNorm": "amplify",
+   "ociEquivalent": "Visual Builder Studio",
+   "group": "DevOps",
+   "free": true
+  },
+  {
+   "aws": "S3 Glacier Deep Archive",
+   "awsNorm": "s3 glacier deep archive",
+   "ociEquivalent": "Archive Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Redshift",
+   "awsNorm": "redshift",
+   "ociEquivalent": "Autonomous Data Warehouse",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "DynamoDB",
+   "awsNorm": "dynamodb",
+   "ociEquivalent": "NoSQL Database Cloud Service",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Elastic File System",
+   "awsNorm": "elastic file system",
+   "ociEquivalent": "File Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "CloudFront",
+   "awsNorm": "cloudfront",
+   "ociEquivalent": "*Third-Party Vendor (Akamai / CloudFlare)",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "vSRX Next Generation Virtual Firewall",
+   "awsNorm": "vsrx next generation virtual firewall",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Backup",
+   "awsNorm": "backup",
+   "ociEquivalent": "Backup Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Key Management Service",
+   "awsNorm": "key management service",
+   "ociEquivalent": "Key Management Service (First 20 Keys FREE)",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Elastic Container Service For Kubernetes",
+   "awsNorm": "elastic container service for kubernetes",
+   "ociEquivalent": "Oracle Kubernetes Engine (OKE)",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "Database Migration Service",
+   "awsNorm": "database migration service",
+   "ociEquivalent": "GoldenGate",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Route 53",
+   "awsNorm": "route 53",
+   "ociEquivalent": "DNS",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "Config",
+   "awsNorm": "config",
+   "ociEquivalent": "Cloud Guard/Security Zones",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "PostgreSQL on Ubuntu 20.04",
+   "awsNorm": "postgresql on ubuntu 20 04",
+   "ociEquivalent": "PostgreSQL Service",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Directory Service",
+   "awsNorm": "directory service",
+   "ociEquivalent": "Managed Microsoft Active Directory",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "API Gateway",
+   "awsNorm": "api gateway",
+   "ociEquivalent": "API Management",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "WAF",
+   "awsNorm": "waf",
+   "ociEquivalent": "Web Application Firewall",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Global Accelerator",
+   "awsNorm": "global accelerator",
+   "ociEquivalent": "Networking",
+   "group": "Networking",
+   "free": true
+  },
+  {
+   "aws": "Secrets Manager",
+   "awsNorm": "secrets manager",
+   "ociEquivalent": "Secrets Management with OCI Vault",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Kinesis",
+   "awsNorm": "kinesis",
+   "ociEquivalent": "Streaming",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Storage Gateway Deep Archive",
+   "awsNorm": "storage gateway deep archive",
+   "ociEquivalent": "Archive Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Simple Queue Service",
+   "awsNorm": "simple queue service",
+   "ociEquivalent": "Queue",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Kinesis Firehose",
+   "awsNorm": "kinesis firehose",
+   "ociEquivalent": "Streaming",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Simple Email Service",
+   "awsNorm": "simple email service",
+   "ociEquivalent": "Email Delivery",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Security Hub",
+   "awsNorm": "security hub",
+   "ociEquivalent": "Cloud Guard",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "MQ",
+   "awsNorm": "mq",
+   "ociEquivalent": "*Queue (Further Discovery Required)",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Simple Notification Service",
+   "awsNorm": "simple notification service",
+   "ociEquivalent": "Notifications",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Lambda",
+   "awsNorm": "lambda",
+   "ociEquivalent": "Functions",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "Lightsail",
+   "awsNorm": "lightsail",
+   "ociEquivalent": "Compute & Storage",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "GuardDuty",
+   "awsNorm": "guardduty",
+   "ociEquivalent": "Threat Detector",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "EC2 Container Registry",
+   "awsNorm": "ec2 container registry",
+   "ociEquivalent": "Container Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Pinpoint",
+   "awsNorm": "pinpoint",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Systems Manager",
+   "awsNorm": "systems manager",
+   "ociEquivalent": "Oracle Management Cloud",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Rekognition",
+   "awsNorm": "rekognition",
+   "ociEquivalent": "Vision",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Glue",
+   "awsNorm": "glue",
+   "ociEquivalent": "Data Integration",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "SimpleDB",
+   "awsNorm": "simpledb",
+   "ociEquivalent": "NoSQL Database Cloud Service",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "QuickSight",
+   "awsNorm": "quicksight",
+   "ociEquivalent": "Oracle Analytics Cloud",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Cognito",
+   "awsNorm": "cognito",
+   "ociEquivalent": "Identity and Access Management with Domains",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Relational Database Service",
+   "awsNorm": "relational database service",
+   "ociEquivalent": "DBaaS",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Cost Explorer",
+   "awsNorm": "cost explorer",
+   "ociEquivalent": "Cost Estimator",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Dynamo DB",
+   "awsNorm": "dynamo db",
+   "ociEquivalent": "NoSQL Database Cloud Service",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "FSx",
+   "awsNorm": "fsx",
+   "ociEquivalent": "*ZFS (More Info Needed)",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Location Service",
+   "awsNorm": "location service",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Managed Streaming for Apache Kafka",
+   "awsNorm": "managed streaming for apache kafka",
+   "ociEquivalent": "Streaming With Apache Kafka",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Support (Business)",
+   "awsNorm": "support business",
+   "ociEquivalent": "Support",
+   "group": "Support",
+   "free": true
+  },
+  {
+   "aws": "Inspector",
+   "awsNorm": "inspector",
+   "ociEquivalent": "Vulnerability Scanning",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Support (Developer)",
+   "awsNorm": "support developer",
+   "ociEquivalent": "Support",
+   "group": "Support",
+   "free": true
+  },
+  {
+   "aws": "CodeBuild",
+   "awsNorm": "codebuild",
+   "ociEquivalent": "DevOps Service",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "CodePipeline",
+   "awsNorm": "codepipeline",
+   "ociEquivalent": "DevOps Service",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "CloudFormation",
+   "awsNorm": "cloudformation",
+   "ociEquivalent": "Resource Manager",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "CloudWatch Events",
+   "awsNorm": "cloudwatch events",
+   "ociEquivalent": "Events",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "X-Ray",
+   "awsNorm": "x ray",
+   "ociEquivalent": "Application Performance Monitoring",
+   "group": "Obs. & Management",
+   "free": false
+  },
+  {
+   "aws": "Textract",
+   "awsNorm": "textract",
+   "ociEquivalent": "Document Understanding - OCR",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "CodeArtifact",
+   "awsNorm": "codeartifact",
+   "ociEquivalent": "Artifact Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Registrar",
+   "awsNorm": "registrar",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "End User Messaging",
+   "awsNorm": "end user messaging",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Elastic Container Registry Public",
+   "awsNorm": "elastic container registry public",
+   "ociEquivalent": "Container Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Athena",
+   "awsNorm": "athena",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Service Catalog",
+   "awsNorm": "service catalog",
+   "ociEquivalent": "Service Catalog",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Marketplace - Drata Security & Compliance Automation Platform",
+   "awsNorm": "marketplace drata security compliance automation platform",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Translate",
+   "awsNorm": "translate",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Comprehend",
+   "awsNorm": "comprehend",
+   "ociEquivalent": "Document Understanding",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Savings Plan For AWS Compute Usage",
+   "awsNorm": "savings plan for aws compute usage",
+   "ociEquivalent": "Included",
+   "group": "Compute",
+   "free": true
+  },
+  {
+   "aws": "OpenSearch Service",
+   "awsNorm": "opensearch service",
+   "ociEquivalent": "Search with OpenSearch",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "EC2 Container Registry (ECR)",
+   "awsNorm": "ec2 container registry ecr",
+   "ociEquivalent": "Container Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Detective",
+   "awsNorm": "detective",
+   "ociEquivalent": "Cloud Guard/Security Advisor",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Identity & Access Management Access Analyzer",
+   "awsNorm": "identity access management access analyzer",
+   "ociEquivalent": "Security Zones / Cloud Guard",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "DocumentDB (with MongoDB compatability)",
+   "awsNorm": "documentdb with mongodb compatability",
+   "ociEquivalent": "Autonomous JSON",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Amazon Elastic Compute Cloud",
+   "awsNorm": "amazon elastic compute cloud",
+   "ociEquivalent": "Compute, Storage, & Networking",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "Amazon Simple Storage Service",
+   "awsNorm": "amazon simple storage service",
+   "ociEquivalent": "Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "AWS Support (Enterprise)",
+   "awsNorm": "aws support enterprise",
+   "ociEquivalent": "Support",
+   "group": "Support",
+   "free": true
+  },
+  {
+   "aws": "Amazon ElastiCache",
+   "awsNorm": "amazon elasticache",
+   "ociEquivalent": "Distributed Cache using Redis",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Amazon Relational Database Service",
+   "awsNorm": "amazon relational database service",
+   "ociEquivalent": "DBaaS",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "AWS Data Transfer",
+   "awsNorm": "aws data transfer",
+   "ociEquivalent": "Data Transfer (10TB egress FREE)",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "AmazonCloudWatch",
+   "awsNorm": "amazoncloudwatch",
+   "ociEquivalent": "Observability and Management",
+   "group": "Obs. & Management",
+   "free": false
+  },
+  {
+   "aws": "Amazon Kinesis",
+   "awsNorm": "amazon kinesis",
+   "ociEquivalent": "Streaming",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon OpenSearch Service",
+   "awsNorm": "amazon opensearch service",
+   "ociEquivalent": "Search with OpenSearch",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Amazon Virtual Private Cloud",
+   "awsNorm": "amazon virtual private cloud",
+   "ociEquivalent": "Virtual Cloud Network (VCN)",
+   "group": "Networking",
+   "free": true
+  },
+  {
+   "aws": "Amazon Managed Streaming for Apache Kafka",
+   "awsNorm": "amazon managed streaming for apache kafka",
+   "ociEquivalent": "Streaming With Apache Kafka",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon GuardDuty",
+   "awsNorm": "amazon guardduty",
+   "ociEquivalent": "Threat Detector",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon Elastic Container Service",
+   "awsNorm": "amazon elastic container service",
+   "ociEquivalent": "Container Instances",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "AWS Config",
+   "awsNorm": "aws config",
+   "ociEquivalent": "Cloud Guard/Security Zones",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon Inspector",
+   "awsNorm": "amazon inspector",
+   "ociEquivalent": "Vulnerability Scanning",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon Route 53",
+   "awsNorm": "amazon route 53",
+   "ociEquivalent": "DNS",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "AWS Backup",
+   "awsNorm": "aws backup",
+   "ociEquivalent": "Backup Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "AWS Database Migration Service",
+   "awsNorm": "aws database migration service",
+   "ociEquivalent": "GoldenGate",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Lambda",
+   "awsNorm": "aws lambda",
+   "ociEquivalent": "Functions",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "Amazon DynamoDB",
+   "awsNorm": "amazon dynamodb",
+   "ociEquivalent": "NoSQL Database Cloud Service",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Amazon S3 Glacier Deep Archive",
+   "awsNorm": "amazon s3 glacier deep archive",
+   "ociEquivalent": "Archive Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "AWS Transfer Family",
+   "awsNorm": "aws transfer family",
+   "ociEquivalent": "SOA Suite on Marketplace in OCI/SFTP Go",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "Amazon Elastic MapReduce",
+   "awsNorm": "amazon elastic mapreduce",
+   "ociEquivalent": "Data Flow",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Elastic MapReduce",
+   "awsNorm": "elastic mapreduce",
+   "ociEquivalent": "Data Flow",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon WorkSpaces",
+   "awsNorm": "amazon workspaces",
+   "ociEquivalent": "Secure Desktops",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "DynamoDB Accelerator (DAX)",
+   "awsNorm": "dynamodb accelerator dax",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "AWS Key Management Service",
+   "awsNorm": "aws key management service",
+   "ociEquivalent": "Key Management Service",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "AWS Device Farm",
+   "awsNorm": "aws device farm",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Amazon Simple Queue Service",
+   "awsNorm": "amazon simple queue service",
+   "ociEquivalent": "Queue",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon EC2 Container Registry (ECR)",
+   "awsNorm": "amazon ec2 container registry ecr",
+   "ociEquivalent": "Container Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Amazon MQ",
+   "awsNorm": "amazon mq",
+   "ociEquivalent": "*Queue (Further Discovery Required)",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AWS Security Hub",
+   "awsNorm": "aws security hub",
+   "ociEquivalent": "Cloud Guard",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "AWS Certificate Manager",
+   "awsNorm": "aws certificate manager",
+   "ociEquivalent": "Certificates",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Certificate Manager",
+   "awsNorm": "certificate manager",
+   "ociEquivalent": "Certificates",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon Managed Workflows for Apache Airflow",
+   "awsNorm": "amazon managed workflows for apache airflow",
+   "ociEquivalent": "*Data Integration / OKE",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Managed Workflows for Apache Airflow",
+   "awsNorm": "managed workflows for apache airflow",
+   "ociEquivalent": "*Data Integration / OKE",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon Athena",
+   "awsNorm": "amazon athena",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon SageMaker",
+   "awsNorm": "amazon sagemaker",
+   "ociEquivalent": "Data Science",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Elastic Container Service for Kubernetes",
+   "awsNorm": "amazon elastic container service for kubernetes",
+   "ociEquivalent": "Oracle Kubernetes Engine (OKE)",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "AWS Secrets Manager",
+   "awsNorm": "aws secrets manager",
+   "ociEquivalent": "Secrets Management with OCI Vault",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon Elastic File System",
+   "awsNorm": "amazon elastic file system",
+   "ociEquivalent": "File Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "AWS Cost Explorer",
+   "awsNorm": "aws cost explorer",
+   "ociEquivalent": "Cost Estimator",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "AWS Direct Connect",
+   "awsNorm": "aws direct connect",
+   "ociEquivalent": "FastConnect",
+   "group": "Networking",
+   "free": false
+  },
+  {
+   "aws": "Amazon Kinesis Analytics",
+   "awsNorm": "amazon kinesis analytics",
+   "ociEquivalent": "Streaming Analytics",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Kinesis Analytics",
+   "awsNorm": "kinesis analytics",
+   "ociEquivalent": "Streaming Analytics",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Global Accelerator",
+   "awsNorm": "aws global accelerator",
+   "ociEquivalent": "Global Network",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon QuickSight",
+   "awsNorm": "amazon quicksight",
+   "ociEquivalent": "Oracle Analytics Cloud",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Compute Optimizer",
+   "awsNorm": "aws compute optimizer",
+   "ociEquivalent": "Cloud Advisor",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Compute Optimizer",
+   "awsNorm": "compute optimizer",
+   "ociEquivalent": "Cloud Advisor",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Amazon API Gateway",
+   "awsNorm": "amazon api gateway",
+   "ociEquivalent": "API Management",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AWS Directory Service",
+   "awsNorm": "aws directory service",
+   "ociEquivalent": "Managed Microsoft Active Directory",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Amazon Macie",
+   "awsNorm": "amazon macie",
+   "ociEquivalent": "Data Safe",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon CloudFront",
+   "awsNorm": "amazon cloudfront",
+   "ociEquivalent": "*Third-Party Vendor (Akamai / CloudFlare)",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Amazon Managed Grafana",
+   "awsNorm": "amazon managed grafana",
+   "ociEquivalent": "Grafana (opensource on Compute)",
+   "group": "Obs. & Management",
+   "free": false
+  },
+  {
+   "aws": "Managed Grafana",
+   "awsNorm": "managed grafana",
+   "ociEquivalent": "Grafana (opensource on Compute)",
+   "group": "Obs. & Management",
+   "free": false
+  },
+  {
+   "aws": "AWS Systems Manager",
+   "awsNorm": "aws systems manager",
+   "ociEquivalent": "Oracle Management Cloud",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Amazon Detective",
+   "awsNorm": "amazon detective",
+   "ociEquivalent": "Cloud Guard",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Amazon Simple Notification Service",
+   "awsNorm": "amazon simple notification service",
+   "ociEquivalent": "Notifications",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AWS Fault Injection Simulator",
+   "awsNorm": "aws fault injection simulator",
+   "ociEquivalent": "Fault Domains",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Fault Injection Simulator",
+   "awsNorm": "fault injection simulator",
+   "ociEquivalent": "Fault Domains",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon Pinpoint",
+   "awsNorm": "amazon pinpoint",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Glacier",
+   "awsNorm": "glacier",
+   "ociEquivalent": "Archive Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Amazon Glacier",
+   "awsNorm": "amazon glacier",
+   "ociEquivalent": "Archive Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Amazon Kinesis Firehose",
+   "awsNorm": "amazon kinesis firehose",
+   "ociEquivalent": "Streaming",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Cloud Map",
+   "awsNorm": "cloud map",
+   "ociEquivalent": "Resource Manager",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "AWS Cloud Map",
+   "awsNorm": "aws cloud map",
+   "ociEquivalent": "Resource Manager",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Budgets",
+   "awsNorm": "budgets",
+   "ociEquivalent": "Budgets",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "AWS Budgets",
+   "awsNorm": "aws budgets",
+   "ociEquivalent": "Budgets",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Amazon Location Service",
+   "awsNorm": "amazon location service",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon Neptune",
+   "awsNorm": "amazon neptune",
+   "ociEquivalent": "Autonomous Database",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Neptune",
+   "awsNorm": "neptune",
+   "ociEquivalent": "Autonomous Database",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Amazon Redshift",
+   "awsNorm": "amazon redshift",
+   "ociEquivalent": "Autonomous Data Warehouse",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "Amazon Simple Email Service",
+   "awsNorm": "amazon simple email service",
+   "ociEquivalent": "Email Delivery",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon SimpleDB",
+   "awsNorm": "amazon simpledb",
+   "ociEquivalent": "NoSQL Database Cloud Service",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "WorkDocs",
+   "awsNorm": "workdocs",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon WorkDocs",
+   "awsNorm": "amazon workdocs",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Amplify",
+   "awsNorm": "aws amplify",
+   "ociEquivalent": "Visual Builder Studio",
+   "group": "DevOps",
+   "free": true
+  },
+  {
+   "aws": "AWS CloudTrail",
+   "awsNorm": "aws cloudtrail",
+   "ociEquivalent": "Observability and Management - Audit",
+   "group": "Obs. & Management",
+   "free": true
+  },
+  {
+   "aws": "CodeCommit",
+   "awsNorm": "codecommit",
+   "ociEquivalent": "DevOps Service",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AWS CodeCommit",
+   "awsNorm": "aws codecommit",
+   "ociEquivalent": "DevOps Service",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Migration Hub Refactor Spaces",
+   "awsNorm": "migration hub refactor spaces",
+   "ociEquivalent": "OCM/GoldenGate",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Migration Hub Refactor Spaces",
+   "awsNorm": "aws migration hub refactor spaces",
+   "ociEquivalent": "OCM/GoldenGate",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Storage Gateway",
+   "awsNorm": "aws storage gateway",
+   "ociEquivalent": "OCI FS / ZFS Appliance",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "AWS X-Ray",
+   "awsNorm": "aws x ray",
+   "ociEquivalent": "Application Performance Monitoring",
+   "group": "Obs. & Management",
+   "free": false
+  },
+  {
+   "aws": "AWS Glue",
+   "awsNorm": "aws glue",
+   "ociEquivalent": "Data Integration",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Prisma Cloud (Annual Contract)",
+   "awsNorm": "prisma cloud annual contract",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "[Private Offer on AWS MP] MongoDB Atlas on AWS - Contract with Usage",
+   "awsNorm": "private offer on aws mp mongodb atlas on aws contract with usage",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "SUSE Linux Enterprise Server for SAP Applications 15 SP3",
+   "awsNorm": "suse linux enterprise server for sap applications 15 sp3",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "VM-Series Next-Gen Virtual Firewall w/ Advanced Security Subs (PAYG)",
+   "awsNorm": "vm series next gen virtual firewall w advanced security subs payg",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Shield",
+   "awsNorm": "shield",
+   "ociEquivalent": "Web Application Firewall",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "AWS Shield",
+   "awsNorm": "aws shield",
+   "ociEquivalent": "Web Application Firewall",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Amazon FSx",
+   "awsNorm": "amazon fsx",
+   "ociEquivalent": "*ZFS (More Info Needed)",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Claude (Amazon Bedrock Edition)",
+   "awsNorm": "claude amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "AWS WAF",
+   "awsNorm": "aws waf",
+   "ociEquivalent": "Web Application Firewall",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Kendra",
+   "awsNorm": "kendra",
+   "ociEquivalent": "",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Kendra",
+   "awsNorm": "amazon kendra",
+   "ociEquivalent": "",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Network Firewall",
+   "awsNorm": "network firewall",
+   "ociEquivalent": "Network Firewall",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "AWS Network Firewall",
+   "awsNorm": "aws network firewall",
+   "ociEquivalent": "Network Firewall",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "CloudHSM",
+   "awsNorm": "cloudhsm",
+   "ociEquivalent": "Dedicated External Key Management",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "AWS CloudHSM",
+   "awsNorm": "aws cloudhsm",
+   "ociEquivalent": "Dedicated External Key Management",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Cloud WAN",
+   "awsNorm": "cloud wan",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "AWS Cloud WAN",
+   "awsNorm": "aws cloud wan",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Elastic Disaster Recovery",
+   "awsNorm": "elastic disaster recovery",
+   "ociEquivalent": "Full Stack Disaster Recovery",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Elastic Disaster Recovery",
+   "awsNorm": "aws elastic disaster recovery",
+   "ociEquivalent": "Full Stack Disaster Recovery",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon DocumentDB (with MongoDB compatibility)",
+   "awsNorm": "amazon documentdb with mongodb compatibility",
+   "ociEquivalent": "Autonomous JSON",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "AWS Service Catalog",
+   "awsNorm": "aws service catalog",
+   "ociEquivalent": "Service Catalog",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "QNX Neutrino RTOS 7.1",
+   "awsNorm": "qnx neutrino rtos 7 1",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Q",
+   "awsNorm": "q",
+   "ociEquivalent": "Digital Assistant",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Q",
+   "awsNorm": "amazon q",
+   "ociEquivalent": "Digital Assistant",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Lightsail",
+   "awsNorm": "amazon lightsail",
+   "ociEquivalent": "Compute & Storage",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "DevOps Guru",
+   "awsNorm": "devops guru",
+   "ociEquivalent": "DevOps Service",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon DevOps Guru",
+   "awsNorm": "amazon devops guru",
+   "ociEquivalent": "DevOps Service",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AppStream",
+   "awsNorm": "appstream",
+   "ociEquivalent": "*Marketplace Image - GO-Global Graphon",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Amazon AppStream",
+   "awsNorm": "amazon appstream",
+   "ociEquivalent": "*Marketplace Image - GO-Global Graphon",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Claude 3.5 Sonnet (Amazon Bedrock Edition)",
+   "awsNorm": "claude 3 5 sonnet amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "SDXL V1.0 (Amazon Bedrock Edition)",
+   "awsNorm": "sdxl v1 0 amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Claude 3 Opus (Amazon Bedrock Edition)",
+   "awsNorm": "claude 3 opus amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Claude 3 Sonnet (Amazon Bedrock Edition)",
+   "awsNorm": "claude 3 sonnet amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "AWS CodeArtifact",
+   "awsNorm": "aws codeartifact",
+   "ociEquivalent": "Artifact Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Contact Center Telecommunications (service sold by AMCS, LLC)",
+   "awsNorm": "contact center telecommunications service sold by amcs llc",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Machine Learning",
+   "awsNorm": "machine learning",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Machine Learning",
+   "awsNorm": "amazon machine learning",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Bedrock",
+   "awsNorm": "bedrock",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Bedrock",
+   "awsNorm": "amazon bedrock",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Claude 3 Haiku (Amazon Bedrock Edition)",
+   "awsNorm": "claude 3 haiku amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Textract",
+   "awsNorm": "amazon textract",
+   "ociEquivalent": "Document Understanding - OCR",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Amazon Cognito",
+   "awsNorm": "amazon cognito",
+   "ociEquivalent": "Identity and Access Management with Domains",
+   "group": "Security",
+   "free": false
+  },
+  {
+   "aws": "Meta Llama 2 Chat 13B (Amazon Bedrock Edition)",
+   "awsNorm": "meta llama 2 chat 13b amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Quantum Ledger Database",
+   "awsNorm": "quantum ledger database",
+   "ociEquivalent": "Blockchain Platform",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon Quantum Ledger Database",
+   "awsNorm": "amazon quantum ledger database",
+   "ociEquivalent": "Blockchain Platform",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Firewall Manager",
+   "awsNorm": "firewall manager",
+   "ociEquivalent": "Firewall",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "AWS Firewall Manager",
+   "awsNorm": "aws firewall manager",
+   "ociEquivalent": "Firewall",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Connect",
+   "awsNorm": "connect",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Amazon Connect",
+   "awsNorm": "amazon connect",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "IoT",
+   "awsNorm": "iot",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "AWS IoT",
+   "awsNorm": "aws iot",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Amazon Elastic Container Registry Public",
+   "awsNorm": "amazon elastic container registry public",
+   "ociEquivalent": "Container Registry",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Netskope Cloud Exchange AMI",
+   "awsNorm": "netskope cloud exchange ami",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Marketplace",
+   "awsNorm": "marketplace",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "WorkSpaces",
+   "awsNorm": "workspaces",
+   "ociEquivalent": "Secure Desktops",
+   "group": "Compute",
+   "free": false
+  },
+  {
+   "aws": "SageMaker",
+   "awsNorm": "sagemaker",
+   "ociEquivalent": "Data Science",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Identity and Access Management Access Analyzer",
+   "awsNorm": "identity and access management access analyzer",
+   "ociEquivalent": "Security Zones / Cloud Guard",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "Macie",
+   "awsNorm": "macie",
+   "ociEquivalent": "Data Safe",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "WorkMail",
+   "awsNorm": "workmail",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Data Pipeline",
+   "awsNorm": "data pipeline",
+   "ociEquivalent": "Data Integration",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS CloudFormation",
+   "awsNorm": "aws cloudformation",
+   "ociEquivalent": "Resource Manager",
+   "group": "Other Services",
+   "free": true
+  },
+  {
+   "aws": "Elemental MediaLive",
+   "awsNorm": "elemental medialive",
+   "ociEquivalent": "Media Flow / Media Stream",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AWS Elemental MediaLive",
+   "awsNorm": "aws elemental medialive",
+   "ociEquivalent": "Media Flow / Media Stream",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "AWS Data Pipeline",
+   "awsNorm": "aws data pipeline",
+   "ociEquivalent": "Data Integration",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "Amazon Registrar",
+   "awsNorm": "amazon registrar",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "OpenVPN Access Server (10 connected devices)",
+   "awsNorm": "openvpn access server 10 connected devices",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Step Functions",
+   "awsNorm": "step functions",
+   "ociEquivalent": "Process Automation",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "Amazon Rekognition",
+   "awsNorm": "amazon rekognition",
+   "ociEquivalent": "Vision",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "AWS Support (Developer)",
+   "awsNorm": "aws support developer",
+   "ociEquivalent": "Support",
+   "group": "Support",
+   "free": true
+  },
+  {
+   "aws": "AWS Support (Business)",
+   "awsNorm": "aws support business",
+   "ociEquivalent": "Support",
+   "group": "Support",
+   "free": true
+  },
+  {
+   "aws": "AWS End User Messaging",
+   "awsNorm": "aws end user messaging",
+   "ociEquivalent": "*No Direct Mapping",
+   "group": "Other Services",
+   "free": false
+  },
+  {
+   "aws": "AWS Step Functions",
+   "awsNorm": "aws step functions",
+   "ociEquivalent": "Process Automation",
+   "group": "DevOps",
+   "free": false
+  },
+  {
+   "aws": "DocumentDB",
+   "awsNorm": "documentdb",
+   "ociEquivalent": "Autonomous JSON",
+   "group": "Database",
+   "free": false
+  },
+  {
+   "aws": "S3",
+   "awsNorm": "s3",
+   "ociEquivalent": "Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "Amazon S3",
+   "awsNorm": "amazon s3",
+   "ociEquivalent": "Storage",
+   "group": "Storage",
+   "free": false
+  },
+  {
+   "aws": "OCBCloudFront",
+   "awsNorm": "ocbcloudfront",
+   "ociEquivalent": "*Third-Party Vendor (Akamai / CloudFlare)",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "AWS Identity and Access Management Access Analyzer",
+   "awsNorm": "aws identity and access management access analyzer",
+   "ociEquivalent": "Security Zones / Cloud Guard",
+   "group": "Security",
+   "free": true
+  },
+  {
+   "aws": "CAST AI",
+   "awsNorm": "cast ai",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Redpanda Cloud",
+   "awsNorm": "redpanda cloud",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Lacework Polygraph? Data Platform for AWS (Limited)",
+   "awsNorm": "lacework polygraph data platform for aws limited",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "monday.com work management",
+   "awsNorm": "monday com work management",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Sumo Logic Monitoring and Analytics Platform",
+   "awsNorm": "sumo logic monitoring and analytics platform",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "PagerDuty",
+   "awsNorm": "pagerduty",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Fortinet FortiGate Next-Generation Firewall",
+   "awsNorm": "fortinet fortigate next generation firewall",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "CIS Hardened Image Level 1 on Ubuntu Linux Server 20.04 LTS",
+   "awsNorm": "cis hardened image level 1 on ubuntu linux server 20 04 lts",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "CIS Centos Linux 7 Benchmark - Level 1",
+   "awsNorm": "cis centos linux 7 benchmark level 1",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "CIS Hardened Image Level 1 on Microsoft Windows Server 2019",
+   "awsNorm": "cis hardened image level 1 on microsoft windows server 2019",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Claude 3.5 Sonnet v2 (Amazon Bedrock Edition)",
+   "awsNorm": "claude 3 5 sonnet v2 amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "BlueXP Connector - Manual installation",
+   "awsNorm": "bluexp connector manual installation",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Amazon Transcribe",
+   "awsNorm": "amazon transcribe",
+   "ociEquivalent": "Speech",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "Transcribe",
+   "awsNorm": "transcribe",
+   "ociEquivalent": "Speech",
+   "group": "AI & Machine Learning",
+   "free": false
+  },
+  {
+   "aws": "OpenVPN Access Server (10 Connected Devices) / Self-Hosted VPN",
+   "awsNorm": "openvpn access server 10 connected devices self hosted vpn",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "OpenVPN Access Server (5 Connected Devices) / Self-Hosted VPN",
+   "awsNorm": "openvpn access server 5 connected devices self hosted vpn",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "CrowdStrike Falcon Endpoint Protection",
+   "awsNorm": "crowdstrike falcon endpoint protection",
+   "ociEquivalent": "*Marketplace/Third Party",
+   "group": "Marketplace",
+   "free": false
+  },
+  {
+   "aws": "Claude 3.7 Sonnet (Amazon Bedrock Edition)",
+   "awsNorm": "claude 3 7 sonnet amazon bedrock edition",
+   "ociEquivalent": "Generative AI",
+   "group": "AI & Machine Learning",
+   "free": false
+  }
+ ]
+}
