@@ -3226,12 +3226,116 @@ def bill_instance_compute_specs(text):
 #     them.
 OCI_BASE_DB_OCPU_RATE = 0.098       # OCI Database with PostgreSQL, SKU B99060, $/OCPU-hour
 OCI_BASE_DB_OCPU_SKU = "B99060"
+# OCI Database with PostgreSQL bills the managed-service OCPU (B99060) PLUS the
+# underlying E5 compute (OCPU B97384 + memory B97385) + Database Optimized Storage.
+# Constraints: OCPU 1-64 (1 OCPU = 2 vCPU); memory min 16 GB, max 64 GB/OCPU, max 1024.
+OCI_PG_E5_OCPU_RATE = 0.03          # Compute Standard E5 - OCPU, SKU B97384
+OCI_PG_E5_OCPU_SKU = "B97384"
+OCI_PG_E5_MEM_RATE = 0.002          # Compute Standard E5 - Memory, SKU B97385
+OCI_PG_E5_MEM_SKU = "B97385"
+OCI_PG_STORAGE_RATE = 0.072         # Database Optimized Storage, SKU B99062, $/GB-month
+OCI_PG_STORAGE_SKU = "B99062"
+OCI_PG_STORAGE_PERF_PER_GB = 30     # PostgreSQL Optimized Storage: 30 perf units/GB (B91962)
+OCI_PG_MIN_OCPU, OCI_PG_MAX_OCPU = 1, 64
+OCI_PG_MIN_MEM, OCI_PG_MAX_MEM, OCI_PG_MAX_MEM_PER_OCPU = 16, 1024, 64
 OCI_BASE_DB_ORACLE_OCPU_RATE = 0.215  # Oracle Base Database Standard Edition, SKU B88293 (unused default; open-source rate preferred)
 OCI_BASE_DB_STORAGE_RATE = 0.0255   # OCI Block Volume GB-month (reused for DB storage)
 OCI_BASE_DB_STORAGE_SKU = "B91961"
 OCI_BASE_DB_PRODUCT = "OCI Base Database"
+# OCI MySQL Database Service (separate service, priced per ECPU; 1 ECPU = 1 vCPU).
+OCI_MYSQL_ECPU_RATE = 0.0366        # MySQL Database - ECPU, SKU B108030, $/ECPU-hour
+OCI_MYSQL_ECPU_SKU = "B108030"
+OCI_MYSQL_STORAGE_RATE = 0.040      # MySQL Database - Storage, SKU B92426, $/GB-month
+OCI_MYSQL_STORAGE_SKU = "B92426"
+OCI_MYSQL_PRODUCT = "OCI MySQL Database Service"
+# Database BACKUP storage uses dedicated SKUs (not generic Object Storage):
+#   - Oracle Database Backup Cloud -> Object Storage: B90230, $0.0051/GB-month
+#     (PostgreSQL / Aurora-PG / Oracle / Base DB backups).
+#   - MySQL Database - Backup Storage: B92483, $0.04/GB-month (Aurora-MySQL / RDS MySQL).
+OCI_DB_BACKUP_SKU = "B90230"
+OCI_DB_BACKUP_RATE = 0.0051
+OCI_MYSQL_BACKUP_SKU = "B92483"
+OCI_MYSQL_BACKUP_RATE = 0.040
 # Aurora Serverless v2: 1 ACU ~= 0.25 vCPU = 0.125 OCPU (ACU ~= 2 GiB + fractional vCPU).
 ACU_TO_OCPU = 0.125
+
+
+def _is_mysql_engine(row):
+    """True when an RDS/Aurora row's engine is MySQL (or MariaDB, MySQL-compatible)."""
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["source_product", "__usageType", "source_service"]))
+    return ("mysql" in blob or "mariadb" in blob) and "postgre" not in blob
+
+
+# OCI MySQL Database Service shapes come in discrete ECPU sizes (1 ECPU = 1 vCPU).
+# RAM is fixed at 8 GB per ECPU (16 GB per 2 ECPU) and bundled in the ECPU price.
+MYSQL_ECPU_SIZES = [2, 4, 8, 16, 32, 48, 64, 96]
+MYSQL_GB_PER_ECPU = 8
+
+
+def mysql_ecpu(vcpus):
+    """Floor the source vCPU count to the nearest valid OCI MySQL shape ECPU size,
+    minimum 2, capped at the largest shape (96)."""
+    v = to_number(vcpus, 0) or 0
+    chosen = MYSQL_ECPU_SIZES[0]
+    for s in MYSQL_ECPU_SIZES:
+        if v >= s:
+            chosen = s
+    return chosen
+
+
+def postgres_compute_items(ocpu_raw, ram_raw, hours):
+    """OCI Database with PostgreSQL compute line items: managed-service OCPU
+    (B99060 $0.098) + underlying E5 compute (OCPU B97384 $0.03 + memory B97385
+    $0.002/GB). OCPU floored to 1-64; memory min 16, max 64/OCPU, max 1024."""
+    ocpu = int(math.floor(to_number(ocpu_raw, 0) or 0))
+    ocpu = max(OCI_PG_MIN_OCPU, min(OCI_PG_MAX_OCPU, ocpu))
+    ram = to_number(ram_raw, 0) or 0
+    ram = max(OCI_PG_MIN_MEM, ram)
+    ram = min(ram, OCI_PG_MAX_MEM_PER_OCPU * ocpu, OCI_PG_MAX_MEM)
+    return [
+        {"sku": OCI_BASE_DB_OCPU_SKU, "description": "OCI Database with PostgreSQL - OCPU",
+         "quantity": round(ocpu * hours, 4), "unit": "OCPU-hour", "rate": OCI_BASE_DB_OCPU_RATE,
+         "monthly": money(ocpu * OCI_BASE_DB_OCPU_RATE * hours),
+         "mapping": f"OCI Database with PostgreSQL: {ocpu} OCPU x {hours:,.0f} hrs @ ${OCI_BASE_DB_OCPU_RATE}/OCPU-hr."},
+        {"sku": OCI_PG_E5_OCPU_SKU, "description": "OCI Compute E5 - OCPU (PostgreSQL)",
+         "quantity": round(ocpu * hours, 4), "unit": "OCPU-hour", "rate": OCI_PG_E5_OCPU_RATE,
+         "monthly": money(ocpu * OCI_PG_E5_OCPU_RATE * hours),
+         "mapping": f"Underlying E5 compute: {ocpu} OCPU x {hours:,.0f} hrs @ ${OCI_PG_E5_OCPU_RATE}/OCPU-hr."},
+        {"sku": OCI_PG_E5_MEM_SKU, "description": "OCI Compute E5 - Memory (PostgreSQL)",
+         "quantity": round(ram * hours, 4), "unit": "GB-hour", "rate": OCI_PG_E5_MEM_RATE,
+         "monthly": money(ram * OCI_PG_E5_MEM_RATE * hours),
+         "mapping": f"Underlying E5 memory: {ram:g} GB (min 16, max 64/OCPU) x {hours:,.0f} hrs @ ${OCI_PG_E5_MEM_RATE}/GB-hr."},
+    ]
+
+# Microsoft SQL Server "license-included" on OCI (Marketplace), $/OCPU-hour.
+# Applied on top of OCI compute for SQL Server workloads (RDS SQL Server instance
+# runs and EC2 "Windows with SQL" instances). Standard vs Enterprise edition.
+OCI_SQL_LICENSE_STD_RATE = 0.37
+OCI_SQL_LICENSE_ENT_RATE = 1.47
+SQL_NO_MANAGED_NOTE = ("SQL Server has no managed OCI equivalent; OCI cost carried equal to the "
+                       "source AWS cost (would be self-managed on a VM).")
+
+
+def sql_license_rate(text):
+    """Return the OCI SQL Server license $/OCPU-hour for a bill line, by edition.
+    Enterprise if the text names Enterprise (or "EE"); otherwise Standard."""
+    blob = normalize(clean_text(text))
+    if "enterprise" in blob or " ee" in blob or "(ee)" in blob or blob.endswith(" ee"):
+        return OCI_SQL_LICENSE_ENT_RATE
+    return OCI_SQL_LICENSE_STD_RATE
+
+
+def sql_server_ocpu(vcpus):
+    """SQL Server OCI OCPU sizing: OCPU = vCPU / 2, FLOORED to the nearest even
+    integer (when between sizes), minimum 2 (yields 2, 4, 6, 8, 10 ...)."""
+    base = (to_number(vcpus, 0) or 0) / 2.0
+    n = int(math.floor(base))
+    if n % 2 != 0:
+        n -= 1  # floor to the next even size down
+    if n < 2:
+        n = 2
+    return n
 
 # RDS size suffixes are abbreviated in this bill (e.g. "db.t3.xl" = db.t3.xlarge,
 # "db.r5.2xl" = db.r5.2xlarge). Expand the suffix so the type resolves in CLOUD_SHAPE_MAP.
@@ -3304,13 +3408,20 @@ def collect_sql_server_rds_instances(rows):
 def price_rds_row(row, sql_server_instances=None):
     """Price one AWS RDS / Aurora bill row as OCI Base Database (DBaaS).
 
-    Returns (line_items, oci_product_label, carried) or None if the row isn't an
-    RDS line that we can price/carry here. 'carried' means OCI cost == source cost
-    (SQL Server, Aurora I/O, backups) and the line items reflect that carry.
+    Returns (line_items, oci_product_label, carried, flag) or None if the row
+    isn't an RDS line that we can price/carry here. 'carried' means OCI cost ==
+    source cost (Aurora I/O, backups) and the line items reflect that carry.
+    'flag' is a non-empty mapping-flag string for rows that should be surfaced for
+    review (e.g. SQL Server license-included rows), otherwise "".
+
+    SQL Server instance-run lines are now PRICED as OCI compute + a per-OCPU SQL
+    Server license (license-included), not carried. The companion AWS license-fee
+    and reserved-instance-fee lines are priced to $0 on OCI (the license is already
+    counted in the per-OCPU SQL license above).
 
     sql_server_instances is the set of instance types known (from a full-bill scan)
     to run SQL Server, so license / reserved-instance upfront fees that don't name
-    the engine still get carried as SQL Server."""
+    the engine still get recognized as SQL Server."""
     if not _is_rds_row(row):
         return None
 
@@ -3320,6 +3431,9 @@ def price_rds_row(row, sql_server_instances=None):
     src_cost = to_number(row.get("source_monthly_cost"), 0)
     _row_inst = _expand_rds_instance_type(ut) or _expand_rds_instance_type(row.get("source_product"))
     _is_sqlserver_inst = bool(sql_server_instances and _row_inst and _row_inst in sql_server_instances)
+    is_mysql = _is_mysql_engine(row)
+
+    SQL_FLAG = "SQL Server — license-included (review)"
 
     def carry_items(reason, label):
         return ([{
@@ -3331,49 +3445,244 @@ def price_rds_row(row, sql_server_instances=None):
             "monthly": money(src_cost),
             "mapping": reason,
             "carriedOver": True,
-        }], label, True)
+        }], label, True, "")
 
-    # 1) SQL Server: no managed OCI equivalent -> carry the source cost. Covers
-    #    both engine-named lines and license / reserved-instance upfront fees on a
-    #    db.<type> known to run SQL Server.
+    # 1) SQL Server (license-included): PRICE the instance run as OCI Base Database
+    #    compute + a per-OCPU SQL Server license. The companion license-fee and
+    #    reserved-instance-fee lines are priced to $0 (license is already counted in
+    #    the per-OCPU SQL license below; AWS source cost still counts on the source side).
     if _rds_is_sql_server(row) or _is_sqlserver_inst:
-        return carry_items(
-            "SQL Server has no managed OCI equivalent; OCI cost carried equal to the source AWS cost (would be self-managed on a VM).",
-            "OCI Base Database (SQL Server carried)",
-        )
+        sql_label = "OCI Compute E6 (SQL Server, license-included)"
+        edition_rate = sql_license_rate(row.get("source_product"))
+        edition = "Enterprise" if edition_rate == OCI_SQL_LICENSE_ENT_RATE else "Standard"
 
-    # 2) Aurora Serverless v2 (ACU-hours) -> OCPU-hours at 1 ACU = 0.125 OCPU.
+        # 1a) HeavyUsage:db.<type> -> reserved-instance / license hourly fee. On OCI
+        #     the license is already in the per-OCPU SQL license, so price to $0.
+        if "heavyusage" in ut_n:
+            return ([{
+                "sku": "",
+                "description": "SQL Server reserved-instance / license fee (included on OCI)",
+                "quantity": 0,
+                "unit": "",
+                "rate": 0,
+                "monthly": 0.0,
+                "mapping": "AWS SQL Server license / reserved-instance fee; on OCI the SQL license is bundled in the per-OCPU license on the instance-run line, so this line is $0 to avoid double-counting.",
+            }], sql_label, False, SQL_FLAG)
+
+        inst = _row_inst
+        specs = bill_instance_compute_specs(inst) if inst else None
+        if inst and specs and specs[0] > 0:
+            vcpu = specs[0] * 2.0  # specs[0] is vCPU/2
+            ram = specs[1] or 0.0
+            ocpu = sql_server_ocpu(vcpu)
+            # Instance-run hours: usage_quantity if it's instance-hours, else 744.
+            hours = qty if qty and qty > 0 else 744.0
+
+            # Reserved-instance-applied compute lines (qty>0 but $0 source) are the
+            # reservation usage; the matching run line carries the cost. Price $0 to
+            # avoid double-counting, but still flag and label as SQL Server.
+            if src_cost <= 0:
+                return ([{
+                    "sku": "",
+                    "description": f"SQL Server reserved-instance usage ({inst}, included on OCI)",
+                    "quantity": 0,
+                    "unit": "",
+                    "rate": 0,
+                    "monthly": 0.0,
+                    "mapping": "SQL Server reserved-instance-applied usage; compute is priced on the matching on-demand instance-run line. $0 here to avoid double-counting.",
+                }], sql_label, False, SQL_FLAG)
+
+            # Map the SQL Server DB to an OCI E6 Standard compute shape and price it
+            # there (self-managed VM), + the SQL Server license-included image.
+            _e6 = SHAPE_LOOKUP.get("e6-standard") or {}
+            e6_ocpu_rate = _e6.get("computeRate", 0.03)
+            e6_ram_rate = _e6.get("memoryRate", 0.002)
+            compute_hours = ocpu * hours
+            ram_hours = ram * hours
+            license_hours = ocpu * hours
+            items = [{
+                "sku": _e6.get("computeSku", "B111129"),
+                "description": f"OCI Compute E6 Standard - OCPU (SQL Server VM, {inst})",
+                "quantity": round(compute_hours, 4),
+                "unit": "OCPU-hour",
+                "rate": e6_ocpu_rate,
+                "monthly": money(compute_hours * e6_ocpu_rate),
+                "mapping": (f"RDS SQL Server {inst} mapped to E6 Standard: {ocpu} OCPU "
+                            f"(vCPU {vcpu:g}/2 floored to even, min 2) x {hours:,.0f} hrs @ ${e6_ocpu_rate}/OCPU-hr. {SQL_NO_MANAGED_NOTE}"),
+            }, {
+                "sku": _e6.get("memorySku", "B111130"),
+                "description": "OCI Compute E6 Standard - Memory (SQL Server VM)",
+                "quantity": round(ram_hours, 4),
+                "unit": "GB-hour",
+                "rate": e6_ram_rate,
+                "monthly": money(ram_hours * e6_ram_rate),
+                "mapping": f"SQL Server VM memory {ram:g} GB x {hours:,.0f} hrs @ ${e6_ram_rate}/GB-hr (E6 Standard).",
+            }, {
+                "sku": "",
+                "description": f"Microsoft SQL Server {edition} license-included ({ocpu} OCPU)",
+                "quantity": round(license_hours, 4),
+                "unit": "OCPU-hour",
+                "rate": edition_rate,
+                "monthly": money(license_hours * edition_rate),
+                "mapping": f"SQL Server {edition} license-included image on OCI: {ocpu} OCPU x {hours:,.0f} hrs x ${edition_rate}/OCPU-hr.",
+            }]
+            return (items, sql_label, False, SQL_FLAG)
+
+        # Storage / backup / other SQL Server lines: price like other engines below
+        # (fall through) but keep the SQL Server label + flag. Provisioned storage:
+        if "storage" in ut_n or "gp2" in ut_n or "gp3" in ut_n:
+            return ([{
+                "sku": OCI_BASE_DB_STORAGE_SKU,
+                "description": "OCI Base Database - Storage (GB-mo)",
+                "quantity": round(qty, 4),
+                "unit": "GB-month",
+                "rate": OCI_BASE_DB_STORAGE_RATE,
+                "monthly": money(qty * OCI_BASE_DB_STORAGE_RATE),
+                "mapping": f"SQL Server DB provisioned storage re-priced at the OCI block/DB storage rate (${OCI_BASE_DB_STORAGE_RATE}/GB-month).",
+            }], sql_label, False, SQL_FLAG)
+        # Backup storage: SQL Server runs self-managed on a VM, so its backups go to
+        # standard OCI Object Storage ($0.0255/GB-month), not the Oracle Database
+        # Backup Cloud (RMAN) rate. Not carried.
+        if "backup" in ut_n:
+            _obj = OCI_SERVICE_PRICES.get("OCI Object Storage", {})
+            _obj_rate = _obj.get("rate", 0.0255)
+            return ([{
+                "sku": _obj.get("sku", "B86080"),
+                "description": "OCI Object Storage - SQL Server backup (GB-mo)",
+                "quantity": round(qty, 4),
+                "unit": "GB-month",
+                "rate": _obj_rate,
+                "monthly": money(qty * _obj_rate),
+                "mapping": f"Self-managed SQL Server VM backup stored in standard OCI Object Storage (${_obj_rate}/GB-month).",
+                "ociServiceUsage": True,
+            }], sql_label, False, SQL_FLAG)
+        # Storage I/O: bundled (free) on OCI.
+        if "iousage" in ut_n:
+            return ([{
+                "sku": "", "description": "Database storage I/O (included on OCI)",
+                "quantity": round(qty, 4), "unit": "I/O requests", "rate": 0.0, "monthly": 0.0,
+                "mapping": "OCI database storage bundles I/O; free on OCI.",
+                "ociServiceUsage": True,
+            }], sql_label, False, SQL_FLAG)
+        # Any other SQL Server charge: carry conservatively but keep SQL label + flag.
+        if src_cost > 0:
+            return ([{
+                "sku": "",
+                "description": "Carried over from source AWS cost",
+                "quantity": 0,
+                "unit": "",
+                "rate": 0,
+                "monthly": money(src_cost),
+                "mapping": "SQL Server other charge: carried conservatively at the source cost.",
+                "carriedOver": True,
+            }], sql_label, True, SQL_FLAG)
+        return ([], sql_label, False, SQL_FLAG)
+
+    # 2) Aurora Serverless v2 (ACU-hours).
     if "serverlessv2" in ut_n:
+        if is_mysql:
+            # MySQL: 1 ECPU = 1 vCPU; 1 ACU ~= 0.25 vCPU -> ECPU = ACU x 0.25.
+            ecpu_hours = qty * (ACU_TO_OCPU * 2)
+            return ([{
+                "sku": OCI_MYSQL_ECPU_SKU,
+                "description": "OCI MySQL Database Service - ECPU",
+                "quantity": round(ecpu_hours, 4),
+                "unit": "ECPU-hour",
+                "rate": OCI_MYSQL_ECPU_RATE,
+                "monthly": money(ecpu_hours * OCI_MYSQL_ECPU_RATE),
+                "mapping": f"Aurora Serverless v2 (MySQL): {qty:,.1f} ACU-hours x {ACU_TO_OCPU*2} ECPU/ACU (1 ECPU = 1 vCPU) priced at ${OCI_MYSQL_ECPU_RATE}/ECPU-hour.",
+            }], OCI_MYSQL_PRODUCT, False, "")
+        # Aurora PostgreSQL Serverless v2 -> OCI Database with PostgreSQL: managed
+        # OCPU + E5 OCPU on the ACU-derived OCPU, + memory (~2 GB per ACU).
         ocpu_hours = qty * ACU_TO_OCPU
+        ram_hours = qty * 2  # ~2 GiB per ACU
         return ([{
             "sku": OCI_BASE_DB_OCPU_SKU,
-            "description": "OCI Base Database - OCPU (PostgreSQL)",
-            "quantity": round(ocpu_hours, 4),
-            "unit": "OCPU-hour",
-            "rate": OCI_BASE_DB_OCPU_RATE,
+            "description": "OCI Database with PostgreSQL - OCPU (Aurora Serverless v2)",
+            "quantity": round(ocpu_hours, 4), "unit": "OCPU-hour", "rate": OCI_BASE_DB_OCPU_RATE,
             "monthly": money(ocpu_hours * OCI_BASE_DB_OCPU_RATE),
-            "mapping": f"Aurora Serverless v2: {qty:,.1f} ACU-hours x {ACU_TO_OCPU} OCPU/ACU (1 ACU ~= 0.25 vCPU) priced at ${OCI_BASE_DB_OCPU_RATE}/OCPU-hour.",
-        }], OCI_BASE_DB_PRODUCT, False)
+            "mapping": f"Aurora Serverless v2: {qty:,.1f} ACU-hours x {ACU_TO_OCPU} OCPU/ACU @ ${OCI_BASE_DB_OCPU_RATE}/OCPU-hr.",
+        }, {
+            "sku": OCI_PG_E5_OCPU_SKU,
+            "description": "OCI Compute E5 - OCPU (PostgreSQL, Aurora Serverless v2)",
+            "quantity": round(ocpu_hours, 4), "unit": "OCPU-hour", "rate": OCI_PG_E5_OCPU_RATE,
+            "monthly": money(ocpu_hours * OCI_PG_E5_OCPU_RATE),
+            "mapping": f"Underlying E5 compute on the ACU-derived OCPU @ ${OCI_PG_E5_OCPU_RATE}/OCPU-hr.",
+        }, {
+            "sku": OCI_PG_E5_MEM_SKU,
+            "description": "OCI Compute E5 - Memory (PostgreSQL, Aurora Serverless v2)",
+            "quantity": round(ram_hours, 4), "unit": "GB-hour", "rate": OCI_PG_E5_MEM_RATE,
+            "monthly": money(ram_hours * OCI_PG_E5_MEM_RATE),
+            "mapping": f"Aurora memory ~2 GB/ACU @ ${OCI_PG_E5_MEM_RATE}/GB-hr.",
+        }], OCI_BASE_DB_PRODUCT, False, "")
 
-    # 3) Aurora storage I/O and backup charges: carry (OCI DBaaS bundles I/O and
-    #    includes a backup allowance, but carry conservatively to avoid understating).
-    if "storageiousage" in ut_n or "backupusage" in ut_n:
-        return carry_items(
-            "Aurora I/O / backup charge: OCI Base Database bundles I/O and includes a backup allowance; carried conservatively at the source cost.",
-            OCI_BASE_DB_PRODUCT,
-        )
-
-    # 4) Provisioned DB storage (RDS GP2/GP3, Aurora StorageUsage) -> OCI block rate.
-    if "storage" in ut_n or "gp2" in ut_n or "gp3" in ut_n:
+    # 3) Aurora / RDS storage I/O: OCI Base Database storage is capacity-priced and
+    #    does NOT meter I/O (it is bundled), so AWS per-I/O-request charges are free
+    #    on OCI.
+    if "storageiousage" in ut_n:
         return ([{
-            "sku": OCI_BASE_DB_STORAGE_SKU,
-            "description": "OCI Base Database - Storage (GB-mo)",
+            "sku": "",
+            "description": "Database storage I/O (included on OCI)",
+            "quantity": round(qty, 4),
+            "unit": "I/O requests",
+            "rate": 0.0,
+            "monthly": 0.0,
+            "mapping": "AWS meters Aurora storage I/O per request; OCI Base Database storage bundles I/O (capacity-priced), so it is free on OCI.",
+            "ociServiceUsage": True,
+        }], OCI_BASE_DB_PRODUCT, False, "")
+    # 3b) Aurora / RDS backup storage beyond the free allocation -> OCI database
+    #     backup storage SKUs (NOT generic Object Storage): MySQL uses MySQL Backup
+    #     Storage (B92483, $0.04/GB-mo); all other engines use Oracle Database Backup
+    #     Cloud -> Object Storage (B90230, $0.0051/GB-mo). Rates are per GB-month.
+    if "backupusage" in ut_n:
+        if is_mysql:
+            _bk_sku, _bk_rate, _bk_prod = OCI_MYSQL_BACKUP_SKU, OCI_MYSQL_BACKUP_RATE, OCI_MYSQL_PRODUCT
+            _bk_desc = "OCI MySQL Database - Backup Storage (GB-mo)"
+        else:
+            _bk_sku, _bk_rate, _bk_prod = OCI_DB_BACKUP_SKU, OCI_DB_BACKUP_RATE, OCI_BASE_DB_PRODUCT
+            _bk_desc = "OCI Database Backup - Object Storage (GB-mo)"
+        return ([{
+            "sku": _bk_sku,
+            "description": _bk_desc,
             "quantity": round(qty, 4),
             "unit": "GB-month",
-            "rate": OCI_BASE_DB_STORAGE_RATE,
-            "monthly": money(qty * OCI_BASE_DB_STORAGE_RATE),
-            "mapping": f"DB provisioned storage re-priced at the OCI block/DB storage rate (${OCI_BASE_DB_STORAGE_RATE}/GB-month).",
-        }], OCI_BASE_DB_PRODUCT, False)
+            "rate": _bk_rate,
+            "monthly": money(qty * _bk_rate),
+            "mapping": f"Database backup storage re-priced on the OCI database backup SKU {_bk_sku} (${_bk_rate}/GB-month).",
+            "ociServiceUsage": True,
+        }], _bk_prod, False, "")
+
+    # 4) Provisioned DB storage (RDS GP2/GP3, Aurora StorageUsage) -> OCI DB storage.
+    if "storage" in ut_n or "gp2" in ut_n or "gp3" in ut_n:
+        if is_mysql:
+            return ([{
+                "sku": OCI_MYSQL_STORAGE_SKU,
+                "description": "OCI MySQL Database Service - Storage (GB-mo)",
+                "quantity": round(qty, 4),
+                "unit": "GB-month",
+                "rate": OCI_MYSQL_STORAGE_RATE,
+                "monthly": money(qty * OCI_MYSQL_STORAGE_RATE),
+                "mapping": f"MySQL DB storage re-priced at the OCI MySQL Database Service storage rate (${OCI_MYSQL_STORAGE_RATE}/GB-month).",
+            }], OCI_MYSQL_PRODUCT, False, "")
+        # PostgreSQL: Database Optimized Storage ($0.072/GB) + 30 perf units/GB.
+        perf_qty = qty * OCI_PG_STORAGE_PERF_PER_GB
+        return ([{
+            "sku": OCI_PG_STORAGE_SKU,
+            "description": "OCI Database with PostgreSQL - Optimized Storage (GB-mo)",
+            "quantity": round(qty, 4),
+            "unit": "GB-month",
+            "rate": OCI_PG_STORAGE_RATE,
+            "monthly": money(qty * OCI_PG_STORAGE_RATE),
+            "mapping": f"PostgreSQL DB storage re-priced at the OCI Database Optimized Storage rate (${OCI_PG_STORAGE_RATE}/GB-month).",
+        }, {
+            "sku": "B91962",
+            "description": "OCI Database with PostgreSQL - Storage Performance Units",
+            "quantity": round(perf_qty, 4),
+            "unit": "Performance Units per month",
+            "rate": 0.0017,
+            "monthly": money(perf_qty * 0.0017),
+            "mapping": f"PostgreSQL Optimized Storage performance units ({OCI_PG_STORAGE_PERF_PER_GB} per GB) at $0.0017/unit.",
+        }], OCI_BASE_DB_PRODUCT, False, "")
 
     # 5a) HeavyUsage:db.<type> is a reserved-instance / license hourly FEE that
     #     accompanies the matching InstanceUsage compute line. Pricing it as OCPU
@@ -3385,29 +3694,39 @@ def price_rds_row(row, sql_server_instances=None):
                 "RDS reserved-instance / license fee carried at the source cost (instance compute is priced on the matching InstanceUsage line; not double-counted).",
                 OCI_BASE_DB_PRODUCT,
             )
-        return ([], OCI_BASE_DB_PRODUCT, False)
+        return ([], OCI_BASE_DB_PRODUCT, False, "")
 
-    # 5b) Engine instance hours (InstanceUsage:db.<type>) -> OCPU-hours.
+    # 5b) Engine instance hours (InstanceUsage:db.<type>).
     inst = _row_inst
     if inst:
         specs = bill_instance_compute_specs(inst)
         if specs and specs[0] > 0:
             ocpus = specs[0]  # already vCPU/2
-            ocpu_hours = ocpus * qty
-            return ([{
-                "sku": OCI_BASE_DB_OCPU_SKU,
-                "description": f"OCI Base Database - OCPU (PostgreSQL, {inst})",
-                "quantity": round(ocpu_hours, 4),
-                "unit": "OCPU-hour",
-                "rate": OCI_BASE_DB_OCPU_RATE,
-                "monthly": money(ocpu_hours * OCI_BASE_DB_OCPU_RATE),
-                "mapping": f"RDS {inst} ({ocpus:g} OCPU = vCPU/2) x {qty:,.0f} instance-hours priced at ${OCI_BASE_DB_OCPU_RATE}/OCPU-hour.",
-            }], OCI_BASE_DB_PRODUCT, False)
+            vcpu = ocpus * 2
+            # MySQL -> OCI MySQL Database Service, ECPU (1 ECPU = 1 vCPU) floored to a
+            # valid MySQL shape size (2,4,8,16,32,48,64,96), priced per ECPU-hour.
+            if is_mysql:
+                ecpu = mysql_ecpu(vcpu)
+                ecpu_hours = ecpu * qty
+                mysql_ram = ecpu * MYSQL_GB_PER_ECPU  # fixed 8 GB per ECPU (16 GB per 2 ECPU)
+                return ([{
+                    "sku": OCI_MYSQL_ECPU_SKU,
+                    "description": f"OCI MySQL Database Service - {ecpu} ECPU / {mysql_ram:g} GB ({inst})",
+                    "quantity": round(ecpu_hours, 4),
+                    "unit": "ECPU-hour",
+                    "rate": OCI_MYSQL_ECPU_RATE,
+                    "monthly": money(ecpu_hours * OCI_MYSQL_ECPU_RATE),
+                    "mapping": f"RDS MySQL {inst} ({vcpu:g} vCPU -> {ecpu} ECPU floored to shape, 1 ECPU=1 vCPU; RAM fixed at {mysql_ram:g} GB = {ecpu} x 8 GB, included) x {qty:,.0f} hrs @ ${OCI_MYSQL_ECPU_RATE}/ECPU-hr.",
+                }], OCI_MYSQL_PRODUCT, False, "")
+            # PostgreSQL (default engine): managed service OCPU + E5 compute + memory.
+            pg_items = postgres_compute_items(ocpus, specs[1], qty)
+            pg_items[0]["description"] = f"OCI Database with PostgreSQL - OCPU ({inst})"
+            return (pg_items, OCI_BASE_DB_PRODUCT, False, "")
         # Reserved-instance / $0 instance lines (qty>0 but cost 0) still resolve to
         # an instance type but carry no cost; price as 0 OCPU so they don't fall
         # through to the storage/catalog fallback.
         if qty <= 0 or src_cost <= 0:
-            return ([], OCI_BASE_DB_PRODUCT, False)
+            return ([], OCI_BASE_DB_PRODUCT, False, "")
 
     # 6) Anything else RDS (Data-API requests, unrecognized) -> carry if it has a
     #    cost, otherwise treat as included (no OCI line) so it isn't re-priced as storage.
@@ -3416,7 +3735,335 @@ def price_rds_row(row, sql_server_instances=None):
             "RDS charge with no direct OCI line-item equivalent; carried at the source cost.",
             OCI_BASE_DB_PRODUCT,
         )
-    return ([], OCI_BASE_DB_PRODUCT, False)
+    return ([], OCI_BASE_DB_PRODUCT, False, "")
+
+
+# ---------------------------------------------------------------------------
+# AWS networking services -> OCI networking products.
+# Priced here (before the generic storage/catalog fallback) so each line is
+# priced once on its own usage and never relabeled as Storage / Data Transfer.
+# ---------------------------------------------------------------------------
+
+OCI_LOAD_BALANCER_PRODUCT = "OCI Load Balancer"
+OCI_FASTCONNECT_PRODUCT = "OCI FastConnect"
+OCI_TRANSFER_FAMILY_PRODUCT = "SFTP / SOA Suite (Marketplace)"
+
+# AWS Transfer Family has no per-endpoint-hour equivalent on OCI. The SFTP service is
+# re-hosted on OCI Compute (SFTPGo on an Ampere VM) writing to Object Storage via the
+# S3-compatible API, so the AWS $0.30/endpoint-hour charge is replaced by the cost of a
+# small VM. Each AWS endpoint (744 hrs/month) maps to its own small Ampere SFTP host
+# (isolation-preserving / conservative); consolidating endpoints onto shared hosts lowers
+# it further. SFTP upload/download has no separate OCI charge (landed GB are priced as
+# Object Storage; transfer is free within 10 TB/month).
+OCI_SFTP_AMPERE_OCPU = 1
+OCI_SFTP_AMPERE_MEM_GB = 8
+OCI_AMPERE_OCPU_RATE = 0.01      # $/OCPU-hour (Ampere A1, standard list)
+OCI_AMPERE_MEM_RATE = 0.0015     # $/GB-hour
+OCI_SFTP_VM_HOURLY = (OCI_SFTP_AMPERE_OCPU * OCI_AMPERE_OCPU_RATE
+                      + OCI_SFTP_AMPERE_MEM_GB * OCI_AMPERE_MEM_RATE)   # ~$0.022/VM-hour
+AWS_TF_ENDPOINT_HOURS = 744      # 1 AWS Transfer Family SFTP endpoint = 744 hrs/month
+# Managed alternative: Oracle SOA Suite / MFT on Marketplace (license-included) at
+# $0.7231/OCPU-hour ($0.36155 per vCPU). Not used for the default SFTP repricing; kept
+# for reference / a future "managed gateway" mode.
+OCI_SOA_SUITE_OCPU_RATE = 0.7231
+
+
+def _bill_source_code(row):
+    """Lowercase, space-stripped blob of the row's source-service / product / usageType,
+    used to detect which AWS service a bill line belongs to (e.g. 'awselb')."""
+    return normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["source_service", "source_product", "__usageType"])).replace(" ", "")
+
+
+def _is_elb_row(row):
+    return "awselb" in _bill_source_code(row)
+
+
+def _is_direct_connect_row(row):
+    return "awsdirectconnect" in _bill_source_code(row)
+
+
+def _is_transfer_family_row(row):
+    return "awstransfer" in _bill_source_code(row)
+
+
+def is_networking_service_row(row):
+    return _is_elb_row(row) or _is_direct_connect_row(row) or _is_transfer_family_row(row)
+
+
+# ---- Amazon Redshift -> Oracle Autonomous Data Warehouse (ADW) ----
+# Reference logic: Serverless RPU compute -> ADW ECPU = ROUNDUP(RPU-hours/744) x 2,
+# priced at $0.336/ECPU-hr x 744; Redshift Managed Storage -> $0.024/GB-month.
+OCI_ADW_PRODUCT = "Oracle Autonomous Data Warehouse"
+OCI_ADW_ECPU_RATE = 0.336
+OCI_ADW_STORAGE_RATE = 0.024
+OCI_ADW_HOURS = 744
+
+
+def _is_redshift_row(row):
+    return "amazonredshift" in _bill_source_code(row) or "redshift" in _bill_source_code(row)
+
+
+def _is_redshift_rpu_row(row):
+    utn = normalize(row.get("__usageType"))
+    return _is_redshift_row(row) and ("rpu" in utn or "serverlessusage" in utn) and "storage" not in utn and "rms" not in utn
+
+
+def collect_redshift_compute(rows):
+    """Aggregate Redshift Serverless RPU-hours across the bill into a single ADW
+    ECPU figure (ECPU = ROUNDUP(total RPU-hrs / 744) x 2), and pick the largest
+    RPU line to carry that whole compute cost (so per-line rounding doesn't inflate
+    it, matching the reference's single aggregated calc)."""
+    total_rpu = 0.0
+    best_id, best_qty = None, 0.0
+    for r in rows or []:
+        if not _is_redshift_rpu_row(r):
+            continue
+        q = to_number(r.get("usage_quantity"), 0)
+        total_rpu += q
+        if q > best_qty:
+            best_qty, best_id = q, r.get("__id")
+    ecpu = math.ceil(total_rpu / OCI_ADW_HOURS) * 2 if total_rpu > 0 else 0
+    return {"ecpu": ecpu, "total_rpu": total_rpu, "row_id": best_id}
+
+
+def price_redshift_row(row, compute_ctx=None):
+    """Price an Amazon Redshift bill line on Oracle Autonomous Data Warehouse.
+    compute_ctx carries the aggregated Serverless ECPU; only the designated row
+    bills the compute, so the total isn't inflated by per-line rounding."""
+    if not _is_redshift_row(row):
+        return None
+    ut_n = normalize(row.get("__usageType"))
+    qty = to_number(row.get("usage_quantity"), 0)
+    src = to_number(row.get("source_monthly_cost"), 0)
+    # Serverless compute (RPU-hours) -> ADW ECPU (aggregated; billed on one line).
+    if ("rpu" in ut_n or "serverlessusage" in ut_n) and "storage" not in ut_n and "rms" not in ut_n:
+        ctx = compute_ctx or {}
+        if row.get("__id") == ctx.get("row_id"):
+            ecpu = ctx.get("ecpu", 0)
+            monthly = ecpu * OCI_ADW_ECPU_RATE * OCI_ADW_HOURS
+            return ([{
+                "sku": "", "description": f"Autonomous Data Warehouse ({ecpu} ECPU)",
+                "quantity": ecpu, "unit": "ECPU", "rate": OCI_ADW_ECPU_RATE,
+                "monthly": money(monthly),
+                "mapping": (f"Redshift Serverless {ctx.get('total_rpu', qty):,.0f} RPU-hr (total) -> ADW {ecpu} ECPU "
+                            f"(ROUNDUP(RPU-hr/744)x2) x ${OCI_ADW_ECPU_RATE}/ECPU-hr x {OCI_ADW_HOURS}."),
+            }], OCI_ADW_PRODUCT, "Database", "", False)
+        # Other RPU lines fold into the aggregated compute -> $0 here.
+        return ([{"sku": "", "description": "Autonomous Data Warehouse (ECPU folded into aggregate)",
+                  "quantity": 0, "unit": "ECPU", "rate": OCI_ADW_ECPU_RATE, "monthly": 0.0,
+                  "mapping": "RPU-hours aggregated into the ADW ECPU compute line."}],
+                OCI_ADW_PRODUCT, "Database", "", False)
+    # Redshift Managed Storage -> ADW storage (GB-month).
+    if "rms" in ut_n or "storage" in ut_n:
+        monthly = qty * OCI_ADW_STORAGE_RATE
+        return ([{
+            "sku": "", "description": "Autonomous Data Warehouse - Storage (GB-mo)",
+            "quantity": round(qty, 4), "unit": "GB per month", "rate": OCI_ADW_STORAGE_RATE,
+            "monthly": money(monthly),
+            "mapping": f"Redshift Managed Storage re-priced on ADW storage at ${OCI_ADW_STORAGE_RATE}/GB-mo.",
+        }], OCI_ADW_PRODUCT, "Database", "", False)
+    # Other Redshift lines -> carry conservatively.
+    if src > 0:
+        return ([{
+            "sku": "", "description": "Carried over from source AWS cost",
+            "quantity": 0, "unit": "", "rate": 0, "monthly": money(src),
+            "mapping": "Redshift line with no direct ADW equivalent; carried at the source cost.",
+            "carriedOver": True,
+        }], OCI_ADW_PRODUCT, "Database", "", True)
+    return ([{"sku": "", "description": "Included on ADW", "quantity": 0, "unit": "", "rate": 0,
+              "monthly": 0.0, "mapping": "Redshift line included on ADW."}], OCI_ADW_PRODUCT, "Database", "", False)
+
+
+# OCI FastConnect per-port-hour rates by provisioned port speed (OCI price list).
+OCI_FASTCONNECT_PORT_RATES = {"1G": 0.2125, "10G": 1.275, "100G": 10.75, "400G": 20.00}
+OCI_FASTCONNECT_DEFAULT_RATE = 0.2125  # default to 1 Gbps when the speed token isn't recognized
+# OCI Load Balancer per-load-balancer-hour rate (OCI price list SKU B93031).
+OCI_LOAD_BALANCER_SKU = "B93031"
+OCI_LOAD_BALANCER_RATE = 0.0113
+# OCI Flexible Load Balancer pricing, matching the reference workbook's logic:
+#   instances = ROUNDUP(LB-hours / 744); bandwidth = instances x 100 Mbps;
+#   OCI = instances x $0.0113 x 744 + bandwidth x $0.0001 x 744;
+#   the OCI always-free tier (1 instance + 10 Mbps) is subtracted once per bill.
+OCI_LB_HOURS = 744
+OCI_LB_BANDWIDTH_RATE = 0.0001   # per Mbps-hour
+OCI_LB_MBPS_PER_INSTANCE = 100
+OCI_LB_FREE_INSTANCES = 1
+OCI_LB_FREE_MBPS = 10
+
+
+def _elb_instances(qty):
+    import math as _m
+    q = to_number(qty, 0)
+    return int(_m.ceil(q / OCI_LB_HOURS)) if q > 0 else 0
+
+
+def collect_elb_free_tier_row(rows):
+    """Pick the ELB bill row that should carry the one-time OCI Load Balancer
+    free tier (the largest LoadBalancerUsage line), so the free tier is applied
+    exactly once across the whole bill (matching the reference)."""
+    best_id = None
+    best_qty = 0.0
+    for r in rows or []:
+        if not _is_elb_row(r):
+            continue
+        if "loadbalancerusage" not in normalize(r.get("__usageType")):
+            continue
+        q = to_number(r.get("usage_quantity"), 0)
+        if q > best_qty:
+            best_qty = q
+            best_id = r.get("__id")
+    return best_id
+
+
+def _fastconnect_speed_token(usagetype_norm):
+    """Extract the FastConnect port speed token (1G/10G/100G/400G) from a Direct
+    Connect PortUsage usageType, e.g. 'use1-eqdc2-portusage:1g' -> '1G'."""
+    # normalize() collapses the ':' separator to a space, so match either form
+    # (e.g. 'portusage:1g' or 'portusage 1g').
+    m = re.search(r"portusage[:\s]+(\d+)g\b", usagetype_norm)
+    if m:
+        return f"{m.group(1)}G"
+    return None
+
+
+def price_networking_row(row, elb_free_tier_row_id=None):
+    """Price one AWS networking bill row (ELB / Direct Connect / Transfer Family)
+    as its OCI equivalent.
+
+    Returns (line_items, oci_product_label, oci_category, sku, carried) or None if
+    the row isn't a networking line handled here. Each line is priced on its OWN
+    usage_quantity / usageType. elb_free_tier_row_id marks the single ELB line
+    that gets the one-time OCI Load Balancer free tier."""
+    ut = clean_text(row.get("__usageType"))
+    ut_n = normalize(ut)
+    qty = to_number(row.get("usage_quantity"), 0)
+    src_cost = to_number(row.get("source_monthly_cost"), 0)
+
+    def free_item(reason):
+        return ([{
+            "sku": "",
+            "description": "Included (free on OCI)",
+            "quantity": 0,
+            "unit": "",
+            "rate": 0,
+            "monthly": 0.0,
+            "mapping": reason,
+        }], None, None, "", False)
+
+    # 1) Elastic Load Balancing -> OCI Flexible Load Balancer.
+    # Reference logic: each LB/LCU line -> instances=ROUNDUP(hours/744),
+    # bandwidth=instances*100 Mbps, OCI = instances*0.0113*744 + bandwidth*0.0001*744,
+    # with the always-free tier (1 instance + 10 Mbps) subtracted once per bill.
+    if _is_elb_row(row):
+        if "loadbalancerusage" in ut_n:
+            # Blended OCI Flexible LB rate per LB-hour = instance ($0.0113) +
+            # 100 Mbps x $0.0001 = $0.0213/LB-hour (matches the reference's
+            # instance + 100 Mbps-per-instance model without per-line rounding).
+            blended = OCI_LOAD_BALANCER_RATE + OCI_LB_MBPS_PER_INSTANCE * OCI_LB_BANDWIDTH_RATE
+            monthly = qty * blended
+            if row.get("__id") == elb_free_tier_row_id:
+                # Subtract the OCI always-free tier (1 instance + 10 Mbps) once.
+                free_credit = (OCI_LB_FREE_INSTANCES * OCI_LOAD_BALANCER_RATE
+                               + OCI_LB_FREE_MBPS * OCI_LB_BANDWIDTH_RATE) * OCI_LB_HOURS
+                monthly = max(0.0, monthly - free_credit)
+            return ([{
+                "sku": OCI_LOAD_BALANCER_SKU,
+                "description": "OCI Load Balancer (LB-hour, incl. 100 Mbps)",
+                "quantity": round(qty, 4),
+                "unit": "Load-Balancer-hour",
+                "rate": round(blended, 4),
+                "monthly": money(monthly),
+                "mapping": (f"ELB -> OCI Flexible Load Balancer at ${blended:.4f}/LB-hour "
+                            f"(instance ${OCI_LOAD_BALANCER_RATE} + 100 Mbps x ${OCI_LB_BANDWIDTH_RATE}/Mbps-hr)"
+                            + (" less the always-free 1 instance + 10 Mbps." if row.get("__id") == elb_free_tier_row_id else ".")),
+            }], OCI_LOAD_BALANCER_PRODUCT, "Networking", OCI_LOAD_BALANCER_SKU, False)
+        if "lcuusage" in ut_n:
+            items, _, _, sku, carried = free_item(
+                "ELB capacity units (LCU) are included (free) on OCI Load Balancer; not priced.")
+            return (items, OCI_LOAD_BALANCER_PRODUCT, "Networking", sku, carried)
+        # Other ELB lines (e.g. data processed) -> carry conservatively if priced.
+        if src_cost > 0:
+            return ([{
+                "sku": "", "description": "Carried over from source AWS cost",
+                "quantity": 0, "unit": "", "rate": 0, "monthly": money(src_cost),
+                "mapping": "ELB charge with no direct OCI line-item equivalent; carried at the source cost.",
+                "carriedOver": True,
+            }], OCI_LOAD_BALANCER_PRODUCT, "Networking", "", True)
+        items, _, _, sku, carried = free_item("ELB line with no OCI cost; included on OCI Load Balancer.")
+        return (items, OCI_LOAD_BALANCER_PRODUCT, "Networking", sku, carried)
+
+    # 2) AWS Direct Connect -> OCI FastConnect.
+    if _is_direct_connect_row(row):
+        # FastConnect does not meter traffic: Direct Connect data-transfer lines are free.
+        if "dataxfer" in ut_n:
+            items, _, _, sku, carried = free_item(
+                "FastConnect does not meter traffic; Direct Connect data transfer is free on OCI.")
+            return (items, OCI_FASTCONNECT_PRODUCT, "Networking", sku, carried)
+        if "portusage" in ut_n:
+            speed = _fastconnect_speed_token(ut_n)
+            rate = OCI_FASTCONNECT_PORT_RATES.get(speed, OCI_FASTCONNECT_DEFAULT_RATE)
+            speed_label = speed or "1G (default)"
+            monthly = qty * rate
+            return ([{
+                "sku": OCI_FASTCONNECT_PRODUCT,
+                "description": f"OCI FastConnect - {speed_label} port (port-hour)",
+                "quantity": round(qty, 4),
+                "unit": "port-hour",
+                "rate": rate,
+                "monthly": money(monthly),
+                "mapping": f"Direct Connect {speed_label} port-hours re-priced at the OCI FastConnect rate (${rate}/port-hour).",
+            }], OCI_FASTCONNECT_PRODUCT, "Networking", "", False)
+        # Other Direct Connect lines -> carry if priced, else free.
+        if src_cost > 0:
+            return ([{
+                "sku": "", "description": "Carried over from source AWS cost",
+                "quantity": 0, "unit": "", "rate": 0, "monthly": money(src_cost),
+                "mapping": "Direct Connect charge with no direct OCI line-item equivalent; carried at the source cost.",
+                "carriedOver": True,
+            }], OCI_FASTCONNECT_PRODUCT, "Networking", "", True)
+        items, _, _, sku, carried = free_item("Direct Connect line with no OCI cost; included on OCI FastConnect.")
+        return (items, OCI_FASTCONNECT_PRODUCT, "Networking", sku, carried)
+
+    # 3) AWS Transfer Family -> OCI Compute SFTP (SFTPGo) writing to Object Storage.
+    #    The AWS per-endpoint-hour charge ($0.30) is replaced by the cost of a small
+    #    OCI Compute (Ampere) host; data transfer over SFTP has no separate OCI charge.
+    if _is_transfer_family_row(row):
+        # 3a) Per-endpoint protocol hours -> small Ampere SFTP VM-hours (no per-endpoint fee).
+        if "protocolhours" in ut_n:
+            endpoints = (qty / AWS_TF_ENDPOINT_HOURS) if qty else 0
+            monthly = qty * OCI_SFTP_VM_HOURLY
+            return ([{
+                "sku": "",
+                "description": "OCI Compute (Ampere) hosting SFTP (SFTPGo) - VM-hour",
+                "quantity": round(qty, 4),
+                "unit": "endpoint-hour -> VM-hour",
+                "rate": round(OCI_SFTP_VM_HOURLY, 4),
+                "monthly": money(monthly),
+                "mapping": (f"AWS Transfer Family endpoint-hours (~{endpoints:.1f} endpoint(s)) re-hosted as "
+                            f"SFTPGo on OCI Compute at ${OCI_SFTP_VM_HOURLY:.4f}/VM-hour "
+                            f"(Ampere {OCI_SFTP_AMPERE_OCPU} OCPU/{OCI_SFTP_AMPERE_MEM_GB} GB) vs AWS $0.30/endpoint-hour. "
+                            f"One VM per endpoint (isolation-preserving); consolidating endpoints lowers this further. "
+                            f"Files land in OCI Object Storage via the S3-compatible API."),
+            }], OCI_TRANSFER_FAMILY_PRODUCT, "Networking", "", False)
+        # 3b) SFTP data uploaded/downloaded -> no separate OCI charge (storage priced elsewhere).
+        if "bytes" in ut_n:
+            items, _, _, sku, carried = free_item(
+                "SFTP upload/download has no separate OCI charge; landed GB are priced as OCI "
+                "Object Storage and transfer is free within 10 TB/month.")
+            return (items, OCI_TRANSFER_FAMILY_PRODUCT, "Networking", sku, carried)
+        # 3c) Any other Transfer Family line -> carry if priced, else free.
+        if src_cost > 0:
+            return ([{
+                "sku": "", "description": "Carried over from source AWS cost",
+                "quantity": 0, "unit": "", "rate": 0, "monthly": money(src_cost),
+                "mapping": "Transfer Family charge with no direct OCI line-item equivalent; carried at the source cost.",
+                "carriedOver": True,
+            }], OCI_TRANSFER_FAMILY_PRODUCT, "Networking", "", True)
+        items, _, _, sku, carried = free_item("Transfer Family line with no OCI cost.")
+        return (items, OCI_TRANSFER_FAMILY_PRODUCT, "Networking", sku, carried)
+
+    return None
 
 
 FREE_OCI_SOURCE_TERMS = [
@@ -3424,6 +4071,14 @@ FREE_OCI_SOURCE_TERMS = [
     "aws support", "savings plan", "savingsplan",
     # EBS direct API requests are API-call charges (not capacity) and free on OCI.
     "ebs direct",
+    # OCI NAT Gateway has no per-GB data-processing or hourly charge -> free.
+    "nat gateway", "natgateway",
+    # gp3 provisioned IOPS / throughput: OCI Block Volume bundles performance,
+    # so these extra-performance lines are free (the gp3 storage GB is still priced).
+    "volumep iops gp3", "volumep throughput gp3",
+    # Regional / intra-region (cross-AZ) data transfer is free on OCI: VCN traffic
+    # within a region and across availability domains is not metered.
+    "datatransfer regional", "regional data transfer",
 ]
 
 
@@ -3433,12 +4088,191 @@ def is_free_oci_service(row):
     FREE: Config, Systems Manager, Cost Explorer, GuardDuty, Security Hub,
     CloudFormation, Certificate Manager, etc.), matching the reference."""
     text = normalize(" ".join(clean_text(row.get(k)) for k in ["source_service", "source_product", "__usageType"]))
-    if "support" in normalize(row.get("source_service")):
+    svc_n = normalize(row.get("source_service"))
+    if "support" in svc_n:
         return True
     if any(t.strip() in text for t in FREE_OCI_SOURCE_TERMS):
         return True
+    # AWS KMS -> OCI Vault: software-protected keys and their operations are free on
+    # OCI (only HSM-protected / dedicated / external key management is paid).
+    if "kms" in svc_n or "key management service" in text:
+        return True
+    # AWS CloudWatch metrics, alarms, dashboards, and metric API requests are free on
+    # OCI Monitoring. CloudWatch *Logs* (VendedLog / DataProcessing / TimedStorage
+    # byte-hours) map to OCI Logging, which is metered, so those are NOT free.
+    if "cloudwatch" in svc_n:
+        ut_cw = normalize(row.get("__usageType"))
+        is_logs = any(k in ut_cw for k in [
+            "vendedlog", "dataprocessing", "timedstorage", "logbytes", "putlogevents", "egress"])
+        is_metrics = ut_cw.startswith("cw") or any(k in ut_cw for k in [
+            "metricmonitor", "alarmmonitor", "dashboard", "gmd metrics", "metricstorage", "requests"])
+        if is_metrics and not is_logs:
+            return True
     ref = ref_service_lookup(row.get("source_service"), row.get("source_product"), row.get("__usageType"))
     return bool(ref and ref.get("free"))
+
+
+# OCI Web Application Firewall: first instance free, then $5/instance-month; first
+# 10M incoming requests/month free, then $0.60 per 1,000,000 requests. OCI WAF has no
+# separate per-rule / per-WebACL charge (rules and bot management are bundled).
+OCI_WAF_PRODUCT = "OCI Web Application Firewall"
+OCI_WAF_INSTANCE_SKU = "B94579"
+OCI_WAF_REQUEST_SKU = "B94277"
+OCI_WAF_INSTANCE_RATE = 5.00          # per instance per month (after first free)
+OCI_WAF_REQUEST_RATE = 0.60           # per 1,000,000 incoming requests (after free pool)
+OCI_WAF_FREE_INSTANCES = 1            # first WAF instance free (once per bill)
+OCI_WAF_FREE_REQUESTS = 10_000_000    # first 10M incoming requests/month free (once per bill)
+
+
+def _is_waf_row(row):
+    return "waf" in normalize(row.get("source_service"))
+
+
+def price_waf_row(row, waf_instance_pool, waf_request_pool):
+    """Price an AWS WAF bill row on OCI Web Application Firewall.
+
+    waf_instance_pool / waf_request_pool are one-element lists holding the remaining
+    free instances / free requests, shared once per bill. Web ACLs map to OCI WAF
+    instances (first free, then $5/mo each); request meters price at $0.60/1M after
+    the 10M free pool; rule / bot-management lines are bundled (free) on OCI.
+    Returns (line_items, label, category, sku, carried) or None."""
+    if not _is_waf_row(row):
+        return None
+    ut_n = normalize(row.get("__usageType"))
+    qty = to_number(row.get("usage_quantity"), 0)
+    # 1) Request meters -> $0.60 per 1M after the 10M/month free pool.
+    if "request" in ut_n:
+        free_here = min(waf_request_pool[0], qty)
+        waf_request_pool[0] -= free_here
+        chargeable = max(qty - free_here, 0.0)
+        millions = chargeable / 1_000_000.0
+        return ([{
+            "sku": OCI_WAF_REQUEST_SKU,
+            "description": "OCI WAF - Requests (per 1M incoming requests)",
+            "quantity": round(qty, 4),
+            "unit": "request",
+            "rate": OCI_WAF_REQUEST_RATE,
+            "monthly": money(millions * OCI_WAF_REQUEST_RATE),
+            "mapping": ("OCI WAF requests: first 10M/month free"
+                        + (f" ({free_here:,.0f} free here)" if free_here > 0 else "")
+                        + f"; ${OCI_WAF_REQUEST_RATE} per 1,000,000 over the free pool."),
+            "ociServiceUsage": True,
+        }], OCI_WAF_PRODUCT, "Security", OCI_WAF_REQUEST_SKU, False)
+    # 2) Web ACLs -> OCI WAF instances: first instance free, then $5/instance-month.
+    if "webacl" in ut_n:
+        free_here = min(waf_instance_pool[0], qty)
+        waf_instance_pool[0] -= free_here
+        chargeable = max(qty - free_here, 0.0)
+        return ([{
+            "sku": OCI_WAF_INSTANCE_SKU,
+            "description": "OCI WAF - Instance (per WAF instance/month)",
+            "quantity": round(qty, 4),
+            "unit": "instance per month",
+            "rate": OCI_WAF_INSTANCE_RATE,
+            "monthly": money(chargeable * OCI_WAF_INSTANCE_RATE),
+            "mapping": ("Web ACLs map to OCI WAF instances: first instance free"
+                        + (f" ({free_here:,.0f} free here)" if free_here > 0 else "")
+                        + f"; ${OCI_WAF_INSTANCE_RATE}/instance-month after."),
+            "ociServiceUsage": True,
+        }], OCI_WAF_PRODUCT, "Security", OCI_WAF_INSTANCE_SKU, False)
+    # 3) Rules / bot-management / everything else -> bundled (free) on OCI WAF.
+    return ([{
+        "sku": OCI_WAF_INSTANCE_SKU,
+        "description": "OCI WAF - Rules / bot management (bundled)",
+        "quantity": round(qty, 4),
+        "unit": "",
+        "rate": 0.0,
+        "monthly": 0.0,
+        "mapping": "OCI Web Application Firewall has no separate per-rule / per-WebACL or bot-management charge; bundled with the WAF instance and requests.",
+        "ociServiceUsage": True,
+    }], OCI_WAF_PRODUCT, "Security", OCI_WAF_INSTANCE_SKU, False)
+
+
+# OCI Logging: first 10 GB/month free, then $0.05/GB-month. CloudWatch Logs
+# (VendedLog / DataProcessing / TimedStorage) map here (CloudWatch metrics are free
+# on OCI Monitoring and handled in is_free_oci_service).
+OCI_LOGGING_PRODUCT = "OCI Logging"
+OCI_LOGGING_SKU = "B92707"
+OCI_LOGGING_RATE = 0.05
+OCI_LOGGING_FREE_GB = 10.0
+
+
+def _is_cloudwatch_logs_row(row):
+    if "cloudwatch" not in normalize(row.get("source_service")):
+        return False
+    ut = normalize(row.get("__usageType"))
+    return any(k in ut for k in ["vendedlog", "dataprocessing", "timedstorage", "logbytes", "putlogevents"])
+
+
+def price_cloudwatch_logs_row(row, logging_pool):
+    """Price a CloudWatch Logs bill row on OCI Logging: first 10 GB/month free
+    (shared once per bill), then $0.05/GB-month. logging_pool is [remaining_free_gb].
+    Returns (line_items, label, category, sku, carried) or None."""
+    if not _is_cloudwatch_logs_row(row):
+        return None
+    qty = to_number(row.get("usage_quantity"), 0)  # GB
+    free_here = min(logging_pool[0], qty)
+    logging_pool[0] -= free_here
+    chargeable = max(qty - free_here, 0.0)
+    return ([{
+        "sku": OCI_LOGGING_SKU,
+        "description": "OCI Logging - Log Storage (GB-mo)",
+        "quantity": round(qty, 4),
+        "unit": "GB-month",
+        "rate": OCI_LOGGING_RATE,
+        "monthly": money(chargeable * OCI_LOGGING_RATE),
+        "mapping": ("CloudWatch Logs re-priced on OCI Logging: first 10 GB/month free"
+                    + (f" ({free_here:,.1f} GB free here)" if free_here > 0 else "")
+                    + f"; ${OCI_LOGGING_RATE}/GB-month after."),
+        "ociServiceUsage": True,
+    }], OCI_LOGGING_PRODUCT, "Observability & Management", OCI_LOGGING_SKU, False)
+
+
+# OCI DNS: $0.85 per 1,000,000 queries; zones are free. Route 53 maps here. (OCI DNS
+# can run higher than Route 53, so these rows are flagged as a non-ideal mapping.)
+OCI_DNS_PRODUCT = "OCI DNS"
+OCI_DNS_SKU = "B88516"
+OCI_DNS_RATE = 0.85  # per 1,000,000 queries
+
+
+def _is_route53_row(row):
+    s = normalize(row.get("source_service"))
+    return "route53" in s or "route 53" in s
+
+
+def price_route53_row(row):
+    """Price an AWS Route 53 bill row on OCI DNS: $0.85 per 1,000,000 queries;
+    hosted zones and intra-VCN/internal resolver queries are free on OCI.
+    Returns (line_items, label, category, sku, carried) or None."""
+    if not _is_route53_row(row):
+        return None
+    ut = normalize(row.get("__usageType"))
+    qty = to_number(row.get("usage_quantity"), 0)
+    # Internal / intra-VCN resolver queries are free on OCI.
+    if "intra" in ut or "internal" in ut:
+        return ([{
+            "sku": OCI_DNS_SKU, "description": "OCI DNS - internal resolver queries (free)",
+            "quantity": round(qty, 4), "unit": "query", "rate": 0.0, "monthly": 0.0,
+            "mapping": "Internal / intra-VCN DNS resolution is free on OCI.",
+            "ociServiceUsage": True,
+        }], OCI_DNS_PRODUCT, "Networking", OCI_DNS_SKU, False)
+    # Public DNS queries -> $0.85 per 1,000,000.
+    if "quer" in ut:
+        millions = qty / 1_000_000.0
+        return ([{
+            "sku": OCI_DNS_SKU, "description": "OCI DNS - Queries (per 1M)",
+            "quantity": round(qty, 4), "unit": "query", "rate": OCI_DNS_RATE,
+            "monthly": money(millions * OCI_DNS_RATE),
+            "mapping": f"Route 53 DNS queries re-priced on OCI DNS at ${OCI_DNS_RATE} per 1,000,000 queries.",
+            "ociServiceUsage": True,
+        }], OCI_DNS_PRODUCT, "Networking", OCI_DNS_SKU, False)
+    # Hosted zones and everything else: OCI DNS zones are free.
+    return ([{
+        "sku": OCI_DNS_SKU, "description": "OCI DNS - Hosted zone (free)",
+        "quantity": round(qty, 4), "unit": "zone", "rate": 0.0, "monthly": 0.0,
+        "mapping": "OCI DNS does not charge per hosted zone; only per-query usage is billed.",
+        "ociServiceUsage": True,
+    }], OCI_DNS_PRODUCT, "Networking", OCI_DNS_SKU, False)
 
 
 def enrich_cloud_bill_resource_fields(row):
@@ -3683,16 +4517,33 @@ def dt_region_group(region, usagetype=""):
     return "na_eu_uk"  # us, ca, eu, uk and default
 
 
-def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, region="", usagetype=""):
+def block_perf_units_per_gb(*texts):
+    """OCI Block Volume performance units per GB, by source EBS volume type:
+    gp3 -> 20, gp2 -> 15, everything else -> 10 (default Balanced)."""
+    blob = normalize(" ".join(clean_text(t) for t in texts if t))
+    if "gp3" in blob:
+        return 20
+    if "gp2" in blob:
+        return 15
+    return BLOCK_PERFORMANCE_UNITS_PER_GB
+
+
+def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, region="", usagetype="", perf_units_per_gb=None):
     """Re-price a source-cloud usage quantity on the equivalent OCI service
     (same quantity x OCI rate). Returns a list of priced line items, or [].
 
     transfer_pools is a dict {region_group: [remaining_free_gb]} for OCI Outbound
     Data Transfer, giving each origin region its own 10 TB/month free allowance and
-    per-region over-10TB rate."""
+    per-region over-10TB rate. perf_units_per_gb sets Block Volume performance
+    units per GB (gp3=20, gp2=15, else 10)."""
+    perf_per_gb = perf_units_per_gb if perf_units_per_gb is not None else BLOCK_PERFORMANCE_UNITS_PER_GB
     base = clean_text(oci_product).split(" (approximate")[0].strip()
     svc = OCI_SERVICE_PRICES.get(base)
     qty = to_number(usage_quantity, 0)
+    # WAF / Logging / DNS are priced by their dedicated handlers (pools / per-query),
+    # never by this generic per-unit pricer.
+    if svc and svc.get("basis") in ("waf", "logging", "dns", "reference"):
+        return []
     if not svc or qty <= 0 or not svc.get("rate"):
         return []
     chargeable = qty
@@ -3716,9 +4567,9 @@ def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, re
         "mapping": f"Source usage re-priced on {base} at the OCI rate (same quantity x ${rate}/{svc.get('unit', 'unit')}).{free_note}",
         "ociServiceUsage": True,
     }]
-    # Block Volume also carries performance units (10 per GB) like the BOM.
+    # Block Volume also carries performance units (per-GB by volume type) like the BOM.
     if svc.get("perfUnitsRate"):
-        perf_qty = qty * BLOCK_PERFORMANCE_UNITS_PER_GB
+        perf_qty = qty * perf_per_gb
         items.append({
             "sku": svc.get("perfUnitsSku", ""),
             "description": f"{base} - Performance Units",
@@ -3726,7 +4577,7 @@ def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, re
             "unit": "Performance Units per month",
             "rate": svc["perfUnitsRate"],
             "monthly": money(perf_qty * svc["perfUnitsRate"]),
-            "mapping": "Block Volume performance units (10 per GB) at the OCI rate.",
+            "mapping": f"Block Volume performance units ({perf_per_gb} per GB) at the OCI rate.",
             "ociServiceUsage": True,
         })
     return items
@@ -5417,10 +6268,17 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     # OCI Outbound Data Transfer: each origin region group gets its own 10 TB/month
     # free allowance, consumed across rows.
     oci_transfer_pools = {}
+    # OCI WAF: first instance + first 10M requests/month free, shared once per bill.
+    oci_waf_instance_pool = [OCI_WAF_FREE_INSTANCES]
+    oci_waf_request_pool = [OCI_WAF_FREE_REQUESTS]
+    # OCI Logging: first 10 GB/month free, shared once per bill.
+    oci_logging_pool = [OCI_LOGGING_FREE_GB]
 
     # RDS instance types known to run SQL Server (scanned once) so license /
     # reserved-instance upfront fees that don't name the engine are carried too.
     rds_sql_server_instances = collect_sql_server_rds_instances(rows) if cloud_bill_mode else set()
+    elb_free_tier_row_id = collect_elb_free_tier_row(rows) if cloud_bill_mode else None
+    redshift_compute_ctx = collect_redshift_compute(rows) if cloud_bill_mode else None
 
     for row_index, row in enumerate(rows, start=1):
         if row.get("__approved") is False:
@@ -5608,7 +6466,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         if cloud_bill_mode and not row_free_on_oci:
             rds_result = price_rds_row(row, rds_sql_server_instances)
             if rds_result is not None:
-                rds_items, rds_label, rds_carried = rds_result
+                rds_items, rds_label, rds_carried, rds_flag = rds_result
+                if rds_flag:
+                    row["_sqlMappingFlag"] = rds_flag
                 line_items.extend(rds_items)
                 row["oci_product"] = rds_label
                 row["oci_service_category"] = "Database"
@@ -5634,12 +6494,139 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in rds_items)
                 rds_handled = True
 
+        # AWS networking services -> OCI networking products. Priced here (before the
+        # generic storage/catalog fallback) so each ELB / Direct Connect / Transfer
+        # Family line is priced once on its own usage and never relabeled as Storage
+        # or Outbound Data Transfer.
+        networking_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled:
+            net_result = price_networking_row(row, elb_free_tier_row_id)
+            if net_result is not None:
+                net_items, net_label, net_category, net_sku, net_carried = net_result
+                line_items.extend(net_items)
+                if net_label:
+                    row["oci_product"] = net_label
+                if net_category:
+                    row["oci_service_category"] = net_category
+                _net_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": net_sku,
+                    "ociProduct": net_label or clean_text(row.get("oci_product")),
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_net_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (net_items[0].get("unit") if net_items else ""),
+                    "confidence": 0.9,
+                    "reviewRequired": False,
+                }
+                if net_carried:
+                    full_service_notes.append("OCI cost set equal to the source AWS cost (no native OCI equivalent / carried).")
+                totals["sourceMonthlyCost"] += _net_src
+                totals["mappedSourceMonthlyCost"] += _net_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in net_items)
+                networking_handled = True
+
+        # Amazon Redshift -> Oracle Autonomous Data Warehouse (ADW): price the
+        # Serverless compute (ECPU) + managed storage here so it isn't reduced to
+        # block storage only by the generic fallback.
+        redshift_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not networking_handled and _is_redshift_row(row):
+            rs_result = price_redshift_row(row, redshift_compute_ctx)
+            if rs_result is not None:
+                rs_items, rs_label, rs_cat, rs_sku, rs_carried = rs_result
+                line_items.extend(rs_items)
+                row["oci_product"] = rs_label
+                row["oci_service_category"] = rs_cat
+                _rs_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": rs_sku,
+                    "ociProduct": rs_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_rs_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (rs_items[0].get("unit") if rs_items else ""),
+                    "confidence": 0.85,
+                    "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _rs_src
+                totals["mappedSourceMonthlyCost"] += _rs_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in rs_items)
+                redshift_handled = True
+
+        # AWS WAF -> OCI Web Application Firewall: instances ($5/mo after first free),
+        # requests ($0.60/1M after 10M free), rules/bot management bundled.
+        waf_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not networking_handled and not redshift_handled:
+            waf_result = price_waf_row(row, oci_waf_instance_pool, oci_waf_request_pool)
+            if waf_result is not None:
+                waf_items, waf_label, waf_cat, waf_sku, waf_carried = waf_result
+                line_items.extend(waf_items)
+                row["oci_product"] = waf_label
+                row["oci_service_category"] = waf_cat
+                _waf_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": waf_sku,
+                    "ociProduct": waf_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_waf_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (waf_items[0].get("unit") if waf_items else ""),
+                    "confidence": 0.9,
+                    "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _waf_src
+                totals["mappedSourceMonthlyCost"] += _waf_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in waf_items)
+                waf_handled = True
+
+        # CloudWatch Logs -> OCI Logging ($0.05/GB after 10 GB/month free). Route 53
+        # -> OCI DNS ($0.85/1M queries; zones free), flagged as a non-ideal mapping.
+        obs_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not networking_handled and not redshift_handled and not waf_handled:
+            obs_result = price_cloudwatch_logs_row(row, oci_logging_pool) or price_route53_row(row)
+            if obs_result is not None:
+                obs_items, obs_label, obs_cat, obs_sku, obs_carried = obs_result
+                line_items.extend(obs_items)
+                row["oci_product"] = obs_label
+                row["oci_service_category"] = obs_cat
+                _obs_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": obs_sku,
+                    "ociProduct": obs_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_obs_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (obs_items[0].get("unit") if obs_items else ""),
+                    "confidence": 0.9,
+                    "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _obs_src
+                totals["mappedSourceMonthlyCost"] += _obs_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in obs_items)
+                obs_handled = True
+
         # Authoritative storage pricing: a storage service maps to ONE OCI storage
         # product at its real rate (S3->Object Storage, EFS/FSx->File Storage,
         # EBS->Block Volume), priced on the actual storage-capacity quantity from the
         # bill — not scattered across catalog items per line.
-        storage_handled = rds_handled
-        if cloud_bill_mode and not row_free_on_oci and not rds_handled:
+        storage_handled = rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled:
             ut2 = normalize(row.get("__usageType"))
             base = clean_text(row.get("oci_product")).split(" (approx")[0].strip()
             # EBS volumes/snapshots bill under EC2 — route them to Block Volume.
@@ -5656,7 +6643,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     or not ut2
                 )
                 if is_capacity:
-                    line_items.extend(oci_service_usage_items(base, row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType")))
+                    _perf = block_perf_units_per_gb(row.get("__usageType"), row.get("source_product"))
+                    line_items.extend(oci_service_usage_items(base, row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType"), _perf))
                 sc = to_number(row.get("source_monthly_cost"), 0)
                 # Label every line of this service with its single OCI product so the
                 # results page always shows e.g. S3 -> OCI Object Storage.
@@ -5714,10 +6702,32 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     usage_hours,
                     shape=row_shape,
                 )
+                # EC2 "Windows with SQL" instances: ADD a Microsoft SQL Server
+                # license-included line (license-included on OCI) on top of compute.
+                _ec2_blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                                               ["source_product", "__usageType", "source_service"]))
+                if "with sql" in _ec2_blob and ocpus:
+                    _sql_vcpus = ocpus * 2  # OCI flex shape OCPU x 2 = vCPU
+                    _sql_ocpu = sql_server_ocpu(_sql_vcpus)
+                    _sql_rate = sql_license_rate(row.get("source_product"))
+                    _sql_edition = "Enterprise" if _sql_rate == OCI_SQL_LICENSE_ENT_RATE else "Standard"
+                    _sql_hours = usage_hours if usage_hours and usage_hours > 0 else HOURS_PER_MONTH
+                    _sql_qty = _sql_ocpu * _sql_hours
+                    line_items.append({
+                        "sku": "",
+                        "description": f"Microsoft SQL Server license-included ({_sql_ocpu} OCPU)",
+                        "quantity": round(_sql_qty, 4),
+                        "unit": "OCPU-hour",
+                        "rate": _sql_rate,
+                        "monthly": money(_sql_qty * _sql_rate),
+                        "mapping": f"EC2 Windows with SQL ({_sql_edition}): {_sql_ocpu} OCPU (vCPU {_sql_vcpus:g}/2 floored to even, min 2) x {_sql_hours:,.0f} hours x ${_sql_rate}/OCPU-hour license-included on OCI. {SQL_NO_MANAGED_NOTE}",
+                    })
+                    row["_sqlMappingFlag"] = "SQL Server — license-included (review)"
             # Re-price the source usage on the mapped OCI service (same quantity x OCI
             # rate) when nothing else priced this row (e.g. S3 GB -> OCI Object Storage GB).
             if cloud_bill_mode and sum(li.get("monthly", 0) for li in line_items) == 0:
-                line_items.extend(oci_service_usage_items(row.get("oci_product"), row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType")))
+                _perf2 = block_perf_units_per_gb(row.get("__usageType"), row.get("source_product"))
+                line_items.extend(oci_service_usage_items(row.get("oci_product"), row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType"), _perf2))
             fallback_items = line_items[fallback_start:]
             source_cost_value = full_service_mapping.get("sourceMonthlyCost", 0) if full_service_mapping else 0
             totals["sourceMonthlyCost"] += source_cost_value
@@ -5757,33 +6767,59 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         monthly = money(sum(item["monthly"] for item in line_items))
         annual = money(monthly * 12)
-        # Flag mappings where the OCI estimate runs >10% above the source-cloud cost
-        # (e.g. FSx -> File Storage) so they can be reviewed for a better fit.
         _src_cost = to_number(row.get("source_monthly_cost"), 0)
+        _prod_l = (clean_text(row.get("oci_product")) or "").lower()
+        _is_object_storage = "object storage" in _prod_l
+        _is_approx_map = bool(clean_text(row.get("mapping_note")))  # FSx / WorkSpaces etc.
+        _user_action = (cost_overrides or {}).get(str(row.get("__id"))) if cost_overrides else None
+
+        # Auto-carry recognized services that have no clean OCI price (they came out
+        # $0): carry the AWS cost over and flag as an imperfect mapping, matching the
+        # reference's carry methodology (e.g. AppStream, Route 53, WAF, Glue).
+        # A row that was already priced on a known OCI service (storage, networking,
+        # RDS, Redshift, or a re-priced usage line) is intentionally $0 when it lands
+        # inside a free allowance — e.g. Data Transfer within the 10 TB/region free
+        # pool, or a free networking tier. Those must NOT be carried at the AWS cost.
+        _priced_on_oci_service = bool(storage_handled) or any(
+            li.get("ociServiceUsage") for li in line_items)
+        _auto_carried = False
+        if (cloud_bill_mode and not row_free_on_oci and not _user_action
+                and not clean_text(row.get("_sqlMappingFlag"))
+                and not _priced_on_oci_service
+                and monthly == 0 and _src_cost > 0):
+            line_items = [{
+                "sku": "", "description": "Carried over from source AWS cost",
+                "quantity": 0, "unit": "", "rate": 0, "monthly": money(_src_cost),
+                "mapping": "No exact OCI price for this service; carried at the source AWS cost.",
+                "carriedOver": True,
+            }]
+            monthly = money(_src_cost)
+            annual = money(monthly * 12)
+            if not clean_text(row.get("oci_product")):
+                row["oci_product"] = "Carried — no direct OCI equivalent"
+            _auto_carried = True
+
+        # Mapping flag. Object Storage is a clean, expected mapping and is never
+        # flagged. Approximate maps (FSx, WorkSpaces) and auto-carried services are
+        # always flagged; otherwise flag when OCI runs >10% above the source cost.
         mapping_flag = ""
-        if cloud_bill_mode and _src_cost > 0 and monthly > _src_cost * 1.10:
-            # Standard S3 -> Object Storage is a clean, expected mapping; don't
-            # flag it as non-optimal unless it's a sizable footprint (> 1 TB).
-            _prod_l = (clean_text(row.get("oci_product")) or "").lower()
-            _src_l = (clean_text(row.get("source_service")) or "").lower()
-            _is_std_s3_object = (
-                "object storage" in _prod_l
-                and ("s3" in _src_l or "simple storage" in _src_l)
-                and not any(t in _src_l for t in ("glacier", "archive", "deep"))
-            )
-            _storage_gb = sum(
-                to_number(li.get("quantity"), 0)
-                for li in line_items
-                if "gb" in str(li.get("unit", "")).lower()
-            )
-            if _is_std_s3_object and _storage_gb <= 1000:
-                mapping_flag = ""
-            else:
+        # Transfer Family (carried) and Route 53 -> OCI DNS (can run higher than AWS)
+        # are flagged as non-ideal mappings.
+        _force_flag = _is_transfer_family_row(row) or _is_route53_row(row)
+        if cloud_bill_mode and not _is_object_storage:
+            if _is_approx_map or _auto_carried or _force_flag:
                 mapping_flag = "May not be an optimal mapping"
+            elif _src_cost > 0 and monthly > _src_cost * 1.10:
+                mapping_flag = "May not be an optimal mapping"
+        # SQL Server (license-included) rows always carry the SQL flag, overriding
+        # the generic mapping-flag logic above.
+        _sql_flag = clean_text(row.get("_sqlMappingFlag"))
+        if _sql_flag:
+            mapping_flag = _sql_flag
 
         # Per-row cost actions for flagged rows: carry the AWS cost over to OCI, or
         # remove the line from both sides of the BOM.
-        cost_action = (cost_overrides or {}).get(str(row.get("__id"))) if cost_overrides else None
+        cost_action = _user_action
         if cost_action == "carry":
             line_items = [{
                 "sku": "", "description": "Carried over from source AWS cost",
