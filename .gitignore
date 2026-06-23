@@ -23,3 +23,21 @@ uploads/*
 # Reference docs and test data (not source)
 *.pdf
 *.csv
+
+# Local agent / editor config
+.claude/
+
+# Networking design artifacts and docs (not part of the app)
+*.docx
+*.drawio
+*.png
+*.svg
+oci_network_diagram.*
+option1_sftpgo.png
+option2_soa_mft.png
+
+# Local-only analysis data (not app source)
+cost_model.json
+data/customer_sites.json
+data/oci_di_rest_task_sftp.json
+data/oci_resiliency_best_practices.json

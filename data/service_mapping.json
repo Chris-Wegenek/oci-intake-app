@@ -35,7 +35,7 @@
     {"keywords": ["global accelerator"], "category": "Networking", "ociProduct": "OCI Global Network"},
     {"keywords": ["route 53", "route53"], "category": "Networking", "ociProduct": "OCI DNS"},
     {"keywords": ["elastic load balancing", "elasticloadbalancing", "elb", "load balanc"], "category": "Networking", "ociProduct": "OCI Load Balancer"},
-    {"keywords": ["transfer family", "awstransfer", "aws transfer"], "category": "Networking", "ociProduct": "OCI Outbound Data Transfer"},
+    {"keywords": ["transfer family", "awstransfer", "aws transfer"], "category": "Networking", "ociProduct": "SFTP / SOA Suite (Marketplace)"},
     {"keywords": ["network firewall"], "category": "Security and Identity", "ociProduct": "OCI Network Firewall"},
     {"keywords": ["firewall manager"], "category": "Security and Identity", "ociProduct": "OCI Firewall"},
     {"keywords": ["web application firewall", "waf"], "category": "Security and Identity", "ociProduct": "OCI Web Application Firewall"},

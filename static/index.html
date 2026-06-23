@@ -63,7 +63,12 @@
           </label>
           <div class="load-prev-bom">
             <button type="button" id="loadPrevBom" class="ghost-button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
-            <span class="load-prev-hint">Restore a saved <strong>.json</strong> or exported <strong>.xlsx</strong> workflow</span>
+            <span class="load-prev-hint">Restore a saved <strong>.json</strong> or exported <strong>.xlsx</strong> workflow — or drop one here</span>
+          </div>
+          <div id="loadWorkflowStatus" class="load-workflow-status" hidden>
+            <span class="lws-icon" aria-hidden="true"></span>
+            <span class="lws-name"></span>
+            <span class="lws-state"></span>
           </div>
           <div id="selectedDocTile" class="selected-doc-tile" hidden>
             <span class="selected-doc-icon" aria-hidden="true">
@@ -204,7 +209,7 @@
         <div id="processorPicker" class="processor-picker" aria-label="Choose processor family"></div>
         <div class="sizing-mode-row">
           <span class="sizing-mode-label">Sizing</span>
-          <div class="mode-switch rightsize-switch" role="group" aria-label="Sizing mode" title="1 to 1 carries over source CPU/memory. Rightsize caps memory at OCI's 8 GB/OCPU target to cut cost.">
+          <div class="mode-switch rightsize-switch" role="group" aria-label="Sizing mode" title="1 to 1 carries source CPU/memory as-is. Rightsize trims OCPU &amp; RAM for the efficiency gain of newer OCI generations — Ax shapes -15% OCPU / -20% RAM per generation behind, regular E6 -10% / -15% (rounded down) — to cut cost.">
             <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
             <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
           </div>
@@ -368,16 +373,12 @@
       <section class="insight-panel result-detail-panel">
         <div class="panel-heading">
           <div class="detail-heading-left">
-            <div class="column-picker" id="columnPicker">
-              <button type="button" class="ghost-button column-picker-btn" id="columnPickerBtn">Columns ▾</button>
-              <div class="column-picker-menu" id="columnPickerMenu" hidden></div>
-            </div>
             <h3 id="detailHeading">Application Cost Details</h3>
           </div>
           <span id="resultRowCount">0 workloads</span>
         </div>
         <div class="sizing-legend" aria-label="Status key">
-          <span class="legend-item"><span class="size-flag size-flag-rightsized">RIGHTSIZED</span> memory trimmed to 8 GB/OCPU</span>
+          <span class="legend-item"><span class="size-flag size-flag-rightsized">RIGHTSIZED</span> OCPU &amp; RAM trimmed for newer-generation efficiency</span>
           <span class="legend-item"><span class="size-flag size-flag-baremetal">BARE METAL</span> too big for flex</span>
           <span class="legend-item"><span class="size-flag size-flag-impossible">IMPOSSIBLE</span> exceeds largest OCI shape</span>
           <span class="legend-item"><span class="size-flag size-flag-gpu">GPU</span> mapped to OCI GPU shape</span>
@@ -394,6 +395,12 @@
           <button type="button" class="primary-button bulk-apply-btn" id="bulkApply">Apply to selected</button>
           <button type="button" class="ghost-button" id="bulkClear">Clear selection</button>
         </div>
+        <div class="result-table-toolbar">
+          <div class="column-picker" id="columnPicker">
+            <button type="button" class="ghost-button column-picker-btn" id="columnPickerBtn">Columns ▾</button>
+            <div class="column-picker-menu" id="columnPickerMenu" hidden></div>
+          </div>
+        </div>
         <div class="result-detail-layout">
           <aside class="source-filter-panel" id="sourceFilterPanel" hidden>
             <div class="source-filter-head">Filter by source service</div>
@@ -405,6 +412,12 @@
           </aside>
           <div class="result-detail-wrap">
             <table id="resultsTable" class="detail-table"></table>
+          </div>
+        </div>
+        <div id="tableLoadingOverlay" class="table-loading-overlay" hidden role="status" aria-live="polite">
+          <div class="table-loading-card">
+            <span class="price-spinner-circle" aria-hidden="true"></span>
+            <span id="tableLoadingText">Applying changes…</span>
           </div>
         </div>
       </section>

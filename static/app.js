@@ -196,6 +196,7 @@ const els = {
   loadWorkflow: document.querySelector("#loadWorkflow"),
   loadWorkflowFile: document.querySelector("#loadWorkflowFile"),
   loadPrevBom: document.querySelector("#loadPrevBom"),
+  loadWorkflowStatus: document.querySelector("#loadWorkflowStatus"),
   bomName: document.querySelector("#bomName"),
   ociDiscount: document.querySelector("#ociDiscount"),
   crossCloudTile: document.querySelector("#crossCloudTile"),
@@ -1637,15 +1638,31 @@ async function applyWorkflowState(wf) {
   if (state.pricing) showResultsPage();
 }
 
+// Show the dropped/selected workflow file name + whether it was accepted.
+function setWorkflowStatus(name, message, state) {
+  const el = els.loadWorkflowStatus;
+  if (!el) return;
+  el.hidden = false;
+  el.className = `load-workflow-status lws-${state}`;
+  const icon = state === "ok" ? "✓" : state === "error" ? "✕" : "⏳";
+  el.querySelector(".lws-icon").textContent = icon;
+  el.querySelector(".lws-name").textContent = name || "";
+  el.querySelector(".lws-state").textContent = message || "";
+}
+
 async function loadWorkflowFromFile(file) {
   if (!file) return;
+  const nm = file.name || "file";
+  const okExt = /\.(json|xlsx)$/i.test(nm);
+  setWorkflowStatus(nm, okExt ? "loaded — checking…" : "not a .json or .xlsx file", okExt ? "loading" : "error");
+  if (!okExt) return;
   if (els.priceSpinner) {
     els.priceSpinner.querySelector(".price-spinner-text").textContent = "Loading workflow…";
     els.priceSpinner.hidden = false;
   }
   try {
     let wf;
-    if (file.name.toLowerCase().endsWith(".json")) {
+    if (nm.toLowerCase().endsWith(".json")) {
       wf = JSON.parse(await file.text());
     } else {
       const fd = new FormData();
@@ -1656,9 +1673,11 @@ async function loadWorkflowFromFile(file) {
       wf = payload.workflow;
     }
     await applyWorkflowState(wf);
+    setWorkflowStatus(nm, "✓ Accepted — BOM restored", "ok");
   } catch (error) {
     els.engineStatus.textContent = `Workflow load failed: ${error.message}`;
     if (els.priceSpinner) els.priceSpinner.hidden = true;
+    setWorkflowStatus(nm, `✕ Not accepted — ${error.message}`, "error");
   } finally {
     if (els.priceSpinner) els.priceSpinner.querySelector(".price-spinner-text").textContent = "Updating…";
   }
@@ -2618,12 +2637,12 @@ function syncBulkBar() {
 
 function applyBulkCostAction(value) {
   const ids = Object.keys(state.selectedRows).filter((id) => state.selectedRows[id]);
-  if (!ids.length) return;
+  if (!ids.length) return Promise.resolve();
   ids.forEach((id) => {
     if (value === "estimate" || !value) delete state.costOverrides[id];
     else state.costOverrides[id] = value;
   });
-  priceRows({ keepView: true });
+  return priceRows({ keepView: true });
 }
 
 function renderResultTableFromColumns(rows, columns) {
@@ -2679,6 +2698,17 @@ function flagActive(row) {
   return Boolean(row.mappingFlag) && !state.approvedFlags[row.rowId];
 }
 
+// Show the OCI shape an EC2/compute row was mapped to (e.g. "E6 Standard Ax").
+// Only compute rows (those sized with OCPUs) carry a flex shape; storage/DBaaS/
+// networking rows don't, so they get no badge.
+function computeShapeBadge(row) {
+  const ocpus = Number(row.specs?.ocpus || 0);
+  if (ocpus <= 0) return "";
+  const shape = row.shapeUsed?.shortLabel || row.shapeUsed?.label;
+  if (!shape) return "";
+  return ` <span class="shape-map-badge" title="OCI shape mapped for this compute line">${escapeHtml(shape)}</span>`;
+}
+
 function mappingFlagBadge(row) {
   if (row.costAction === "remove") {
     return ` <span class="size-flag size-flag-removed" title="Removed from both sides of the BOM">REMOVED</span>`;
@@ -2725,8 +2755,11 @@ function sizeFlagBadge(row) {
     badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">BARE METAL</span>`);
   }
   if (row.rightsized) {
-    const orig = row.originalMemoryGb ? `from ${formatNumber(row.originalMemoryGb)} GB` : "to 8 GB/OCPU";
-    badges.push(` <span class="size-flag size-flag-rightsized" title="Memory trimmed ${escapeHtml(orig)}">RIGHTSIZED</span>`);
+    const fromBits = [];
+    if (row.originalOcpus) fromBits.push(`${formatNumber(row.originalOcpus)} OCPU`);
+    if (row.originalMemoryGb) fromBits.push(`${formatNumber(row.originalMemoryGb)} GB`);
+    const from = fromBits.length ? ` (from ${fromBits.join(" / ")})` : "";
+    badges.push(` <span class="size-flag size-flag-rightsized" title="OCPU &amp; RAM trimmed for newer-generation efficiency${escapeHtml(from)}">RIGHTSIZED</span>`);
   }
   if (Array.isArray(row.lineItems) && row.lineItems.some((li) => li && li.isGpu)) {
     badges.push(` <span class="size-flag size-flag-gpu" title="Mapped to an OCI GPU shape">GPU</span>`);
@@ -2765,7 +2798,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
         key: "ociTarget",
         label: "OCI target",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
-        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + mappingFlagBadge(row),
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + computeShapeBadge(row) + mappingFlagBadge(row),
       },
       {
         key: "usage",
@@ -3015,8 +3048,20 @@ els.sourceFilterNone?.addEventListener("click", () => {
 });
 
 // Bulk cost-action controls.
-els.bulkApply?.addEventListener("click", () => {
-  applyBulkCostAction(els.bulkCostAction ? els.bulkCostAction.value : "estimate");
+els.bulkApply?.addEventListener("click", async () => {
+  const n = Object.keys(state.selectedRows).filter((id) => state.selectedRows[id]).length;
+  if (!n) return;
+  const overlay = document.querySelector("#tableLoadingOverlay");
+  const text = document.querySelector("#tableLoadingText");
+  if (text) text.textContent = `Applying to ${n} selected row${n === 1 ? "" : "s"}…`;
+  if (overlay) overlay.hidden = false;
+  // Let the overlay paint before the heavy re-price/re-render.
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  try {
+    await applyBulkCostAction(els.bulkCostAction ? els.bulkCostAction.value : "estimate");
+  } finally {
+    if (overlay) overlay.hidden = true;
+  }
 });
 els.bulkClear?.addEventListener("click", () => {
   state.selectedRows = {};
@@ -3077,8 +3122,26 @@ els.switchToOnPrem?.addEventListener("click", () => {
 
 els.dropZone.addEventListener("drop", (event) => {
   const [file] = event.dataTransfer.files;
+  // A dropped .json is a saved workflow, not a bill — route it to the loader.
+  if (file && /\.json$/i.test(file.name)) {
+    loadWorkflowFromFile(file);
+    return;
+  }
   uploadFile(file).catch(setUploadingError);
 });
+
+// The "Load previous BOM" area is also a drop target for workflow files.
+const loadBomZone = document.querySelector(".load-prev-bom");
+if (loadBomZone) {
+  ["dragenter", "dragover"].forEach((ev) =>
+    loadBomZone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); loadBomZone.classList.add("is-dragging"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    loadBomZone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); loadBomZone.classList.remove("is-dragging"); }));
+  loadBomZone.addEventListener("drop", (e) => {
+    const [file] = e.dataTransfer.files;
+    if (file) loadWorkflowFromFile(file);
+  });
+}
 
 els.addRow.addEventListener("click", addBlankRow);
 els.addColumn?.addEventListener("click", showAddColumnForm);

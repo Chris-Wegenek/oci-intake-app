@@ -1121,6 +1121,7 @@ td input[type="checkbox"] {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-bottom: 34px; /* room for the .json button hanging under Export to Excel */
 }
 
 .bom-match-toggle {
@@ -1163,6 +1164,32 @@ td input[type="checkbox"] {
 
 .column-picker {
   position: relative;
+}
+
+/* Columns picker toolbar — sits at the top-right, just above the table. */
+.result-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 6px;
+}
+
+/* Mapped-OCI-shape tag shown next to compute (EC2) OCI targets. */
+.shape-map-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0b5cad;
+  background: #e7f1ff;
+  border: 1px solid #bcd6f5;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.result-table-toolbar .column-picker-menu {
+  left: auto;
+  right: 0;
 }
 
 .column-picker-btn {
@@ -1704,10 +1731,11 @@ td input[type="checkbox"] {
   color: #243244;
 }
 
+/* Excel button sits inline with the other action buttons; the .json button
+   hangs directly beneath it (absolute) so it doesn't push Excel up. */
 .export-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  position: relative;
+  align-self: center;
 }
 
 .load-prev-bom {
@@ -1722,8 +1750,42 @@ td input[type="checkbox"] {
   color: #6b7682;
 }
 
+.load-prev-bom.is-dragging {
+  outline: 2px dashed #4a90d9;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.load-workflow-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid var(--line, #d8dee6);
+  background: #f5f7fa;
+}
+
+.load-workflow-status[hidden] { display: none; }
+.load-workflow-status .lws-name { font-weight: 600; }
+.load-workflow-status .lws-state { color: #6b7682; }
+.load-workflow-status.lws-ok { background: #e6f4ec; border-color: #bfe3cd; }
+.load-workflow-status.lws-ok .lws-icon { color: #1f8a4c; font-weight: 700; }
+.load-workflow-status.lws-ok .lws-state { color: #1f8a4c; }
+.load-workflow-status.lws-error { background: #fdecea; border-color: #f5c2bd; }
+.load-workflow-status.lws-error .lws-icon,
+.load-workflow-status.lws-error .lws-state { color: #c0392b; }
+.load-workflow-status.lws-loading .lws-icon { color: #c77f1a; }
+
 /* Light grayish, 25%-opacity "Export .json" button under the Excel button. */
 .export-json-btn {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  width: 100%;
   font-size: 12px;
   font-weight: 600;
   color: #5a6470;
@@ -3119,6 +3181,37 @@ td input[type="checkbox"] {
 
 .result-detail-panel {
   margin-top: 16px;
+  position: relative;
+}
+
+/* Loading screen over the results table while a bulk apply / large change runs. */
+.table-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 8px;
+}
+
+.table-loading-overlay[hidden] {
+  display: none;
+}
+
+.table-loading-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: #fff;
+  border: 1px solid var(--line, #d8dee6);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font-size: 14px;
+  font-weight: 600;
+  color: #243244;
 }
 
 .result-detail-layout {
