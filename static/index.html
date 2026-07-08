@@ -136,6 +136,16 @@
             </div>
           </div>
 
+          <div class="cpuunit-row" id="cpuUnitRow">
+            <span class="sizing-mode-label">CPU column is</span>
+            <div class="mode-switch cpuunit-switch" role="group" aria-label="CPU column unit" title="What the uploaded CPU column holds. Auto: detect vCPU vs OCPU from the header (defaults to vCPU when unclear). vCPUs: halve it (2 vCPU = 1 OCPU) for OCI. Already OCPUs: use the count as-is. The OCPUs column below updates to match.">
+              <button type="button" class="mode-opt is-active" data-cpuunit="auto">Auto</button>
+              <button type="button" class="mode-opt" data-cpuunit="vcpu">vCPUs</button>
+              <button type="button" class="mode-opt" data-cpuunit="ocpu">Already OCPUs</button>
+            </div>
+            <span id="cpuUnitDetected" class="cpuunit-detected" hidden></span>
+          </div>
+
           <div class="table-wrap" aria-label="Editable inventory table">
             <table id="reviewTable"></table>
           </div>

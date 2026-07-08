@@ -1286,6 +1286,20 @@ td input[type="checkbox"] {
   color: #54616e;
 }
 
+.cpuunit-detected {
+  font-size: 12px;
+  font-style: italic;
+  color: #7a8794;
+}
+
+.cpuunit-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 4px 0 12px;
+}
+
 .shape-auto-disabled {
   opacity: 0.4;
   pointer-events: none;

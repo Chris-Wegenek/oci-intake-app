@@ -18,6 +18,7 @@ const state = {
   hideWindowsPricing: false,
   rightsize: false,
   auto: false,
+  cpuUnit: "auto",
   hoursPerMonth: 730,
   bomName: "",
   ociDiscount: 0,
@@ -190,6 +191,9 @@ const els = {
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
   hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
   rightsizeSwitches: document.querySelectorAll(".rightsize-switch"),
+  cpuUnitSwitches: document.querySelectorAll(".cpuunit-switch"),
+  cpuUnitDetected: document.getElementById("cpuUnitDetected"),
+  cpuUnitRow: document.getElementById("cpuUnitRow"),
   hoursPerMonth: document.querySelector("#hoursPerMonth"),
   exportExcel: document.querySelector("#exportExcel"),
   exportJson: document.querySelector("#exportJson"),
@@ -887,6 +891,40 @@ function renderStats(meta = {}) {
   syncMissingFilterUi(fields);
 }
 
+// CPU-unit interpretation. The parser stores the CPU column already halved
+// (raw vCPU / 2 = OCPU under the default vCPU assumption). "Already OCPUs" means the
+// source count is the OCPU count, so the review/pricing value is doubled back to the
+// raw count. "Auto" detects vCPU vs OCPU from the original header, defaulting to vCPU.
+function resolvedCpuUnit() {
+  if (state.cpuUnit === "vcpu" || state.cpuUnit === "ocpu") return state.cpuUnit;
+  const f = (state.fields || []).find((x) => x && x.cpuSourceLabel);
+  const src = String(f?.cpuSourceLabel || "").toLowerCase();
+  if (src.includes("ocpu")) return "ocpu";
+  if (src.includes("vcpu") || src.includes("virtual cpu")) return "vcpu";
+  return "vcpu";
+}
+function cpuDisplayMult() {
+  return resolvedCpuUnit() === "ocpu" ? 2 : 1;
+}
+function isCpuField(field) {
+  return !!(field && field.cpuSourceLabel);
+}
+function formatCpuDisplay(n) {
+  const r = Math.round(n * 1000) / 1000;
+  return Number.isInteger(r) ? String(r) : String(r);
+}
+function updateCpuUnitHint() {
+  if (!els.cpuUnitDetected) return;
+  if (state.cpuUnit === "auto" && (state.fields || []).some((f) => f && f.cpuSourceLabel)) {
+    const r = resolvedCpuUnit();
+    els.cpuUnitDetected.textContent =
+      "Auto-detected: " + (r === "ocpu" ? "already OCPUs" : "vCPUs (halved for OCI)");
+    els.cpuUnitDetected.hidden = false;
+  } else {
+    els.cpuUnitDetected.hidden = true;
+  }
+}
+
 function renderTable() {
   const fields = previewFields();
   const rowEntries = reviewRowEntries(fields);
@@ -920,13 +958,27 @@ function renderTable() {
       cellEditor.className = "cell-editor";
       const input = document.createElement("input");
       input.type = "text";
-      input.value = row[field.key] ?? "";
+      // The OCPUs column reflects the CPU-unit toggle: stored value is the parsed
+      // (halved) OCPU; display it x2 when the source column is "Already OCPUs".
+      const cpuField = isCpuField(field);
+      const cpuMult = cpuField ? cpuDisplayMult() : 1;
+      const storedVal = row[field.key];
+      if (cpuField && storedVal !== "" && storedVal != null && !isNaN(Number(storedVal))) {
+        input.value = formatCpuDisplay(Number(storedVal) * cpuMult);
+      } else {
+        input.value = storedVal ?? "";
+      }
       input.placeholder = cellIsMissing(row, field.key) ? "Missing data" : "";
       input.dataset.rowIndex = String(rowIndex);
       input.dataset.fieldKey = field.key;
       input.setAttribute("aria-label", `${field.label}, row ${rowIndex + 1}`);
       input.addEventListener("input", () => {
-        row[field.key] = input.value;
+        if (cpuField && input.value !== "" && !isNaN(Number(input.value))) {
+          // Store back in the parsed (halved) OCPU space so pricing stays consistent.
+          row[field.key] = Number(input.value) / cpuMult;
+        } else {
+          row[field.key] = input.value;
+        }
         const isMissing = cellIsMissing(row, field.key, input.value);
         td.classList.toggle("is-missing-data", isMissing);
         input.placeholder = isMissing ? "Missing data" : "";
@@ -965,6 +1017,10 @@ function renderTable() {
 
   els.reviewTable.replaceChildren(thead, tbody);
   renderStats();
+  // CPU-unit override only applies to on-prem inventory (cloud bills carry OCPU/vCPU
+  // in the usage rows), so hide the control in cloud-bill mode.
+  if (els.cpuUnitRow) els.cpuUnitRow.hidden = isCloudBillMode();
+  updateCpuUnitHint();
 }
 
 function focusReviewField(fieldKey) {
@@ -1438,6 +1494,7 @@ async function priceRows({ keepView = false } = {}) {
           hideGpuPricing: state.hideGpuPricing,
           hideWindowsPricing: state.hideWindowsPricing,
           rightsize: state.rightsize,
+          cpuUnit: state.cpuUnit,
           auto: state.auto,
           autoTier: state.autoTier,
           shapeOverrides: state.shapeOverrides,
@@ -1451,6 +1508,7 @@ async function priceRows({ keepView = false } = {}) {
       throw new Error(payload.error || "Pricing failed.");
     }
     state.pricing = payload;
+    updateCpuUnitHint();
     renderPricing(payload);
     renderResults(payload);
     // When re-pricing in place (e.g. editing a shape dropdown), don't jump the page.
@@ -1502,6 +1560,7 @@ async function exportToExcel() {
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
         rightsize: state.rightsize,
+        cpuUnit: state.cpuUnit,
         auto: state.auto,
         autoTier: state.autoTier,
         shapeOverrides: state.shapeOverrides,
@@ -1556,6 +1615,7 @@ function collectWorkflowState() {
     hideGpuPricing: state.hideGpuPricing,
     hideWindowsPricing: state.hideWindowsPricing,
     rightsize: state.rightsize,
+    cpuUnit: state.cpuUnit,
     auto: state.auto,
     autoTier: state.autoTier,
     hoursPerMonth: state.hoursPerMonth,
@@ -3182,6 +3242,26 @@ els.rightsizeSwitches?.forEach((sw) => {
     const opt = event.target.closest("[data-rightsize]");
     if (!opt) return;
     setRightsizeMode(opt.dataset.rightsize === "true");
+  });
+});
+
+function setCpuUnit(value) {
+  const v = ["auto", "vcpu", "ocpu"].includes(value) ? value : "auto";
+  state.cpuUnit = v;
+  document.querySelectorAll(".cpuunit-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.cpuunit === v);
+  });
+  updateCpuUnitHint();
+  // Re-render the review table so the OCPUs column reflects the chosen unit.
+  if ((state.fields || []).length) renderTable();
+}
+els.cpuUnitSwitches?.forEach((sw) => {
+  sw.addEventListener("click", (event) => {
+    const opt = event.target.closest("[data-cpuunit]");
+    if (!opt) return;
+    setCpuUnit(opt.dataset.cpuunit);
+    // If we've already priced, re-price so results/export stay in sync.
+    if (typeof priceRows === "function" && state.pricing) priceRows({ keepView: true });
   });
 });
 

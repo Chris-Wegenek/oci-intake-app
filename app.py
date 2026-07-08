@@ -1503,11 +1503,32 @@ def pick_sheet(excel_file):
         }.items():
             if term in text:
                 score += weight
+        # Per-COLUMN header signals: evaluate each header cell on its own so a real
+        # inventory sheet isn't penalized for also having a Storage column (running
+        # the memory check on the whole joined row bails out on the word "storage").
+        header_cells = []
+        for row_idx in range(min(8, len(raw.index))):
+            for value in raw.iloc[row_idx].tolist():
+                c = clean_text(value)
+                if c:
+                    header_cells.append(c)
+        has_cpu = any(spreadsheet_cpu_label(c) for c in header_cells)
+        has_mem = any(spreadsheet_memory_label(c) for c in header_cells)
+        has_storage = any(spreadsheet_storage_label(c) for c in header_cells)
+        if has_cpu:
+            score += 6
+        if has_mem:
+            score += 6
+        if has_storage:
+            score += 3
+        # A real server inventory has BOTH a CPU and a Memory column AND many server
+        # rows. Weight the row count heavily so a small decoy sheet can't outrank the
+        # actual inventory.
+        data_rows = max(0, len(raw.index) - 1)
+        if has_cpu and has_mem:
+            score += 10 + min(40, data_rows // 4)
         numeric_cells = 0
         for row_idx in range(min(80, len(raw.index))):
-            row_text = normalize(" ".join(clean_text(value) for value in raw.iloc[row_idx].tolist()))
-            if spreadsheet_cpu_label(row_text) or spreadsheet_memory_label(row_text):
-                score += 4
             numeric_cells += sum(1 for value in raw.iloc[row_idx].tolist() if to_number(value, 0))
         score += min(12, numeric_cells // 8)
         if score > best_score:
@@ -1688,6 +1709,9 @@ def parse_workbook_rule_based(path, full_service_beta=False):
     for field in fields:
         if spreadsheet_cpu_label(field["label"]):
             cpu_field_keys.add(field["key"])
+            # Preserve the original CPU header so auto-detection can tell whether the
+            # column was labeled vCPU vs OCPU (the label is renamed to "OCPUs" below).
+            field["cpuSourceLabel"] = field["label"]
             field["label"] = ocpu_review_label(field["label"])
         elif spreadsheet_memory_label(field["label"]):
             memory_field_keys.add(field["key"])
@@ -6147,7 +6171,33 @@ def full_service_line_items(row, fields, rate_card=None):
     return [line_item], mapping, []
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None):
+def detect_cpu_unit(fields):
+    """Auto-detect whether the uploaded CPU column holds vCPUs or OCPUs from its
+    original header text. Falls back to 'vcpu' (the app's default assumption) when the
+    header is ambiguous (e.g. just 'CPUs')."""
+    for f in fields or []:
+        if not isinstance(f, dict):
+            continue
+        src = normalize(f.get("cpuSourceLabel") or "")
+        if not src:
+            continue
+        if "ocpu" in src:
+            return "ocpu"
+        if "vcpu" in src or "v cpu" in src or "virtual cpu" in src:
+            return "vcpu"
+    return "vcpu"
+
+
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto"):
+    # cpu_unit override (on-prem uploads): the parser normalizes the source CPU column
+    # to OCPUs assuming it holds vCPUs (2 vCPU = 1 OCPU). 'auto' (default) detects the
+    # unit from the column header and falls back to vCPU; 'ocpu' uses the source count
+    # as-is (undo the halving); 'vcpu' forces the 2:1 conversion.
+    _cpu_unit = clean_text(cpu_unit).lower()
+    if _cpu_unit not in ("auto", "vcpu", "ocpu"):
+        _cpu_unit = "auto"
+    cpu_unit_resolved = detect_cpu_unit(fields) if _cpu_unit == "auto" else _cpu_unit
+    cpu_ocpu_mult = 2.0 if cpu_unit_resolved == "ocpu" else 1.0
     eff_hours = hours_per_month if (hours_per_month and hours_per_month > 0) else HOURS_PER_MONTH
     def _apply_rightsize(ocpu_value, mem_value, plan):
         # Generation-gap rightsize: reduce OCPUs and RAM by a per-generation percentage
@@ -6286,8 +6336,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         app_servers = 0.0 if cloud_bill_mode else value_for(row, keys["app_servers"])
         db_servers = 0.0 if cloud_bill_mode else value_for(row, keys["db_servers"])
-        app_cpu = 0.0 if cloud_bill_mode else value_for(row, keys["app_cpu"])
-        db_cpu = 0.0 if cloud_bill_mode else value_for(row, keys["db_cpu"])
+        app_cpu = 0.0 if cloud_bill_mode else value_for(row, keys["app_cpu"]) * cpu_ocpu_mult
+        db_cpu = 0.0 if cloud_bill_mode else value_for(row, keys["db_cpu"]) * cpu_ocpu_mult
         app_memory = 0.0 if cloud_bill_mode else value_for(row, keys["app_memory"])
         db_memory = 0.0 if cloud_bill_mode else value_for(row, keys["db_memory"])
         if not cloud_bill_mode and not keys["app_servers"] and (app_cpu or app_memory):
@@ -6975,6 +7025,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "cloudBillMode": cloud_bill_mode,
         "hoursPerMonth": eff_hours,
         "selectedShape": selected_shape,
+        "cpuUnitResolved": cpu_unit_resolved,
         "rateCard": rate_card,
         "rateCards": all_shape_payloads(service_catalog_enabled),
         "totals": totals,
@@ -7569,18 +7620,22 @@ class IntakeHandler(BaseHTTPRequestHandler):
             source_provider = normalize_provider_hint(payload.get("providerHint"))
             shape_overrides = payload.get("shapeOverrides") if isinstance(payload.get("shapeOverrides"), dict) else {}
             cost_overrides = payload.get("costOverrides") if isinstance(payload.get("costOverrides"), dict) else {}
+            cpu_unit = str(payload.get("cpuUnit", "auto")).lower()
+            if cpu_unit not in ("auto", "vcpu", "ocpu"):
+                cpu_unit = "auto"
             if shape_key not in SHAPE_LOOKUP:
                 self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
                 return
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit)
             pricing["bomMatch"] = bom_match
             pricing["hideGpuPricing"] = hide_gpu_pricing
             pricing["hideWindowsPricing"] = hide_windows_pricing
             pricing["rightsize"] = rightsize
             pricing["auto"] = auto
+            pricing["cpuUnit"] = cpu_unit  # requested (may be "auto")
             llm_payload, llm_warning = call_llm_mapping(pricing)
             pricing = enrich_with_llm(pricing, llm_payload)
             if llm_warning:
@@ -7608,6 +7663,9 @@ class IntakeHandler(BaseHTTPRequestHandler):
             auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
             shape_overrides = payload.get("shapeOverrides") if isinstance(payload.get("shapeOverrides"), dict) else {}
             cost_overrides = payload.get("costOverrides") if isinstance(payload.get("costOverrides"), dict) else {}
+            cpu_unit = str(payload.get("cpuUnit", "auto")).lower()
+            if cpu_unit not in ("auto", "vcpu", "ocpu"):
+                cpu_unit = "auto"
             bom_name = clean_text(payload.get("bomName"))
             oci_discount = to_number(payload.get("ociDiscount"), 0)
             if oci_discount < 0:
@@ -7626,7 +7684,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Export requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit)
 
             # Cloud bill mode exports the AWS->OCI comparison workbook (reference style),
             # not the on-prem BOM-script workbook.
