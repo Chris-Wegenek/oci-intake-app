@@ -1473,8 +1473,37 @@ def all_shape_payloads(full_service_beta=False):
     return [shape_payload(shape["key"], full_service_beta) for shape in SHAPE_DEFINITIONS]
 
 
+def hidden_sheet_names(source):
+    """Titles of hidden / very-hidden worksheets, so parsing ignores them. `source`
+    is a path to an .xlsx/.xlsm workbook; returns an empty set for other formats or on
+    any error (pandas can't see sheet visibility, so this uses openpyxl)."""
+    try:
+        path_str = str(source)
+    except Exception:
+        return set()
+    if not path_str.lower().endswith((".xlsx", ".xlsm")):
+        return set()
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path_str, read_only=True)
+        hidden = {ws.title for ws in wb.worksheets
+                  if getattr(ws, "sheet_state", "visible") != "visible"}
+        wb.close()
+        return hidden
+    except Exception:
+        return set()
+
+
+def visible_sheet_names(excel_file, source=None):
+    """excel_file.sheet_names minus any hidden sheets (falls back to all sheets if that
+    would leave nothing)."""
+    hidden = hidden_sheet_names(source if source is not None else getattr(excel_file, "io", None))
+    names = [n for n in excel_file.sheet_names if n not in hidden]
+    return names or list(excel_file.sheet_names)
+
+
 def pick_sheet(excel_file):
-    names = excel_file.sheet_names
+    names = visible_sheet_names(excel_file)
     for name in names:
         if normalize(name) == "current app db infra details":
             return name
@@ -1763,7 +1792,7 @@ def parse_workbook_rule_based(path, full_service_beta=False):
 def workbook_digest(path):
     excel_file = pd.ExcelFile(path)
     sheets = []
-    for sheet in excel_file.sheet_names:
+    for sheet in visible_sheet_names(excel_file, path):
         raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
         max_rows = min(45, len(raw.index))
         max_cols = min(35, len(raw.columns))
@@ -5436,10 +5465,11 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
     else:
         excel_file = pd.ExcelFile(path)
         dedicated_parsed = None
-        for sheet in excel_file.sheet_names:
+        visible_sheets = visible_sheet_names(excel_file, path)
+        for sheet in visible_sheets:
             raw = read_bill_table(path, sheet)
             if dedicated_parsed is None:
-                dedicated_parsed = parse_azure_service_mapping_table(path, sheet, raw, provider_hint, excel_file.sheet_names)
+                dedicated_parsed = parse_azure_service_mapping_table(path, sheet, raw, provider_hint, visible_sheets)
             header_row = detect_cloud_header_row(raw)
             headers = unique_headers(raw.iloc[header_row].tolist())
             candidate_tables.append((sheet, raw, header_row, headers))
@@ -7507,7 +7537,46 @@ class IntakeHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/load-workflow":
             self.handle_load_workflow()
             return
+        if parsed.path == "/api/convert-bom":
+            self.handle_convert_bom()
+            return
         self.send_error_json(404, "Not found.")
+
+    def handle_convert_bom(self):
+        """Accept an uploaded alternate OCI BOM (xlsx/csv), recognize its SKUs/line
+        items against the OCI catalog, re-price + recover sizing, and return the app
+        pricing-result JSON so the frontend can load it live into the results view."""
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            self.send_error_json(400, "Upload must be multipart/form-data.")
+            return
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": content_type,
+                     "CONTENT_LENGTH": self.headers.get("Content-Length", "0")},
+        )
+        if "file" not in form:
+            self.send_error_json(400, "Missing file field.")
+            return
+        file_item = form["file"]
+        filename = clean_text(getattr(file_item, "filename", "")) or "bom.xlsx"
+        if not filename.lower().endswith((".xlsx", ".xls", ".csv", ".tsv")):
+            self.send_error_json(400, "Please upload an OCI BOM as .xlsx, .xls, or .csv.")
+            return
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename)
+        saved_path = UPLOAD_DIR / f"{int(time.time())}_bom_{safe_name}"
+        saved_path.write_bytes(file_item.file.read())
+        try:
+            import bom_convert
+            result = bom_convert.convert_oci_bom(saved_path)
+            result["fileName"] = filename
+            result["selectedShape"] = shape_payload(DEFAULT_SHAPE_KEY)
+            result["rateCard"] = build_rate_card(DEFAULT_SHAPE_KEY, True)
+            result["rateCards"] = all_shape_payloads(True)  # shape options for per-VM remap
+            self.send_json(200, result)
+        except Exception as exc:
+            self.send_error_json(400, f"Could not convert this OCI BOM: {exc}")
 
     def handle_load_workflow(self):
         """Accept an uploaded workflow file (.json, or an exported .xlsx with the
@@ -7678,6 +7747,23 @@ class IntakeHandler(BaseHTTPRequestHandler):
             # recreate the window). Sent by the frontend as a JSON-serializable object.
             workflow_state = payload.get("workflowState")
             workflow_json = json.dumps(workflow_state) if workflow_state else None
+
+            # A converted OCI BOM is already priced — export it in the AWS cloud-compare
+            # workbook format directly from the converted pricing (no re-pricing, and it
+            # has no on-prem fields, so this must run before the fields/shape checks).
+            if payload.get("converted"):
+                conv = payload.get("convertedPricing") or {"rows": rows, "totals": {}}
+                content = bom_export.build_cloud_comparison_bytes(conv, payload.get("ramp"), bom_name, oci_discount, workflow_json)
+                safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
+                download_name = f"{safe_name}.xlsx" if safe_name else "OCI_BOM_Converted.xlsx"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
             if shape_key not in SHAPE_LOOKUP:
                 self.send_error_json(400, f"Unsupported OCI flex shape: {shape_key}")
                 return

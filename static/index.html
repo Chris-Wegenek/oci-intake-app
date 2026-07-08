@@ -65,6 +65,16 @@
             <button type="button" id="loadPrevBom" class="ghost-button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
             <span class="load-prev-hint">Restore a saved <strong>.json</strong> or exported <strong>.xlsx</strong> workflow — or drop one here</span>
           </div>
+          <div class="load-prev-bom">
+            <button type="button" id="convertBomBtn" class="ghost-button" title="Upload an OCI BOM from anywhere (Oracle's BOM tool, a partner, another estimate). The app recognizes every SKU/line item against its OCI catalog, re-prices and recovers sizing, then loads it live into your results.">Convert an alternate OCI BOM</button>
+            <span class="load-prev-hint">Any OCI BOM (<strong>.xlsx</strong> / <strong>.csv</strong>) with OCI SKUs — recognized, re-priced &amp; loaded into results</span>
+            <input id="convertBomFile" type="file" accept=".xlsx,.xls,.csv,.tsv" hidden />
+          </div>
+          <div id="convertBomStatus" class="load-workflow-status" hidden>
+            <span class="lws-icon" aria-hidden="true"></span>
+            <span class="lws-name"></span>
+            <span class="lws-state"></span>
+          </div>
           <div id="loadWorkflowStatus" class="load-workflow-status" hidden>
             <span class="lws-icon" aria-hidden="true"></span>
             <span class="lws-name"></span>

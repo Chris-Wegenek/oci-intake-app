@@ -201,6 +201,9 @@ const els = {
   loadWorkflowFile: document.querySelector("#loadWorkflowFile"),
   loadPrevBom: document.querySelector("#loadPrevBom"),
   loadWorkflowStatus: document.querySelector("#loadWorkflowStatus"),
+  convertBomBtn: document.querySelector("#convertBomBtn"),
+  convertBomFile: document.querySelector("#convertBomFile"),
+  convertBomStatus: document.querySelector("#convertBomStatus"),
   bomName: document.querySelector("#bomName"),
   ociDiscount: document.querySelector("#ociDiscount"),
   crossCloudTile: document.querySelector("#crossCloudTile"),
@@ -1571,6 +1574,12 @@ async function exportToExcel() {
         ramp,
         existingInfraCost: state.existingInfraCost || 0,
         workflowState: collectWorkflowState(),
+        // A converted OCI BOM is already priced; export it in the AWS cloud-compare
+        // workbook format straight from the converted pricing (no re-pricing).
+        converted: !!(state.pricing && state.pricing.converted),
+        convertedPricing: (state.pricing && state.pricing.converted)
+          ? { rows: state.pricing.rows, totals: state.pricing.totals }
+          : null,
       }),
     });
     if (!response.ok) {
@@ -2741,6 +2750,103 @@ function shapeSelectHtml(row) {
   return `<select class="cell-select" data-shape-row="${escapeHtml(String(row.rowId))}" data-shape-kind="shape">${opts}</select>`;
 }
 
+// Converted OCI BOM: a per-server compute VM carries an editable OCI shape. Changing
+// it re-prices that VM client-side (the BOM is already priced, so we don't round-trip
+// the pricing engine).
+function convertedShapeSelectHtml(row) {
+  if (!row.isConvertedCompute) return "";
+  const list = state.rateCards || [];
+  if (!list.length) return "";
+  const cur = row.shapeUsed?.key;
+  const opts = list
+    .map((s) => `<option value="${escapeHtml(s.key)}" ${s.key === cur ? "selected" : ""}>${escapeHtml(s.shortLabel || s.label)}</option>`)
+    .join("");
+  return ` <select class="cell-select converted-shape-select" data-converted-shape="${escapeHtml(String(row.rowId))}" title="Re-map this server's VM to a different OCI shape (re-prices its compute)">${opts}</select>`;
+}
+
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function recomputeConvertedTotals(pricing) {
+  let monthly = 0, ocpus = 0, mem = 0, blk = 0, fil = 0;
+  for (const r of pricing.rows) {
+    monthly += Number(r.monthly || 0);
+    ocpus += Number(r.specs?.ocpus || 0);
+    mem += Number(r.specs?.memoryGb || 0);
+    blk += Number(r.specs?.blockStorageGb || 0);
+    fil += Number(r.specs?.fileStorageGb || 0);
+  }
+  pricing.totals.monthly = round2(monthly);
+  pricing.totals.annual = round2(monthly * 12);
+  pricing.totals.fullServiceMonthly = round2(monthly);
+  pricing.totals.ocpus = round2(ocpus);
+  pricing.totals.memoryGb = round2(mem);
+  pricing.totals.blockStorageGb = round2(blk);
+  pricing.totals.fileStorageGb = round2(fil);
+}
+
+// Mutate one converted compute VM row to a shape (no re-render).
+function applyShapeToVm(row, shape) {
+  if (!row || !row.isConvertedCompute || !shape) return;
+  const hours = Number(row.computeHours || 730);
+  const ocpu = Number(row.originalOcpus || row.specs?.ocpus || 0);
+  const mem = Number(row.originalMemoryGb || row.specs?.memoryGb || 0);
+  const cRate = Number(shape.computeRate || 0);
+  const mRate = Number(shape.memoryRate || 0);
+  const ocpuMonthly = round2(ocpu * hours * cRate);
+  const memMonthly = round2(mem * hours * mRate);
+  const lbl = shape.shortLabel || shape.label;
+  row.lineItems = [
+    { sku: shape.computeSku || "", description: `OCI Compute ${lbl} - OCPU`, quantity: ocpu,
+      unit: "OCPU Per Hour", rate: cRate, monthly: ocpuMonthly,
+      mapping: `Re-mapped to ${shape.label}: ${ocpu} OCPU x ${hours} hrs x $${cRate}/OCPU-hr.` },
+    { sku: shape.memorySku || "", description: `OCI Compute ${lbl} - Memory`, quantity: mem,
+      unit: "Gigabyte Per Hour", rate: mRate, monthly: memMonthly,
+      mapping: `Re-mapped to ${shape.label}: ${mem} GB x ${hours} hrs x $${mRate}/GB-hr.` },
+  ];
+  row.monthly = round2(ocpuMonthly + memMonthly);
+  row.annual = round2(row.monthly * 12);
+  row.shapeUsed = shape;
+  row.specs.ocpus = ocpu;
+  row.specs.memoryGb = mem;
+  row.ociProduct = `OCI Compute VM — ${lbl} (${ocpu} OCPU / ${mem} GB)`;
+  if (row.fullServiceMapping) row.fullServiceMapping.ociProduct = row.ociProduct;
+}
+
+function repriceConvertedCompute(rowId, shapeKey) {
+  const pricing = state.pricing;
+  if (!pricing || !pricing.converted) return;
+  const row = pricing.rows.find((r) => String(r.rowId) === String(rowId));
+  const shape = (state.rateCards || []).find((s) => s.key === shapeKey);
+  if (!row || !shape) return;
+  applyShapeToVm(row, shape);
+  recomputeConvertedTotals(pricing);
+  renderPricing(pricing);
+  renderResults(pricing);
+}
+
+// Set EVERY converted compute VM to one shape (used by the page-3 shape picker so a
+// converted BOM prices its compute on the shape you choose there). Returns count.
+function applyBulkVmShape(shapeKey) {
+  const pricing = state.pricing;
+  if (!pricing || !pricing.converted) return 0;
+  const shape = (state.rateCards || []).find((s) => s.key === shapeKey);
+  if (!shape) return 0;
+  let n = 0;
+  for (const row of pricing.rows) {
+    if (row.isConvertedCompute) { applyShapeToVm(row, shape); n += 1; }
+  }
+  recomputeConvertedTotals(pricing);
+  return n;
+}
+
+document.addEventListener("change", (event) => {
+  const sel = event.target.closest("[data-converted-shape]");
+  if (!sel) return;
+  repriceConvertedCompute(sel.dataset.convertedShape, sel.value);
+});
+
 function applyShapeOverride(rowId, kind, value) {
   if (!rowId) return;
   if (kind === "family") {
@@ -2937,7 +3043,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
         key: "ociProduct",
         label: "OCI product",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
-        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review"),
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + convertedShapeSelectHtml(row),
       },
       {
         key: "quantity",
@@ -3223,7 +3329,19 @@ els.tableEditPrompt.addEventListener("keydown", (event) => {
   }
 });
 els.priceButton.addEventListener("click", showShapePage);
-els.priceShapeButton.addEventListener("click", priceRows);
+function onPriceShapeClick() {
+  // A converted BOM is already priced — the page-3 shape choice re-prices its compute
+  // VMs on that shape (client-side); no pricing-engine round-trip.
+  if (state.pricing && state.pricing.converted) {
+    applyBulkVmShape(state.selectedShape);
+    renderPricing(state.pricing);
+    renderResults(state.pricing);
+    showResultsPage();
+    return;
+  }
+  priceRows();
+}
+els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing.addEventListener("click", priceRows);
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
@@ -3309,6 +3427,62 @@ els.loadPrevBom?.addEventListener("click", () => els.loadWorkflowFile?.click());
 els.loadWorkflowFile?.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];
   loadWorkflowFromFile(file);
+  event.target.value = "";
+});
+
+// Convert an alternate OCI BOM -> recognize SKUs -> load live into results.
+function setConvertStatus(name, message, phase) {
+  const el = els.convertBomStatus;
+  if (!el) return;
+  el.hidden = false;
+  el.className = `load-workflow-status lws-${phase}`;
+  el.querySelector(".lws-icon").textContent = phase === "ok" ? "✓" : phase === "error" ? "✕" : "⏳";
+  el.querySelector(".lws-name").textContent = name || "";
+  el.querySelector(".lws-state").textContent = message || "";
+}
+async function convertBomFromFile(file) {
+  if (!file) return;
+  const nm = file.name || "bom";
+  const okExt = /\.(xlsx|xls|csv|tsv)$/i.test(nm);
+  setConvertStatus(nm, okExt ? "converting…" : "not an .xlsx / .csv file", okExt ? "loading" : "error");
+  if (!okExt) return;
+  if (els.priceSpinner) {
+    els.priceSpinner.querySelector(".price-spinner-text").textContent = "Converting OCI BOM…";
+    els.priceSpinner.hidden = false;
+  }
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const resp = await fetch("/api/convert-bom", { method: "POST", body: fd });
+    const payload = await resp.json();
+    if (!resp.ok) throw new Error(payload.error || "Could not convert this BOM.");
+    // Load the converted pricing live into the app and jump to results (page 4).
+    state.intakeMode = "on_prem";
+    state.fullServiceBeta = true;
+    state.fields = [];
+    state.rows = payload.rows || [];
+    if (Array.isArray(payload.rateCards)) state.rateCards = payload.rateCards;
+    state.selectedShape = payload.selectedShape?.key || state.selectedShape;
+    state.pricing = payload;
+    state.bomName = state.bomName || (payload.fileName || "").replace(/\.[^.]+$/, "");
+    // A converted BOM starts on the Shape page (page 3): pick a shape (or keep the
+    // detected per-server shapes) and continue to results. Pages 2 & 3 are navigable.
+    renderPricing(payload);
+    renderResults(payload);
+    showShapePage();
+    const rec = payload.recognizedSkus || 0;
+    const rev = payload.unrecognizedSkus || 0;
+    setConvertStatus(nm, `converted — ${payload.rows.length} line items, ${rec} SKUs recognized${rev ? `, ${rev} for review` : ""}. Choose a shape →`, "ok");
+  } catch (error) {
+    setConvertStatus(nm, error.message || "conversion failed", "error");
+  } finally {
+    if (els.priceSpinner) els.priceSpinner.hidden = true;
+  }
+}
+els.convertBomBtn?.addEventListener("click", () => els.convertBomFile?.click());
+els.convertBomFile?.addEventListener("change", (event) => {
+  const file = event.target.files && event.target.files[0];
+  convertBomFromFile(file);
   event.target.value = "";
 });
 els.bomName?.addEventListener("input", (event) => {

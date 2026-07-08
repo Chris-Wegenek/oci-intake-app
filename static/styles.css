@@ -1300,6 +1300,10 @@ td input[type="checkbox"] {
   margin: 4px 0 12px;
 }
 
+.converted-shape-select {
+  margin-left: 6px;
+}
+
 .shape-auto-disabled {
   opacity: 0.4;
   pointer-events: none;
