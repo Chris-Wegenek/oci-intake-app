@@ -983,50 +983,10 @@ def _add_product_group_topics(wb, pricing):
     a dedicated sheet (Compute/Storage/Networking/Security KMS already exist)."""
     import bom_export
     groups = _aggregate_product_groups(pricing)
-
-    # ---- summary block on the Pricing Overview ----
-    ws = wb["Pricing Overview"]
-    top = 41
-    money_fmt = "#,##0.00"
     ctr = Alignment(horizontal="center", vertical="center")
     hdr_font = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
     lbl_font = Font(name="Calibri", size=11, bold=True)
-    ws.cell(top, 1).value = "Cost by Product Group (OCI vs AWS, monthly)"
-    ws.cell(top, 1).font = Font(name="Calibri", size=12, bold=True)
-    hrow = top + 1
-    for c, txt in ((1, "Product Group"), (2, "OCI Monthly"), (3, "AWS Monthly"), (4, "Savings")):
-        cell = ws.cell(hrow, c)
-        cell.value = txt
-        cell.font = hdr_font
-        cell.fill = PatternFill("solid", fgColor="FF4472C4")
-        cell.alignment = ctr
-    for i, grp in enumerate(_PRODUCT_GROUPS):
-        r = hrow + 1 + i
-        g = groups.get(grp, {})
-        oci = round(g.get("oci", 0.0), 2)
-        aws = round(g.get("aws", 0.0), 2)
-        gc = ws.cell(r, 1)
-        gc.value = grp
-        gc.font = lbl_font
-        color = bom_export._CLOUD_GROUP_COLORS.get(grp)
-        if color:
-            gc.fill = PatternFill("solid", fgColor="FF" + color)
-        ws.cell(r, 2).value = oci
-        ws.cell(r, 3).value = aws
-        ws.cell(r, 4).value = round(aws - oci, 2)
-        for c in (2, 3, 4):
-            ws.cell(r, c).number_format = money_fmt
-    tot = hrow + 1 + len(_PRODUCT_GROUPS)
-    ws.cell(tot, 1).value = "Total"
-    ws.cell(tot, 1).font = lbl_font
-    ws.cell(tot, 2).value = f"=SUM(B{hrow+1}:B{tot-1})"
-    ws.cell(tot, 3).value = f"=SUM(C{hrow+1}:C{tot-1})"
-    ws.cell(tot, 4).value = f"=SUM(D{hrow+1}:D{tot-1})"
-    for c in (2, 3, 4):
-        ws.cell(tot, c).number_format = money_fmt
-        ws.cell(tot, c).font = lbl_font
-    ws.cell(tot + 1, 1).value = ("Each group with cost has a detail sheet; Compute, Storage, "
-                                 "Networking and Security are the dedicated sheets in this workbook.")
+    money_fmt = "#,##0.00"
 
     # ---- per-group detail sheets for groups without a dedicated sheet ----
     for grp in _PRODUCT_GROUPS:
@@ -1181,27 +1141,50 @@ def _itemize_extra_services(wb, extra_priced):
     hdr_style = copy(ws.cell(10, 1)._style)
     ws.cell(r0, 1, "Added OCI Services (configured in app)")
     ws.cell(r0, 1)._style = hdr_style
-    headers = ["Service", "Category", "SKU", "Sizing", "Monthly (USD)"]
+    # Columns aligned to the outer table: Service | SKU | Unit | Unit Rate | Qty |
+    # Hours | Est. Monthly | Notes. Hours shows the app's hours-per-month setting for
+    # per-hour meters (FastConnect ports, load balancers, ...) and blank otherwise.
+    headers = ["Service", "SKU", "Unit", "Unit Rate", "Qty / Input",
+               "Hours / Month", "Est. Monthly", "Notes / Category"]
     for j, h in enumerate(headers, start=1):
         ws.cell(r0 + 1, j, h)
+    last = r0 + 1
     for i, s in enumerate(extra_priced):
         r = r0 + 2 + i
         ws.cell(r, 1, s["name"])
-        ws.cell(r, 2, s["group"])
-        ws.cell(r, 3, s["sku"])
-        ws.cell(r, 4, s["sizing"])
-        ws.cell(r, 5, round(float(s["monthly"] or 0), 2))
+        ws.cell(r, 2, s["sku"])
+        ws.cell(r, 3, s.get("unit"))
+        rc = ws.cell(r, 4, round(float(s.get("rate") or 0), 4)); rc.number_format = "#,##0.0000"
+        ws.cell(r, 5, s.get("qty"))
+        hrs = s.get("hours")
+        ws.cell(r, 6, hrs if isinstance(hrs, (int, float)) and hrs else None)
+        mc = ws.cell(r, 7, round(float(s["monthly"] or 0), 2)); mc.number_format = "#,##0.00"
+        ws.cell(r, 8, s.get("group"))
+        last = r
+    # Total Est. Monthly across the added services (display only).
+    tr = last + 1
+    tc = ws.cell(tr, 1, "Total Added OCI Services"); tc.font = Font(bold=True)
+    tot = ws.cell(tr, 7, f"=SUM(G{r0 + 2}:G{last})" if extra_priced else 0)
+    tot.number_format = "#,##0.00"; tot.font = Font(bold=True)
+    # This itemized table is a PAPER TRAIL only — every added service's cost already flows
+    # to the correct Pricing Overview line via _add_extra_services. The Networking sheet's
+    # "Modeled Monthly" (B5=G19=SUM(G11:G18)) feeds Pricing Overview B18, so leaving these
+    # values inside that SUM would double-count them. Native networking is always zeroed in
+    # this app, so pin G19 to 0 to keep _add_extra_services the single source of truth.
+    ws["G19"] = 0
 
 
-def _repoint_ramp_refs(ws_po, months):
+def _repoint_ramp_refs(ws_po, months, include_windows=False):
     """The cost-profile's Year-1 columns sum the ramp's consumption %. Re-point those
     ranges at the actual number of ramp months the app is set to (the template hardcodes
     F12:F23 = 12 months). Year 1 uses at most the first 12 ramp months."""
     y1_last = RAMP_FIRST_MONTH_ROW + min(12, max(1, months)) - 1
     rng = f"'Consumption Ramp'!$F${RAMP_FIRST_MONTH_ROW}:$F${y1_last}"
-    # Core infrastructure now carries licensing too.
-    ws_po["E14"] = f"=IFERROR(SUM($B$13:$B$15,$B$21)*SUM({rng}),0)"
-    ws_po["F14"] = "=IFERROR(SUM($B$13:$B$15,$B$21)*12,0)"
+    # Core infrastructure = compute; Windows 3rd-party licensing (B21) is folded in and
+    # ramped alongside it only when it's present in the BOM.
+    core = "SUM($B$13:$B$15,$B$21)" if include_windows else "SUM($B$13:$B$15)"
+    ws_po["E14"] = f"=IFERROR({core}*SUM({rng}),0)"
+    ws_po["F14"] = f"=IFERROR({core}*12,0)"
     ws_po["E15"] = f"=IFERROR($B$16*SUM({rng}),0)"
     ws_po["E17"] = f"=IFERROR($B$20*SUM({rng}),0)"
 
@@ -1309,6 +1292,9 @@ RAMP_TPL_GRID_LAST_ROW = 38
 RAMP_MAX_MONTHS = 60
 
 # Component grid rows (relative to the template) -> the Pricing Overview line they scale.
+# The consumption ramp scales the OCI SERVICES only (B13:B20), matching the app's ramp,
+# whose ceiling is the OCI-services monthly total (pricing.totals.monthly) and excludes
+# Windows 3rd-party licensing. Windows (B21) is a separate flat license line, not ramped.
 _GRID_COMPONENTS = [
     ("Compute (OCPUs)", "$B$13"),
     ("RAM", "$B$14"),
@@ -1317,7 +1303,6 @@ _GRID_COMPONENTS = [
     ("Storage Backups", "$B$17"),
     ("Networking + Security / KMS", "$B$18"),
     ("Disaster Recovery", "$B$20"),
-    ("3rd Party Licensing", "$B$21"),
 ]
 
 
@@ -1333,15 +1318,20 @@ def _ramp_percentages(ramp):
     return [max(0.0, min(1.0, m / ceiling)) for m in monthly[:RAMP_MAX_MONTHS]]
 
 
-def _populate_ramp(ws, ramp):
+def _populate_ramp(ws, ramp, include_windows=False):
     """Rebuild the Consumption Ramp for EXACTLY the number of months the app's ramp
-    toggle is set to, driven by the app's curve, and extend the component grid with the
-    3rd-party licensing line so Modeled Monthly ties to the new total.
+    toggle is set to, driven by the app's curve. When Windows 3rd-party licensing is
+    present (include_windows), it's added as a ramped component so both ramps carry it.
 
     Returns the month count so the Pricing Overview's F-range refs can be re-pointed.
     """
     from copy import copy
     from openpyxl.utils import get_column_letter
+
+    # Windows licensing is ramped as its own component only when it's actually in the BOM.
+    components = list(_GRID_COMPONENTS)
+    if include_windows:
+        components.append(("3rd Party Licensing", "$B$21"))
 
     pcts = _ramp_percentages(ramp)
     n = len(pcts) if pcts else 12
@@ -1377,7 +1367,7 @@ def _populate_ramp(ws, ramp):
     g_title = m_last + 4
     g_head, g_pct = g_title + 1, g_title + 2
     g_first = g_pct + 1
-    g_last = g_first + len(_GRID_COMPONENTS) - 1
+    g_last = g_first + len(components) - 1
     g_cum = g_last + 1
     w_title = g_cum + 3
     c_head = w_title + len(wave_block) + 2
@@ -1392,7 +1382,7 @@ def _populate_ramp(ws, ramp):
         ws.cell(r, 1).value = i + 1
         for j, v in enumerate(wave_text[min(i, len(wave_text) - 1)]):
             ws.cell(r, 2 + j).value = v
-        ws.cell(r, 6).value = round(pcts[i], 4) if pcts else None
+        ws.cell(r, 6).value = round(pcts[i], 6) if pcts else None
         ws.cell(r, 7).value = f"=SUM({cl}${g_first}:{cl}${g_last})"
         ws.cell(r, 8).value = f"=SUM($G${m_first}:G{r})"
 
@@ -1413,7 +1403,7 @@ def _populate_ramp(ws, ramp):
     ws.cell(g_head, total_col)._style = copy(grid_sty[28][2])
 
     last_month_col = get_column_letter(1 + n)
-    for k, (label, po_ref) in enumerate(_GRID_COMPONENTS):
+    for k, (label, po_ref) in enumerate(components):
         r = g_first + k
         src = grid_sty[min(30 + k, 36)]
         ws.cell(r, 1).value = label
@@ -1623,8 +1613,8 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         # Summarize all 11 product-group topics on the Pricing Overview and add a detail
         # sheet for each group that has cost and lacks a dedicated sheet.
         _add_product_group_topics(wb, cloud_comparison.get("pricing") or pricing)
-    ramp_months = _populate_ramp(wb["Consumption Ramp"], ramp)
-    _repoint_ramp_refs(wb["Pricing Overview"], ramp_months)
+    ramp_months = _populate_ramp(wb["Consumption Ramp"], ramp, include_windows=windows_monthly > 0)
+    _repoint_ramp_refs(wb["Pricing Overview"], ramp_months, include_windows=windows_monthly > 0)
 
     # Architecture diagram generated from THIS BOM (deterministic; no model call).
     # If the diagram toolchain isn't available the export still succeeds — the template's

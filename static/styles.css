@@ -3729,24 +3729,29 @@ td input[type="checkbox"] {
   align-items: center;
   gap: 14px;
   padding: 16px 18px;
-  border: 1px solid var(--border, #d9d5d1);
+  border: 1.5px solid #2f6b34;
   border-radius: 12px;
-  background: var(--surface-2, #fff);
+  background: linear-gradient(180deg, #eaf5e8 0%, #dcefd7 100%);
+  box-shadow: 0 1px 3px rgba(47, 107, 52, 0.15);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
-.add-services-toggle:hover { border-color: #b9b3ac; background: #fbfaf9; }
+.add-services-toggle:hover {
+  border-color: #24522a;
+  background: linear-gradient(180deg, #e2f1de 0%, #cfe8c8 100%);
+  box-shadow: 0 2px 6px rgba(47, 107, 52, 0.22);
+}
 .add-services-toggle-icon {
-  font-size: 22px; font-weight: 700; color: #2f6b34;
+  font-size: 22px; font-weight: 700; color: #fff;
   width: 34px; height: 34px; flex: 0 0 34px;
   display: flex; align-items: center; justify-content: center;
-  background: #e4f0e2; border-radius: 9px;
+  background: #2f6b34; border-radius: 9px;
 }
 .add-services-toggle-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.add-services-toggle-text strong { font-size: 15px; }
-.add-services-toggle-text span { font-size: 12.5px; color: #6b6560; }
-.add-services-caret { font-size: 14px; color: #9a948d; transition: transform 0.2s; }
+.add-services-toggle-text strong { font-size: 15px; color: #1f3d23; }
+.add-services-toggle-text span { font-size: 12.5px; color: #3d5c40; }
+.add-services-caret { font-size: 14px; color: #2f6b34; transition: transform 0.2s; }
 .add-services-toggle.is-open .add-services-caret { transform: rotate(180deg); }
 
 .add-services-body {
@@ -3774,7 +3779,12 @@ td input[type="checkbox"] {
 .add-services-columns { display: grid; grid-template-columns: 1fr 300px; gap: 16px; margin-top: 14px; }
 @media (max-width: 900px) { .add-services-columns { grid-template-columns: 1fr; } }
 
-.service-results { display: flex; flex-direction: column; gap: 10px; max-height: 460px; overflow-y: auto; padding-right: 4px; }
+/* No internal scroll region — the list flows into the page so normal page scrolling
+   reaches every card (an inner overflow box was trapping the wheel and hiding the last
+   card below the fold). */
+.service-results { display: flex; flex-direction: column; gap: 10px; }
+.service-results-col { min-width: 0; }
+.add-services-columns > * { min-width: 0; }
 .service-empty { font-size: 13px; color: #8a847d; padding: 18px 4px; }
 .service-card { border: 1px solid #e2ded9; border-radius: 10px; background: #fff; padding: 12px 14px; }
 .service-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
@@ -3824,6 +3834,9 @@ td input[type="checkbox"] {
 .service-group-title { font-weight:600; color:#3d3a35; flex:1; }
 .service-group-count { background:#e4f0e2; color:#2f5d24; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; }
 .service-group-body { display:flex; flex-direction:column; gap:9px; padding:10px; }
+/* A collapsed group must fully hide — the display:flex above otherwise overrides the
+   browser's default [hidden] rule, so collapsed categories were leaking their cards. */
+.service-group-body[hidden] { display: none !important; }
 
 /* Rightsize control disabled when the shape can't be optimized (non-Ax / non-E6) */
 .rightsize-switch.is-disabled { opacity: 0.45; cursor: not-allowed; }

@@ -303,6 +303,8 @@ document.addEventListener("click", (event) => {
   body.toggleAttribute("hidden", !willOpen);
   toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
   toggle.classList.toggle("is-open", willOpen);
+  const icon = toggle.querySelector(".add-services-toggle-icon");
+  if (icon) icon.textContent = willOpen ? "－" : "＋";  // − when open, ＋ when closed
   if (willOpen && typeof fetchCatalog === "function"
       && !(state.catalog && state.catalog.groups && state.catalog.groups.length)) {
     fetchCatalog();
@@ -2278,8 +2280,17 @@ function ociEffectiveMonthly(pricing) {
   return t;
 }
 
+function ociMonthlyWithWindows(pricing) {
+  // OCI services monthly + Windows 3rd-party licensing (0 when Hide Windows is on), so the
+  // ramp ceiling matches the BOM's Total Monthly Cost and both ramps carry Windows.
+  const services = Number(pricing?.totals?.monthly || 0);
+  const windows = (pricing?.rows || []).reduce(
+    (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
+  return Math.max(0, services + windows);
+}
+
 function initializeConsumptionRamp(pricing) {
-  const ceiling = Math.max(0, Number(pricing.totals?.monthly || 0));
+  const ceiling = ociMonthlyWithWindows(pricing);
   const shapeKey = pricing.selectedShape?.key || state.selectedShape;
   const signature = `${shapeKey}:${ceiling}:${pricing.rows.length}`;
   if (state.ramp.signature !== signature) {
@@ -4006,7 +4017,7 @@ function renderServiceChips() {
 }
 
 function serviceCardHtml(e, i) {
-  const fields = (e.fields || [])
+  let fields = (e.fields || [])
     .map(
       (f) =>
         `<label class="svc-field"><span>${escapeHtml(f.label)}</span>
@@ -4015,6 +4026,14 @@ function serviceCardHtml(e, i) {
            <em>${escapeHtml(f.unit)}</em></label>`,
     )
     .join("");
+  // Per-hour services get an editable Hours/month input (defaults to 730).
+  if (e.basis === "hour") {
+    fields +=
+      `<label class="svc-field"><span>Hours / month</span>
+         <input type="number" class="svc-input" data-idx="${i}" data-key="__hours"
+                value="730" min="1" step="1" />
+         <em>hrs</em></label>`;
+  }
   const rateTxt = `$${Number(e.rate).toLocaleString(undefined, { maximumFractionDigits: 4 })} / ${escapeHtml(e.unit)}`;
   return `
     <div class="service-card" data-idx="${i}">
@@ -4093,7 +4112,8 @@ function cardValues(idx) {
 function clientLineCost(entry, v) {
   const rate = Number(entry.rate || 0);
   const free = entry.free || {};
-  const hours = Number(state.hoursPerMonth) > 0 ? Number(state.hoursPerMonth) : 730;
+  // Add-ins default to 730 hours/month, editable per SKU via the "__hours" input.
+  const hours = Number(v.__hours) > 0 ? Number(v.__hours) : 730;
   const cid = entry.id || entry.catalogId;
   if (cid === "block") {
     const gb = Number(v.gb || 0), vpus = Number(v.vpus || 10);

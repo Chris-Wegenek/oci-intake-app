@@ -193,7 +193,8 @@ def line_cost(entry, values, hours=HOURS_PER_MONTH):
     rate = float(entry.get("rate") or 0)
     basis = entry.get("basis", "month")
     free = entry.get("free") or {}
-    hours = float(hours or HOURS_PER_MONTH)
+    # Per-hour add-ins default to 730 hours/month, editable per SKU via a "__hours" value.
+    hours = float((values.get("__hours") if values else 0) or 0) or float(hours or HOURS_PER_MONTH)
     v = {f["key"]: float(values.get(f["key"], f.get("default", 0)) or 0) for f in entry["fields"]}
 
     # Block volume: capacity + performance units, two SKUs.
@@ -283,34 +284,47 @@ def price_extras(extra_services, hours=HOURS_PER_MONTH):
     services follow it. Returns a clean list the exporter can consume:
         [{name, group, sku, unit, monthly, sizing}]  plus a total.
     """
-    hours = float(hours or HOURS_PER_MONTH)
+    # Add-ins default to 730 hours/month regardless of the app-wide hours setting; each SKU
+    # can override its own hours via a "__hours" value on the client record.
+    default_hours = float(HOURS_PER_MONTH)
     out, total = [], 0.0
     for s in (extra_services or []):
         cid = s.get("catalogId") or s.get("id")
         entry = _entry_by_id(cid)
         values = s.get("values") or {}
+        svc_hours = float((values.get("__hours") if values else 0) or 0) or default_hours
         if entry:
-            monthly = line_cost(entry, values, hours)
+            monthly = line_cost(entry, values, default_hours)
             name, group, sku, unit = entry["name"], entry["group"], entry["sku"], entry["unit"]
             fields = entry["fields"]
             third = bool(entry.get("thirdParty"))
+            rate = float(entry.get("rate") or 0)
+            basis = entry.get("basis", "month")
         else:
             # A raw price-list SKU (raw:<sku>): basis carried on the client record.
             rate = float(s.get("rate") or 0)
-            qty = float((values.get("qty") if values else 0) or 0)
-            monthly = round(rate * qty * (hours if s.get("basis") == "hour" else 1), 2)
+            basis = s.get("basis", "month")
+            qraw = float((values.get("qty") if values else 0) or 0)
+            monthly = round(rate * qraw * (svc_hours if basis == "hour" else 1), 2)
             name = s.get("name", cid or "Service")
             group = s.get("group", "Other Services")
             sku = s.get("sku", "")
             unit = s.get("unit", "unit")
             fields = s.get("fields") or []
             third = bool(s.get("thirdParty")) or group == "Licensing"
+        # Primary billed quantity (first sizing field) for display.
+        fkey = fields[0]["key"] if fields else None
+        qty = (float(values.get(fkey, fields[0].get("default", 0)) or 0)
+               if fkey else 0)
+        hours_used = svc_hours if basis == "hour" else ""
+        # Keep the editable hours out of the sizing string (it has its own column).
         sizing = " · ".join(
             f"{values.get(f['key'], f.get('default', 0))} {f.get('unit', '')}".strip()
-            for f in fields
+            for f in fields if f.get("key") != "__hours"
         )
         out.append({"name": name, "group": group, "sku": sku, "unit": unit,
-                    "monthly": round(monthly, 2), "sizing": sizing, "thirdParty": third})
+                    "monthly": round(monthly, 2), "sizing": sizing, "thirdParty": third,
+                    "rate": rate, "qty": round(qty, 4), "basis": basis, "hours": hours_used})
         total += monthly
     return out, round(total, 2)
 
