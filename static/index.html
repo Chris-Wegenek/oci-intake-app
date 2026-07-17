@@ -323,9 +323,9 @@
           </div>
           <div class="ramp-heading-right">
             <div class="mode-switch ramp-months-switch" role="group" aria-label="Ramp length in months" title="Ramp length. The Full BOM's Consumption Ramp sheet is generated with exactly this many months.">
-              <button type="button" class="mode-opt" data-ramp-months="12">12 mo</button>
+              <button type="button" class="mode-opt is-active" data-ramp-months="12">12 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="24">24 mo</button>
-              <button type="button" class="mode-opt is-active" data-ramp-months="36">36 mo</button>
+              <button type="button" class="mode-opt" data-ramp-months="36">36 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="60">60 mo</button>
             </div>
             <span id="rampCeilingLabel">BOM maximum</span>
@@ -346,8 +346,8 @@
             <div class="ramp-control-grid">
               <label class="ramp-control">
                 <span>Selected dot month</span>
-                <input id="rampPeakMonth" type="number" min="1" max="36" step="1" value="36" />
-                <small>Month 1 to month 36</small>
+                <input id="rampPeakMonth" type="number" min="1" max="12" step="1" value="12" />
+                <small>Month 1 to month 12</small>
               </label>
               <label class="ramp-control">
                 <span>Selected dot monthly spend</span>
@@ -366,16 +366,6 @@
                   <b aria-hidden="true">%</b>
                 </div>
                 <small>Applied to the OCI estimate and the export (cloud and on-prem). Leave at 0 for no discount.</small>
-              </label>
-            </div>
-            <div class="ramp-discount" id="oicMessagePacksControl">
-              <label class="ramp-control">
-                <span>OIC message packs</span>
-                <div class="pct-input">
-                  <input id="oicMessagePacks" type="number" min="1" step="1" value="1" inputmode="numeric" aria-label="Oracle Integration Cloud message packs" />
-                  <b aria-hidden="true">×</b>
-                </div>
-                <small>Cloud-bill mode: SQS/SNS + Transfer Family map to Oracle Integration Cloud. Each pack = 5K messages/hour (744 hrs × $0.6452, SKU B89639).</small>
               </label>
             </div>
             <div class="ramp-years" aria-label="Annual ramp totals">

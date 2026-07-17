@@ -50,7 +50,7 @@ const state = {
     direction: "asc",
   },
   ramp: {
-    months: 36,
+    months: 12,
     ceiling: 0,
     nextPointId: 1,
     selectedPointId: null,
@@ -4018,13 +4018,19 @@ function renderServiceChips() {
 
 function serviceCardHtml(e, i) {
   let fields = (e.fields || [])
-    .map(
-      (f) =>
-        `<label class="svc-field"><span>${escapeHtml(f.label)}</span>
-           <input type="number" class="svc-input" data-idx="${i}" data-key="${escapeHtml(f.key)}"
-                  value="${f.default ?? 0}" min="${f.min ?? 0}" step="${f.step ?? 1}" />
-           <em>${escapeHtml(f.unit)}</em></label>`,
-    )
+    .map((f) => {
+      const showAttr = f.showWhen
+        ? ` data-showwhen-field="${escapeHtml(f.showWhen.field)}" data-showwhen-value="${escapeHtml(f.showWhen.value)}"`
+        : "";
+      const control = f.options
+        ? `<select class="svc-input" data-idx="${i}" data-key="${escapeHtml(f.key)}">
+             ${f.options.map((o) => `<option value="${escapeHtml(o.value)}"${o.value === f.default ? " selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
+           </select>`
+        : `<input type="number" class="svc-input" data-idx="${i}" data-key="${escapeHtml(f.key)}"
+                  value="${f.default ?? 0}" min="${f.min ?? 0}" step="${f.step ?? 1}" />`;
+      return `<label class="svc-field"${showAttr}><span>${escapeHtml(f.label)}</span>
+                ${control}${f.unit ? `<em>${escapeHtml(f.unit)}</em>` : ""}</label>`;
+    })
     .join("");
   // Per-hour services get an editable Hours/month input (defaults to 730).
   if (e.basis === "hour") {
@@ -4072,15 +4078,15 @@ function renderServiceResults() {
     byGroup.get(e.group).push({ e, i });
   });
 
-  // Default open state: open everything on a text search or a single group; otherwise only
-  // the first category, so a long "All" list starts compact.
+  // Default open state: open everything on a text search or a single group; otherwise
+  // start every category collapsed so the "All" list opens compact.
   const openState = state.catalog.groupsOpen || {};
   const singleOrSearch = groupsInOrder.length === 1 || !!state.catalog.query;
 
   els.serviceResults.innerHTML = groupsInOrder
     .map((g, gi) => {
       const entries = byGroup.get(g);
-      const open = g in openState ? openState[g] : (singleOrSearch || gi === 0);
+      const open = g in openState ? openState[g] : singleOrSearch;
       const cards = entries.map(({ e, i }) => serviceCardHtml(e, i)).join("");
       return `
         <section class="service-group${open ? " is-open" : ""}" data-group="${escapeHtml(g)}">
@@ -4097,14 +4103,27 @@ function renderServiceResults() {
   els.serviceResults.querySelectorAll(".service-card").forEach((card) => {
     updateCardCost(Number(card.dataset.idx));
   });
+  applyCardFieldVisibility();
 }
 
 function cardValues(idx) {
   const vals = {};
   els.serviceResults
     .querySelectorAll(`.svc-input[data-idx="${idx}"]`)
-    .forEach((inp) => (vals[inp.dataset.key] = Number(inp.value) || 0));
+    .forEach((inp) => {
+      // Dropdowns carry a string value (e.g. workload/deployment); numeric inputs a number.
+      vals[inp.dataset.key] = inp.tagName === "SELECT" ? inp.value : (Number(inp.value) || 0);
+    });
   return vals;
+}
+
+// Show/hide conditional fields (data-showwhen-*) based on the current dropdown selection.
+function applyCardFieldVisibility(scope) {
+  (scope || els.serviceResults).querySelectorAll("[data-showwhen-field]").forEach((el) => {
+    const card = el.closest(".service-card");
+    const ctrl = card && card.querySelector(`.svc-input[data-key="${el.dataset.showwhenField}"]`);
+    el.style.display = ctrl && ctrl.value === el.dataset.showwhenValue ? "" : "none";
+  });
 }
 
 // Mirror of oci_catalog.line_cost so the preview is instant (server recomputes on add/export).
@@ -4118,6 +4137,93 @@ function clientLineCost(entry, v) {
   if (cid === "block") {
     const gb = Number(v.gb || 0), vpus = Number(v.vpus || 10);
     return Math.round((gb * 0.0255 + gb * vpus * 0.0017) * 100) / 100;
+  }
+  if (cid === "adb") {
+    // Autonomous AI Database: ECPU + storage + backup (mirror of oci_catalog.line_cost).
+    const ecpuCost = Number(v.ecpu || 0) * 0.336 * hours;
+    const bak = Number(v.bakgb || 0);
+    if (String(v.deployment || "serverless") === "dedicated") {
+      const infra = (Number(v.dbservers || 0) * 6.3014 + Number(v.storageservers || 0) * 5.4795) * hours;
+      const backup = Math.max(0, bak - 10) * 0.0255;
+      return Math.round((ecpuCost + infra + backup) * 100) / 100;
+    }
+    const storeRate = String(v.workload || "atp") === "adw" ? 0.0299 : 0.1953;
+    return Math.round((ecpuCost + Number(v.dbgb || 0) * storeRate + bak * 0.0299) * 100) / 100;
+  }
+  if (cid === "desktops") {
+    // Secure Desktops: per-desktop fee ($20) + compute + boot + optional block per desktop.
+    // DVH (Windows-BYOL-on-DVH) runs on E4.128 host(s); VM modes use E6 per desktop.
+    const n = Number(v.desktops || 0), ocpu = Number(v.ocpu || 0);
+    let cost = n * 20.0
+      + Number(v.optgb || 0) * n * 0.0255
+      + Number(v.optgb || 0) * Number(v.optvpu || 0) * n * 0.0017;
+    if (String(v.os || "linux") === "win_dvh") {
+      const hosts = ocpu ? Math.max(1, Math.ceil(n * ocpu / 124)) : 1;
+      cost += hosts * 128 * hours * 0.025 + hosts * 2048 * hours * 0.0015
+        + Number(v.bootgb || 0) * hosts * 0.0255
+        + Number(v.bootgb || 0) * Number(v.bootvpu || 0) * hosts * 0.0017;
+    } else {
+      cost += ocpu * n * hours * 0.03 + Number(v.memory || 0) * n * hours * 0.002
+        + Number(v.bootgb || 0) * n * 0.0255
+        + Number(v.bootgb || 0) * Number(v.bootvpu || 0) * n * 0.0017;
+    }
+    return Math.round(cost * 100) / 100;
+  }
+  if (cid === "sqllic") {
+    // SQL Server license: per-edition OCPU-hour rate (Express is free).
+    const ed = String(v.edition || "enterprise");
+    const sqlRate = ed === "standard" ? 0.37 : ed === "express" ? 0 : 1.47;
+    return Math.round(Number(v.ocpu || 0) * sqlRate * hours * 100) / 100;
+  }
+  if (cid === "kms") {
+    // Key Management: vaults + external key mgmt + dedicated HSM (software keys free).
+    return Math.round((Number(v.vaults || 0) * hours * 3.724
+      + Number(v.external || 0) * 3.0
+      + Number(v.hsm || 0) * hours * 1.75) * 100) / 100;
+  }
+  if (cid === "waf") {
+    // WAF: instances (first free) + incoming requests per 1M (first 10M free).
+    return Math.round((Math.max(0, Number(v.instances || 0) - 1) * 5.0
+      + Math.max(0, Number(v.requests || 0) - 10) * 0.6) * 100) / 100;
+  }
+  if (cid === "object") {
+    // Object Storage: GB (first 10 free) + requests per 10k (first 50k free).
+    return Math.round((Math.max(0, Number(v.gb || 0) - 10) * 0.0255
+      + Math.max(0, Number(v.requests || 0) - 5) * 0.0034) * 100) / 100;
+  }
+  if (cid === "pg") {
+    // Database with PostgreSQL: managed OCPU + storage + underlying compute (per-processor) + VPU.
+    const ocpu = Number(v.ocpu || 0), nodes = Number(v.nodes || 1) || 1, storage = Number(v.storage || 0);
+    const intel = String(v.processor || "amd") === "intel";
+    const cOcpu = intel ? 0.04 : 0.03, cMem = intel ? 0.0015 : 0.002;
+    const cost = ocpu * nodes * hours * 0.098
+      + storage * 0.072
+      + ocpu * nodes * hours * cOcpu
+      + Number(v.memory || 0) * nodes * hours * cMem
+      + storage * Number(v.vpu || 0) * 0.0017;
+    return Math.round(cost * 100) / 100;
+  }
+  if (cid === "mysql") {
+    // MySQL HeatWave: ECPU + storage + backup + egress; HA triples ECPU+storage; +HeatWave.
+    const mult = String(v.ha || "no") === "yes" ? 3 : 1;
+    let cost = Number(v.ecpu || 0) * 0.0366 * hours * mult
+      + Number(v.storage || 0) * 0.04 * mult
+      + Number(v.backup || 0) * 0.04
+      + Number(v.egress || 0) * 0.04;
+    if (String(v.heatwave || "no") === "yes") {
+      cost += Number(v.hwcapacity || 0) * 0.011 * hours + Number(v.hwstorage || 0) * 0.02;
+    }
+    return Math.round(cost * 100) / 100;
+  }
+  if (cid === "oic") {
+    // Oracle Integration Cloud: auto-size message packs then × hours × per-edition rate.
+    const oicRate = String(v.edition || "standard") === "enterprise" ? 1.2903 : 0.6452;
+    const peak = Number(v.peakday || 0), monthly = Number(v.monthlymsgs || 0);
+    let packs;
+    if (peak > 0) packs = Math.ceil(peak / (24 * 5000));
+    else if (monthly > 0) packs = Math.ceil(monthly / (hours * 5000));
+    else packs = Number(v.packs || 0);
+    return Math.round(packs * oicRate * hours * 100) / 100;
   }
   const fkey = entry.fields?.[0]?.key;
   let qty = fkey ? Number(v[fkey] || 0) : 0;
@@ -4223,7 +4329,11 @@ if (els.serviceSearch) {
 }
 if (els.serviceResults) {
   els.serviceResults.addEventListener("input", (e) => {
-    if (e.target.classList.contains("svc-input")) updateCardCost(Number(e.target.dataset.idx));
+    if (e.target.classList.contains("svc-input")) {
+      // A dropdown change can show/hide dependent fields (e.g. Serverless vs Dedicated).
+      if (e.target.tagName === "SELECT") applyCardFieldVisibility(e.target.closest(".service-card"));
+      updateCardCost(Number(e.target.dataset.idx));
+    }
   });
   els.serviceResults.addEventListener("click", (e) => {
     const add = e.target.closest(".svc-add");

@@ -19,10 +19,94 @@ Every entry declares a `basis` so the monthly cost is computed one way everywher
 """
 
 import json
+import math
 import re
 from pathlib import Path
 
 HOURS_PER_MONTH = 730
+
+# Autonomous AI Database (serverless) rates — customer-supplied OCI price-list values.
+ADB_ECPU_RATE = 0.336       # per ECPU-hour (B95702 ATP / B95701 ADW; B95713/B95712 dedicated)
+ADB_STORAGE_ATP = 0.1953    # ATP / AJD / APEX database storage per GB-month (B95706)
+ADB_STORAGE_ADW = 0.0299    # ADW / Lakehouse database storage per GB-month (B95754)
+ADB_BACKUP_RATE = 0.0299    # serverless Autonomous DB backup storage per GB-month (B95754)
+# Dedicated (Exadata Cloud Infrastructure) — Hosted Environment per hour, X11M.
+ADB_EXA_DB_SERVER = 6.3014      # Exadata Database Server per hour (B112666)
+ADB_EXA_STORAGE_SERVER = 5.4795  # Exadata Storage Server per hour (B112667)
+ADB_OBJ_BACKUP = 0.0255     # dedicated backup -> Object Storage per GB-month (B91628)
+ADB_OBJ_BACKUP_FREE = 10    # first 10 GB of object-storage backup is free
+
+# Oracle Integration Cloud (OIC) — per 5,000-messages/hour "message pack" per hour.
+OIC_STD_RATE = 0.6452       # Standard edition, per message-pack-hour (B89639)
+OIC_ENT_RATE = 1.2903       # Enterprise edition, per message-pack-hour (B109559)
+OIC_MSG_PER_PACK_HR = 5000  # 1 pack = 5,000 messages/hour (payload <=50KB each)
+# Pack sizing:
+#   surge   -> ceil(peak daily volume / (24 hrs * 5,000))   [OCI estimator "surge" path]
+#   monthly -> ceil(total messages per month / (hours * 5,000))   (e.g. 730*5,000 = 3.65M/pack)
+
+
+# MySQL HeatWave Database Service — customer-supplied OCI price-list values.
+MYSQL_ECPU_RATE = 0.0366     # MySQL Database ECPU per hour (B108030)
+MYSQL_STORAGE_RATE = 0.04    # MySQL storage / backup / inter-region egress per GB-mo (B92426/B92483/B109169)
+MYSQL_HW_RATE = 0.011        # HeatWave capacity per hour (B96626)
+MYSQL_HW_STORAGE_RATE = 0.02  # HeatWave storage per GB-mo (B96625)
+
+# OCI Database with PostgreSQL — customer-supplied OCI price-list values.
+PG_MANAGED_OCPU_RATE = 0.098   # managed PostgreSQL OCPU per hour (B99060)
+PG_STORAGE_RATE = 0.072        # database-optimized storage per GB-mo (B99062)
+PG_COMPUTE_OCPU_RATE = 0.03    # underlying AMD E5 compute OCPU per hour (B97384)
+PG_COMPUTE_MEM_RATE = 0.002    # underlying AMD E5 compute memory per GB-hr (B97385)
+PG_COMPUTE_OCPU_RATE_INTEL = 0.04    # Intel X9 compute OCPU per hour
+PG_COMPUTE_MEM_RATE_INTEL = 0.0015   # Intel X9 compute memory per GB-hr
+PG_VPU_RATE = 0.0017           # block-volume performance units per GB-mo (B91962)
+
+# Object Storage — tiered with free allowances.
+OBJ_STORAGE_RATE = 0.0255      # per GB-month after the free tier (B91628)
+OBJ_STORAGE_FREE_GB = 10       # first 10 GB/month free
+OBJ_REQUEST_RATE = 0.0034      # per 10,000 requests after the free tier (B91627)
+OBJ_REQUEST_FREE_UNITS = 5     # first 50,000 requests (5 units of 10k) free
+
+# Web Application Firewall — instance + request tiers with free allowances.
+WAF_INSTANCE_RATE = 5.00       # per WAF instance per month after the first (B94579)
+WAF_INSTANCE_FREE = 1          # first instance free
+WAF_REQUEST_RATE = 0.60        # per 1,000,000 incoming requests after the free tier (B94277)
+WAF_REQUEST_FREE = 10          # first 10,000,000 requests (10 units of 1M) free
+
+# Key Management / Vault. Software key versions (B92092) are free; the paid options:
+KMS_VAULT_RATE = 3.724     # Virtual Private Vault per hour (B90328)
+KMS_EXTERNAL_RATE = 3.00   # External Key Management per key version-month (B98100)
+KMS_HSM_RATE = 1.75        # Dedicated Key Management HSM partition per hour (B99597, min 3)
+
+# Microsoft SQL Server license-included (OCI marketplace compute image), per OCPU-hour.
+SQL_ENT_RATE = 1.47        # SQL Server Enterprise (B91372)
+SQL_STD_RATE = 0.37        # SQL Server Standard (B91373)
+# SQL Server Express is free ($0).
+
+# Secure Desktops — desktop fee + underlying E6 compute + block volumes (boot + optional).
+DESKTOP_UNIT_RATE = 20.00      # Secure Desktop per month (B95518)
+DESKTOP_OCPU_RATE = 0.03       # E6 Standard compute OCPU per hour (B111129)
+DESKTOP_MEM_RATE = 0.002       # E6 Standard compute memory per GB-hr (B111130)
+DESKTOP_BLOCK_RATE = 0.0255    # Block Volume storage per GB-mo (B91961)
+DESKTOP_VPU_RATE = 0.0017      # Block Volume performance units per GB-mo (B91962)
+# Windows-BYOL-on-DVH mode: desktops run on Dedicated VM Host(s) (DVH.Standard.E4.128).
+DESKTOP_E4_OCPU_RATE = 0.025   # E4 compute OCPU per hour (B93113)
+DESKTOP_E4_MEM_RATE = 0.0015   # E4 compute memory per GB-hr (B93114)
+DVH_HOST_OCPU = 128            # DVH.Standard.E4.128 total OCPUs (billed)
+DVH_HOST_MEM = 2048            # DVH.Standard.E4.128 total memory GB (billed)
+DVH_AVAIL_OCPU = 124           # OCPUs available for desktops per host (128 - 4 reserved)
+
+
+def oic_packs(values, hours):
+    """Approximate message packs from the sizing inputs (surge peak daily volume wins,
+    else total monthly messages, else the directly-entered pack count)."""
+    import math
+    peak = float((values.get("peakday") if values else 0) or 0)
+    monthly = float((values.get("monthlymsgs") if values else 0) or 0)
+    if peak > 0:
+        return math.ceil(peak / (24 * OIC_MSG_PER_PACK_HR))
+    if monthly > 0:
+        return math.ceil(monthly / (float(hours or HOURS_PER_MONTH) * OIC_MSG_PER_PACK_HR))
+    return float((values.get("packs") if values else 0) or 0)
 DATA = Path(__file__).resolve().parent / "data"
 
 
@@ -59,15 +143,28 @@ def _svc_rate(name, key="rate", fallback=None):
     return float(v) if isinstance(v, (int, float)) else fallback
 
 
-def _sf(key, label, unit, default=0, step=1, min_=0):
-    """One sizing field the user fills in."""
-    return {"key": key, "label": label, "unit": unit, "default": default,
-            "step": step, "min": min_}
+def _sf(key, label, unit, default=0, step=1, min_=0, show_when=None, hide_when=None):
+    """One numeric sizing field the user fills in. `show_when` = (field_key, value) shows the
+    field only when another (select) field has that value; `hide_when` hides it when so."""
+    f = {"key": key, "label": label, "unit": unit, "default": default,
+         "step": step, "min": min_}
+    if show_when:
+        f["showWhen"] = {"field": show_when[0], "value": show_when[1]}
+    if hide_when:
+        f["hideWhen"] = {"field": hide_when[0], "value": hide_when[1]}
+    return f
+
+
+def _sel(key, label, options, default):
+    """A dropdown field. `options` is a list of (value, label) pairs; the selected value
+    is a string used by the entry's cost function (not multiplied)."""
+    return {"key": key, "label": label, "unit": "", "default": default,
+            "options": [{"value": v, "label": l} for v, l in options]}
 
 
 # --- curated, fillable services -------------------------------------------------------------
 # group order mirrors data/service_comp_list.json so the chips read like Oracle's console.
-GROUPS = ["Compute", "Storage", "Networking", "Database", "Security",
+GROUPS = ["Compute", "Storage", "Networking", "Database", "Integration", "Security",
           "Observability", "AI & Machine Learning", "Licensing", "Other Services"]
 
 # Names/keywords that mark a line as 3rd-party licensing (never OCI-discounted).
@@ -95,9 +192,12 @@ def _curated():
         [_sf("gb", "Capacity", "GB", 1024, 128),
          _sf("vpus", "Performance (VPUs/GB)", "VPU", 10, 10)],
         "Balanced = 10 VPUs/GB. Storage + performance units both priced.")
-    add("object", "Storage", "Object Storage — Standard", "B86080",
-        _svc_rate("OCI Object Storage", fallback=0.0255), "GB / month", "month",
-        [_sf("gb", "Capacity", "GB", 1024, 128)])
+    add("object", "Storage", "Object Storage — Standard", "B91628", OBJ_STORAGE_RATE,
+        "GB + requests", "month",
+        [_sf("gb", "Storage Capacity", "GB", 1000, 1, 0),
+         _sf("requests", "Requests (10k units)", "10k req", 0, 1, 0)],
+        "Storage $0.0255/GB-mo (first 10 GB free) + requests $0.0034 per 10,000 (first 50,000 "
+        "free). Requests are entered in units of 10,000. SKUs B91628/B91627.")
     add("file", "Storage", "File Storage (NFS)", "B89057",
         _svc_rate("OCI File Storage", fallback=0.30), "GB / month", "month",
         [_sf("gb", "Capacity", "GB", 1024, 128)])
@@ -127,20 +227,58 @@ def _curated():
     # ---- Database (PaaS) ----
     # Autonomous DB rates are the customer-supplied OCI price-list values (these SKUs aren't
     # in oci_price_list.json). ECPU is billed per ECPU-hour; storage per GB-month.
-    add("adb_atp", "Database", "Autonomous Transaction Processing — ECPU", "B95702", 0.336,
-        "ECPU / hour", "hour", [_sf("ecpu", "ECPUs", "ECPU", 2, 1, 1)],
-        "Autonomous AI Transaction Processing serverless compute; storage billed separately.")
-    add("adb_lakehouse", "Database", "Autonomous AI Lakehouse — ECPU", "B95701", 0.336,
-        "ECPU / hour", "hour", [_sf("ecpu", "ECPUs", "ECPU", 2, 1, 1)],
-        "Autonomous AI Lakehouse serverless compute; storage billed separately.")
-    add("adb_store_tp", "Database", "Autonomous DB storage (Transaction Processing)", "B95706",
-        0.1953, "GB / month", "month", [_sf("gb", "Storage", "GB", 1024, 128)])
-    add("adb_store", "Database", "Autonomous DB storage", "B95754", 0.0299,
-        "GB / month", "month", [_sf("gb", "Storage", "GB", 1024, 128)])
-    add("mysql", "Database", "MySQL Database — storage", "B92483", _rate("B92483", 0.04),
-        "GB / month", "month", [_sf("gb", "Storage", "GB", 100, 50)])
-    add("pg", "Database", "PostgreSQL — OCPU", "B99060", _rate("B99060", 0.098),
-        "OCPU / hour", "hour", [_sf("ocpu", "OCPUs", "OCPU", 2, 1, 1)])
+    # Comprehensive Autonomous AI Database (Single Database, serverless), mirroring the OCI
+    # cost estimator: ECPU compute + database storage (rate depends on workload) + backup
+    # storage, all on one card. Priced by the "adb" branch in line_cost.
+    add("adb", "Database", "Autonomous AI Database", "B95702", ADB_ECPU_RATE,
+        "ECPU-hr + storage", "hour",
+        [_sel("deployment", "Deployment Type",
+              [("serverless", "Serverless"), ("dedicated", "Dedicated (Exadata)")], "serverless"),
+         _sel("workload", "Workload Type",
+              [("atp", "Transaction Processing (ATP)"),
+               ("adw", "Lakehouse / Data Warehouse (ADW)"),
+               ("ajd", "JSON (AJD)"),
+               ("apex", "APEX")], "atp"),
+         _sf("ecpu", "ECPUs", "ECPU", 2, 1, 2),
+         _sf("dbgb", "Database Storage", "GB", 20, 1, 1, show_when=("deployment", "serverless")),
+         _sf("dbservers", "Exadata DB Servers (X11M)", "server", 2, 1, 1,
+             show_when=("deployment", "dedicated")),
+         _sf("storageservers", "Exadata Storage Servers (X11M)", "server", 3, 1, 1,
+             show_when=("deployment", "dedicated")),
+         _sf("bakgb", "Backup Storage", "GB", 60, 1, 0)],
+        "Serverless: ECPU $0.336/hr + DB storage (ATP $0.1953, ADW $0.0299/GB-mo) + backup "
+        "$0.0299/GB-mo. Dedicated: ECPU + Exadata DB $6.3014/hr + Exadata storage $5.4795/hr "
+        "+ Object Storage backup $0.0255/GB (10 GB free). SKUs B95702/B95701/B112666/B112667.")
+    add("mysql", "Database", "MySQL HeatWave Database", "B108030", MYSQL_ECPU_RATE,
+        "ECPU-hr + storage", "hour",
+        [_sel("ecpu", "Total ECPU",
+              [(2, "2"), (4, "4"), (8, "8"), (16, "16"), (32, "32"), (48, "48"),
+               (64, "64"), (96, "96"), (128, "128"), (256, "256"), (512, "512")], 8),
+         _sf("storage", "MySQL Storage", "GB", 1000, 1, 0),
+         _sf("backup", "Additional Backup Storage", "GB", 0, 1, 0),
+         _sf("egress", "Inter-OCI Region Egress", "GB", 0, 100, 0),
+         _sel("ha", "High Availability", [("no", "No"), ("yes", "Yes (3 instances)")], "no"),
+         _sel("heatwave", "HeatWave Cluster", [("no", "No"), ("yes", "Yes")], "no"),
+         _sf("hwcapacity", "HeatWave Capacity Units", "unit", 128, 1, 0,
+             show_when=("heatwave", "yes")),
+         _sf("hwstorage", "HeatWave Storage", "GB", 1000, 1, 0,
+             show_when=("heatwave", "yes"))],
+        "ECPU $0.0366/hr; storage/backup/inter-region egress $0.04/GB-mo. HA triples ECPU + "
+        "storage. HeatWave adds $0.011/capacity-hr + $0.02/GB-mo storage. Total ECPU is a "
+        "fixed shape (2/4/8/16/32/48/64/96/...); memory is derived at 8 GB per ECPU. "
+        "SKUs B108030/B92426/B92483/B109169/B96626/B96625.")
+    add("pg", "Database", "Database with PostgreSQL", "B99060", PG_MANAGED_OCPU_RATE,
+        "OCPU-hr + storage", "hour",
+        [_sel("processor", "Processor", [("amd", "AMD (E5)"), ("intel", "Intel (X9)")], "amd"),
+         _sf("ocpu", "OCPU per node", "OCPU", 10, 1, 1),
+         _sf("nodes", "Nodes per cluster", "node", 3, 1, 1),
+         _sf("memory", "Memory per node", "GB", 100, 1, 16),
+         _sf("storage", "DB-Optimized Storage", "GB", 1000, 1, 0),
+         _sf("vpu", "Storage VPU", "VPU", 30, 5, 0)],
+        "Managed PostgreSQL OCPU $0.098/hr (x nodes) + DB-optimized storage $0.072/GB-mo + "
+        "underlying compute (AMD $0.03 OCPU/$0.002 mem, Intel $0.04/$0.0015, x nodes) + block "
+        "performance $0.0017/(GB*VPU). Sizing limits: AMD 1-64 OCPU, 16-1024 GB; Intel 2-32 "
+        "OCPU, 32-512 GB (max 64 GB/OCPU). SKUs B99060/B99062/B97384/B97385/B91962.")
     add("dbbackup", "Database", "Database Backup (to Object Storage)", "B90230",
         _svc_rate("OCI Database Backup", fallback=0.0051), "GB / month", "month",
         [_sf("gb", "Backup capacity", "GB", 500, 100)])
@@ -148,32 +286,68 @@ def _curated():
         "GB / month", "month", [_sf("gb", "Protected capacity", "GB", 100, 50)],
         "Oracle Database Autonomous Recovery Service — virtualized GB per month.")
 
+    # ---- Integration ----
+    add("oic", "Integration", "Application Integration (OIC)", "B89639", OIC_STD_RATE,
+        "message pack-hr", "hour",
+        [_sel("edition", "License Edition",
+              [("standard", "Standard"), ("enterprise", "Enterprise")], "standard"),
+         _sf("peakday", "Peak daily volume (surge)", "msg/day", 0, 1000, 0),
+         _sf("monthlymsgs", "Total messages / month", "msg/mo", 0, 100000, 0),
+         _sf("packs", "Message Packs (used if volumes = 0)", "pack", 1, 1, 0)],
+        "Priced per message pack-hour: Standard $0.6452, Enterprise $1.2903. 1 pack = 5,000 "
+        "msg/hr (payload <=50KB). Packs auto-size from peak daily volume /(24*5,000), else "
+        "total monthly messages /(hours*5,000), else the entered pack count. SKU B89639.")
+
     # ---- Security ----
-    add("waf", "Security", "Web Application Firewall", "B94277",
-        _svc_rate("OCI Web Application Firewall", fallback=0.60), "per 1M requests", "op",
-        [_sf("millions", "Requests per month", "million", 10, 1)],
-        "First instance + first 10M requests/month are free; then $0.60 per 1M.",
-        free={"millions": 10})
-    add("kms", "Security", "Vault — HSM key versions", "B92092", _rate("B92092", 1.75),
-        "key version / hour", "hour", [_sf("keys", "Protected key versions", "key", 1, 1, 1)])
+    add("waf", "Security", "Web Application Firewall", "B94579", WAF_INSTANCE_RATE,
+        "instance + requests", "month",
+        [_sf("instances", "WAF Instances", "instance", 1, 1, 0),
+         _sf("requests", "Incoming Requests (1M units)", "1M req", 0, 1, 0)],
+        "Instances $5.00/mo (first instance free) + incoming requests $0.60 per 1,000,000 "
+        "(first 10,000,000 free). Requests are entered in units of 1,000,000. SKUs B94579/B94277.")
+    add("kms", "Security", "Key Management (Vault)", "B90328", KMS_VAULT_RATE,
+        "vault-hr + keys", "hour",
+        [_sf("vaults", "Private Vaults", "vault", 0, 1, 0),
+         _sf("keyversions", "Software Key Versions (free)", "key", 0, 1, 0),
+         _sf("external", "External Key Management", "key", 0, 1, 0),
+         _sf("hsm", "Dedicated HSM Partitions (min 3)", "partition", 0, 1, 0)],
+        "Virtual Private Vault $3.724/hr (B90328) + External Key Management $3.00/key-mo "
+        "(B98100) + Dedicated HSM partitions $1.75/hr (B99597, min 3). Software key versions "
+        "are free (B92092).")
 
     # ---- Observability / Other ----
     add("logging", "Observability", "Logging (ingest)", "B92707",
         _svc_rate("OCI Logging", fallback=0.05), "GB / month", "month",
         [_sf("gb", "Log data", "GB", 0, 10)],
         "First 10 GB/month is free.", free={"gb": 10})
-    add("desktops", "Other Services", "Secure Desktops", "B95518",
-        _svc_rate("OCI Secure Desktops", fallback=20.0), "desktop / month", "month",
-        [_sf("count", "Desktops", "desktop", 10, 1, 1)])
+    add("desktops", "Other Services", "Secure Desktops", "B95518", DESKTOP_UNIT_RATE,
+        "desktop + compute + storage", "month",
+        [_sf("desktops", "Secure Desktops Per Pool", "desktop", 20, 1, 1),
+         _sel("os", "Desktop OS", [("linux", "Oracle Linux"),
+              ("win_dvh", "Windows BYOL on DVH"), ("win_vm", "Windows BYOL on VM")], "linux"),
+         _sf("ocpu", "Desktop OCPU", "OCPU", 2, 1, 1),
+         _sf("memory", "Desktop Memory", "GB", 8, 1, 1),
+         _sf("bootgb", "Boot Volume", "GB", 100, 1, 0),
+         _sf("bootvpu", "Boot VPU", "VPU", 10, 5, 0),
+         _sf("optgb", "Optional Block Storage / Desktop", "GB", 0, 1, 0),
+         _sf("optvpu", "Optional Block VPU", "VPU", 10, 5, 0)],
+        "Per desktop ($20/mo, B95518) x pool + underlying E6 compute ($0.03 OCPU/$0.002 mem, "
+        "B111129/B111130) + boot & optional block volumes ($0.0255/GB + $0.0017/(GB*VPU), "
+        "B91961/B91962). Windows options are BYOL (no added license). All x desktops.")
 
     # ---- 3rd-party licensing (NOT discounted) ----
     add("winlic", "Licensing", "Windows Server license", "B88318", _rate("B88318", 0.092),
         "OCPU / hour", "hour", [_sf("ocpu", "Licensed OCPUs", "OCPU", 2, 1, 1)],
         "3rd-party Microsoft licensing — excluded from the OCI discount.", third_party=True)
-    add("sqllic", "Licensing", "SQL Server (Enterprise) license", "B88319",
-        _rate("B88319", 0.5137), "OCPU / hour", "hour",
-        [_sf("ocpu", "Licensed OCPUs", "OCPU", 2, 1, 1)],
-        "3rd-party Microsoft licensing — excluded from the OCI discount.", third_party=True)
+    add("sqllic", "Licensing", "SQL Server License", "B91372", SQL_ENT_RATE,
+        "OCPU / hour", "hour",
+        [_sel("edition", "Edition",
+              [("enterprise", "Enterprise"), ("standard", "Standard"),
+               ("express", "Express (free)")], "enterprise"),
+         _sf("ocpu", "Licensed OCPUs", "OCPU", 1, 1, 1)],
+        "License-included Microsoft SQL Server (OCI marketplace image): Enterprise $1.47/OCPU-hr "
+        "(B91372), Standard $0.37/OCPU-hr (B91373), Express $0. 3rd-party licensing — excluded "
+        "from the OCI discount.", third_party=True)
 
     return [c for c in C if isinstance(c["rate"], (int, float))]
 
@@ -195,7 +369,113 @@ def line_cost(entry, values, hours=HOURS_PER_MONTH):
     free = entry.get("free") or {}
     # Per-hour add-ins default to 730 hours/month, editable per SKU via a "__hours" value.
     hours = float((values.get("__hours") if values else 0) or 0) or float(hours or HOURS_PER_MONTH)
-    v = {f["key"]: float(values.get(f["key"], f.get("default", 0)) or 0) for f in entry["fields"]}
+    # Numeric sizing fields. A dropdown with numeric option values (e.g. MySQL Total ECPU)
+    # parses to a number; a text dropdown (processor, workload) stays a string and is read
+    # directly from `values` by the per-entry math below.
+    v = {}
+    for f in entry["fields"]:
+        try:
+            v[f["key"]] = float(values.get(f["key"], f.get("default", 0)) or 0)
+        except (TypeError, ValueError):
+            pass
+
+    # Autonomous AI Database: ECPU compute + storage + backup. Serverless prices DB storage
+    # per workload and backup at $0.0299/GB; Dedicated adds Exadata infra and backs up to
+    # Object Storage ($0.0255/GB, first 10 GB free).
+    if entry["id"] == "adb":
+        deployment = str(values.get("deployment") or "serverless").lower()
+        workload = str(values.get("workload") or "atp").lower()
+        ecpu_cost = v.get("ecpu", 0) * ADB_ECPU_RATE * hours
+        bakgb = v.get("bakgb", 0)
+        if deployment == "dedicated":
+            infra = (v.get("dbservers", 0) * ADB_EXA_DB_SERVER
+                     + v.get("storageservers", 0) * ADB_EXA_STORAGE_SERVER) * hours
+            backup = max(0.0, bakgb - ADB_OBJ_BACKUP_FREE) * ADB_OBJ_BACKUP
+            return round(ecpu_cost + infra + backup, 2)
+        store_rate = ADB_STORAGE_ADW if workload == "adw" else ADB_STORAGE_ATP
+        return round(ecpu_cost + v.get("dbgb", 0) * store_rate + bakgb * ADB_BACKUP_RATE, 2)
+
+    # Secure Desktops: per-desktop fee ($20) + compute + boot volume + optional block per
+    # desktop. Two compute models depending on the desktop OS:
+    #   VM (Oracle Linux / Windows-BYOL-on-VM): E6 compute + boot PER DESKTOP.
+    #   DVH (Windows-BYOL-on-DVH): E4.128 Dedicated Host(s) + boot PER HOST; host count =
+    #       ceil(desktops * OCPU / 124 available OCPUs).
+    if entry["id"] == "desktops":
+        n = v.get("desktops", 0)
+        cost = n * DESKTOP_UNIT_RATE
+        cost += (v.get("optgb", 0) * DESKTOP_BLOCK_RATE
+                 + v.get("optgb", 0) * v.get("optvpu", 0) * DESKTOP_VPU_RATE) * n
+        if str(values.get("os") or "linux").lower() == "win_dvh":
+            hosts = max(1, math.ceil(n * v.get("ocpu", 0) / DVH_AVAIL_OCPU)) if v.get("ocpu", 0) else 1
+            cost += hosts * DVH_HOST_OCPU * hours * DESKTOP_E4_OCPU_RATE
+            cost += hosts * DVH_HOST_MEM * hours * DESKTOP_E4_MEM_RATE
+            cost += (v.get("bootgb", 0) * DESKTOP_BLOCK_RATE
+                     + v.get("bootgb", 0) * v.get("bootvpu", 0) * DESKTOP_VPU_RATE) * hosts
+        else:
+            cost += v.get("ocpu", 0) * n * hours * DESKTOP_OCPU_RATE
+            cost += v.get("memory", 0) * n * hours * DESKTOP_MEM_RATE
+            cost += (v.get("bootgb", 0) * DESKTOP_BLOCK_RATE
+                     + v.get("bootgb", 0) * v.get("bootvpu", 0) * DESKTOP_VPU_RATE) * n
+        return round(cost, 2)
+
+    # SQL Server license (license-included): per-edition OCPU-hour rate (Express is free).
+    if entry["id"] == "sqllic":
+        edition = str(values.get("edition") or "enterprise").lower()
+        rate = {"enterprise": SQL_ENT_RATE, "standard": SQL_STD_RATE}.get(edition, 0.0)
+        return round(v.get("ocpu", 0) * rate * hours, 2)
+
+    # Key Management: private vaults + external key mgmt + dedicated HSM partitions.
+    # Software key versions are free.
+    if entry["id"] == "kms":
+        return round(v.get("vaults", 0) * hours * KMS_VAULT_RATE
+                     + v.get("external", 0) * KMS_EXTERNAL_RATE
+                     + v.get("hsm", 0) * hours * KMS_HSM_RATE, 2)
+
+    # Web Application Firewall: instances (first free) + requests per 1M (first 10M free).
+    if entry["id"] == "waf":
+        return round(max(0.0, v.get("instances", 0) - WAF_INSTANCE_FREE) * WAF_INSTANCE_RATE
+                     + max(0.0, v.get("requests", 0) - WAF_REQUEST_FREE) * WAF_REQUEST_RATE, 2)
+
+    # Object Storage: GB storage (first 10 GB free) + requests per 10k (first 50k free).
+    if entry["id"] == "object":
+        return round(max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB) * OBJ_STORAGE_RATE
+                     + max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS) * OBJ_REQUEST_RATE, 2)
+
+    # OCI Database with PostgreSQL: managed OCPU + DB-optimized storage + underlying compute
+    # (per-processor OCPU/memory, x nodes) + block-volume performance units.
+    if entry["id"] == "pg":
+        ocpu = v.get("ocpu", 0)
+        nodes = v.get("nodes", 1) or 1
+        storage = v.get("storage", 0)
+        if str(values.get("processor") or "amd").lower() == "intel":
+            c_ocpu, c_mem = PG_COMPUTE_OCPU_RATE_INTEL, PG_COMPUTE_MEM_RATE_INTEL
+        else:
+            c_ocpu, c_mem = PG_COMPUTE_OCPU_RATE, PG_COMPUTE_MEM_RATE
+        cost = (ocpu * nodes * hours * PG_MANAGED_OCPU_RATE     # managed PostgreSQL OCPU
+                + storage * PG_STORAGE_RATE                     # DB-optimized storage
+                + ocpu * nodes * hours * c_ocpu                 # underlying compute OCPU
+                + v.get("memory", 0) * nodes * hours * c_mem    # underlying compute memory
+                + storage * v.get("vpu", 0) * PG_VPU_RATE)      # block performance units
+        return round(cost, 2)
+
+    # MySQL HeatWave: ECPU + storage + backup + egress; HA triples ECPU + storage;
+    # optional HeatWave cluster adds capacity + storage.
+    if entry["id"] == "mysql":
+        mult = 3 if str(values.get("ha") or "no").lower() == "yes" else 1
+        cost = (v.get("ecpu", 0) * MYSQL_ECPU_RATE * hours * mult
+                + v.get("storage", 0) * MYSQL_STORAGE_RATE * mult
+                + v.get("backup", 0) * MYSQL_STORAGE_RATE
+                + v.get("egress", 0) * MYSQL_STORAGE_RATE)
+        if str(values.get("heatwave") or "no").lower() == "yes":
+            cost += (v.get("hwcapacity", 0) * MYSQL_HW_RATE * hours
+                     + v.get("hwstorage", 0) * MYSQL_HW_STORAGE_RATE)
+        return round(cost, 2)
+
+    # Oracle Integration Cloud: message packs (auto-sized) x hours x per-edition rate.
+    if entry["id"] == "oic":
+        edition = str(values.get("edition") or "standard").lower()
+        rate = OIC_ENT_RATE if edition == "enterprise" else OIC_STD_RATE
+        return round(oic_packs(values, hours) * rate * hours, 2)
 
     # Block volume: capacity + performance units, two SKUs.
     if entry["id"] == "block":
@@ -250,6 +530,107 @@ def _raw_matches(q, limit=25):
             })
     out.sort(key=lambda e: len(e["name"]))
     return out[:limit]
+
+
+def line_breakdown(entry, values, hours=HOURS_PER_MONTH):
+    """Per-SKU line items for a filled-in catalog entry — the full paper trail (like the OCI
+    estimator's 'Pricing Details'). Each item: {sku, desc, qty, rate, hours, monthly}. The
+    sum of the items equals line_cost(entry, values, hours)."""
+    hours = float((values.get("__hours") if values else 0) or 0) or float(hours or HOURS_PER_MONTH)
+    v = {}
+    for f in entry.get("fields", []):
+        try:
+            v[f["key"]] = float(values.get(f["key"], f.get("default", 0)) or 0)
+        except (TypeError, ValueError):
+            pass
+    cid = entry["id"]
+    out = []
+
+    def li(sku, desc, qty, rate, hourly=False, monthly=None):
+        m = monthly if monthly is not None else round(qty * rate * (hours if hourly else 1), 2)
+        out.append({"sku": sku, "desc": desc, "qty": round(qty, 4), "rate": rate,
+                    "hours": hours if hourly else "", "monthly": round(m, 2)})
+
+    if cid == "mysql":
+        mult = 3 if str(values.get("ha") or "no").lower() == "yes" else 1
+        li("B108030", "MySQL Database - ECPU", v.get("ecpu", 0) * mult, MYSQL_ECPU_RATE, True)
+        li("B92426", "MySQL Database - Storage", v.get("storage", 0) * mult, MYSQL_STORAGE_RATE)
+        li("B92483", "MySQL Database - Backup Storage", v.get("backup", 0), MYSQL_STORAGE_RATE)
+        li("B109169", "MySQL - Outbound Data Transfer (Inter-OCI)", v.get("egress", 0), MYSQL_STORAGE_RATE)
+        if str(values.get("heatwave") or "no").lower() == "yes":
+            li("B96626", "OCI HeatWave", v.get("hwcapacity", 0), MYSQL_HW_RATE, True)
+            li("B96625", "OCI HeatWave - Storage", v.get("hwstorage", 0), MYSQL_HW_STORAGE_RATE)
+    elif cid == "pg":
+        ocpu, nodes = v.get("ocpu", 0), (v.get("nodes", 1) or 1)
+        storage = v.get("storage", 0)
+        intel = str(values.get("processor") or "amd").lower() == "intel"
+        c_ocpu, c_mem = (PG_COMPUTE_OCPU_RATE_INTEL, PG_COMPUTE_MEM_RATE_INTEL) if intel else (PG_COMPUTE_OCPU_RATE, PG_COMPUTE_MEM_RATE)
+        li("B99060", "Database with PostgreSQL - OCPU", ocpu * nodes, PG_MANAGED_OCPU_RATE, True)
+        li("B99062", "Database Optimized Storage", storage, PG_STORAGE_RATE)
+        li("B97384", "Compute - Standard - OCPU", ocpu * nodes, c_ocpu, True)
+        li("B97385", "Compute - Standard - Memory", v.get("memory", 0) * nodes, c_mem, True)
+        li("B91962", "Block Volume - Performance Units", storage * v.get("vpu", 0), PG_VPU_RATE)
+    elif cid == "adb":
+        workload = str(values.get("workload") or "atp").lower()
+        packs_ecpu = v.get("ecpu", 0)
+        if str(values.get("deployment") or "serverless").lower() == "dedicated":
+            li("B95712" if workload == "adw" else "B95713", "Autonomous DB - Dedicated ECPU", packs_ecpu, ADB_ECPU_RATE, True)
+            li("B112666", "Exadata Cloud Infrastructure - Database Server", v.get("dbservers", 0), ADB_EXA_DB_SERVER, True)
+            li("B112667", "Exadata Cloud Infrastructure - Storage Server", v.get("storageservers", 0), ADB_EXA_STORAGE_SERVER, True)
+            li("B91628", "Object Storage - Backup", max(0.0, v.get("bakgb", 0) - ADB_OBJ_BACKUP_FREE), ADB_OBJ_BACKUP)
+        else:
+            li("B95701" if workload == "adw" else "B95702", "Autonomous DB - ECPU", packs_ecpu, ADB_ECPU_RATE, True)
+            li("B95754" if workload == "adw" else "B95706", "Autonomous DB - Storage", v.get("dbgb", 0), ADB_STORAGE_ADW if workload == "adw" else ADB_STORAGE_ATP)
+            li("B95754", "Autonomous DB - Backup Storage", v.get("bakgb", 0), ADB_BACKUP_RATE)
+    elif cid == "oic":
+        edition = str(values.get("edition") or "standard").lower()
+        rate = OIC_ENT_RATE if edition == "enterprise" else OIC_STD_RATE
+        li("B89639", "Oracle Integration Cloud - " + ("Enterprise" if edition == "enterprise" else "Standard"), oic_packs(values, hours), rate, True)
+    elif cid == "object":
+        li("B91628", "Object Storage - Storage", max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB), OBJ_STORAGE_RATE)
+        li("B91627", "Object Storage - Requests", max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS), OBJ_REQUEST_RATE)
+    elif cid == "waf":
+        li("B94579", "Web Application Firewall - Instance", max(0.0, v.get("instances", 0) - WAF_INSTANCE_FREE), WAF_INSTANCE_RATE)
+        li("B94277", "Web Application Firewall - Requests", max(0.0, v.get("requests", 0) - WAF_REQUEST_FREE), WAF_REQUEST_RATE)
+    elif cid == "kms":
+        li("B90328", "Key Management - Private Vault", v.get("vaults", 0), KMS_VAULT_RATE, True)
+        li("B92092", "Key Management - Key Versions (free)", v.get("keyversions", 0), 0.0)
+        li("B98100", "External Key Management", v.get("external", 0), KMS_EXTERNAL_RATE)
+        li("B99597", "Dedicated Key Management - HSM Partition", v.get("hsm", 0), KMS_HSM_RATE, True)
+    elif cid == "desktops":
+        n = v.get("desktops", 0)
+        li("B95518", "Secure Desktop", n, DESKTOP_UNIT_RATE)
+        if str(values.get("os") or "linux").lower() == "win_dvh":
+            hosts = max(1, math.ceil(n * v.get("ocpu", 0) / DVH_AVAIL_OCPU)) if v.get("ocpu", 0) else 1
+            li("B93113", "Compute E4 (DVH) - OCPU", DVH_HOST_OCPU * hosts, DESKTOP_E4_OCPU_RATE, True)
+            li("B93114", "Compute E4 (DVH) - Memory", DVH_HOST_MEM * hosts, DESKTOP_E4_MEM_RATE, True)
+            li("B91961", "Boot Volume - Storage", v.get("bootgb", 0) * hosts, DESKTOP_BLOCK_RATE)
+            li("B91962", "Boot Volume - Performance Units", v.get("bootgb", 0) * v.get("bootvpu", 0) * hosts, DESKTOP_VPU_RATE)
+        else:
+            li("B111129", "Compute E6 - OCPU", v.get("ocpu", 0) * n, DESKTOP_OCPU_RATE, True)
+            li("B111130", "Compute E6 - Memory", v.get("memory", 0) * n, DESKTOP_MEM_RATE, True)
+            li("B91961", "Boot Volume - Storage", v.get("bootgb", 0) * n, DESKTOP_BLOCK_RATE)
+            li("B91962", "Boot Volume - Performance Units", v.get("bootgb", 0) * v.get("bootvpu", 0) * n, DESKTOP_VPU_RATE)
+        if v.get("optgb", 0):
+            li("B91961", "Optional Block Storage - Storage", v.get("optgb", 0) * n, DESKTOP_BLOCK_RATE)
+            li("B91962", "Optional Block Storage - Performance Units", v.get("optgb", 0) * v.get("optvpu", 0) * n, DESKTOP_VPU_RATE)
+    elif cid == "sqllic":
+        edition = str(values.get("edition") or "enterprise").lower()
+        sku = {"enterprise": "B91372", "standard": "B91373", "express": "SQL-EXPRESS"}.get(edition, "B91372")
+        rate = {"enterprise": SQL_ENT_RATE, "standard": SQL_STD_RATE}.get(edition, 0.0)
+        li(sku, "Microsoft SQL " + edition.title() + " (license-included)", v.get("ocpu", 0), rate, True)
+    elif cid == "block":
+        li("B91961", "Block Volume - Storage", v.get("gb", 0), _svc_rate("OCI Block Volumes", fallback=0.0255))
+        li("B91962", "Block Volume - Performance Units", v.get("gb", 0) * v.get("vpus", 10),
+           _SVC.get("OCI Block Volumes", {}).get("perfUnitsRate") or 0.0017)
+    else:
+        # Single-SKU entry: one line at its own rate.
+        fkey = next((f["key"] for f in entry.get("fields", []) if not f.get("options")), None)
+        qty = v.get(fkey, 0) if fkey else 0
+        free = (entry.get("free") or {}).get(fkey, 0) if fkey else 0
+        li(entry["sku"], entry["name"], max(0.0, qty - free), float(entry.get("rate") or 0),
+           entry.get("basis") == "hour")
+    return [it for it in out if it["monthly"] or it["rate"] == 0]
 
 
 def search(query="", group=""):
@@ -312,19 +693,31 @@ def price_extras(extra_services, hours=HOURS_PER_MONTH):
             unit = s.get("unit", "unit")
             fields = s.get("fields") or []
             third = bool(s.get("thirdParty")) or group == "Licensing"
-        # Primary billed quantity (first sizing field) for display.
-        fkey = fields[0]["key"] if fields else None
-        qty = (float(values.get(fkey, fields[0].get("default", 0)) or 0)
-               if fkey else 0)
+        # Primary billed quantity for display. OIC shows the auto-sized message packs.
+        if cid == "oic":
+            qty = oic_packs(values, svc_hours)
+        else:
+            num_fields = [f for f in fields if not f.get("options")]
+            fkey = num_fields[0]["key"] if num_fields else None
+            qty = (float(values.get(fkey, num_fields[0].get("default", 0)) or 0)
+                   if fkey else 0)
         hours_used = svc_hours if basis == "hour" else ""
         # Keep the editable hours out of the sizing string (it has its own column).
         sizing = " · ".join(
             f"{values.get(f['key'], f.get('default', 0))} {f.get('unit', '')}".strip()
             for f in fields if f.get("key") != "__hours"
         )
+        # Full per-SKU paper trail (estimator "Pricing Details"). Curated entries expand
+        # into all their constituent SKUs; a raw price-list SKU stays a single line.
+        if entry:
+            skus = line_breakdown(entry, values, svc_hours)
+        else:
+            skus = [{"sku": sku, "desc": name, "qty": round(qty, 4), "rate": rate,
+                     "hours": hours_used, "monthly": round(monthly, 2)}]
         out.append({"name": name, "group": group, "sku": sku, "unit": unit,
                     "monthly": round(monthly, 2), "sizing": sizing, "thirdParty": third,
-                    "rate": rate, "qty": round(qty, 4), "basis": basis, "hours": hours_used})
+                    "rate": rate, "qty": round(qty, 4), "basis": basis, "hours": hours_used,
+                    "skus": skus})
         total += monthly
     return out, round(total, 2)
 

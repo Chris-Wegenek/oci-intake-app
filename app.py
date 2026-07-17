@@ -3581,11 +3581,14 @@ SQL_NO_MANAGED_NOTE = ("SQL Server has no managed OCI equivalent; OCI cost carri
 
 def sql_license_rate(text):
     """Return the OCI SQL Server license $/OCPU-hour for a bill line, by edition.
-    Enterprise if the text names Enterprise (or "EE"); otherwise Standard."""
+    Express is free ($0); Enterprise if the text names Enterprise (or "EE"); Standard maps
+    to Standard; anything else defaults to Standard."""
     blob = normalize(clean_text(text))
+    if "express" in blob:
+        return 0.0  # SQL Server Express is free
     if "enterprise" in blob or " ee" in blob or "(ee)" in blob or blob.endswith(" ee"):
-        return OCI_SQL_LICENSE_ENT_RATE
-    return OCI_SQL_LICENSE_STD_RATE
+        return OCI_SQL_LICENSE_ENT_RATE  # Enterprise -> Enterprise
+    return OCI_SQL_LICENSE_STD_RATE      # Standard (and default) -> Standard
 
 
 def sql_server_ocpu(vcpus):
@@ -4067,7 +4070,38 @@ OCI_OIC_PRODUCT = "Oracle Integration Cloud"
 OCI_OIC_SKU = "B89639"
 OCI_OIC_PACK_RATE = 0.6452       # $ per message pack (5K msg/hr) per hour
 OCI_OIC_PACK_HOURS = 744         # hours/month used for OIC message-pack billing
-OCI_OIC_MESSAGE_PACKS = 1        # workload sized at 1 message pack (per requirement)
+OCI_OIC_MESSAGE_PACKS = 1        # fallback size when the workload can't be measured
+OCI_OIC_MSG_PER_PACK_HR = 5000   # 1 pack = 5,000 messages/hour (payload <= 50KB each)
+OCI_OIC_MSG_BYTES = 50 * 1024    # 50KB message payload cap (larger files -> more messages)
+
+
+def _oic_auto_packs(rows, hours=HOURS_PER_MONTH):
+    """Auto-size the Oracle Integration Cloud message packs from the actual bill workload:
+    SQS/SNS request lines are message counts; Transfer Family byte volume becomes messages
+    at <=50KB each. One pack = 5,000 msg/hr -> 3.65M messages/month (730 hrs). Packs =
+    ceil(total messages / 3.65M), floored at 1 when any OIC workload exists (0 if none).
+    Same message-pack math as the Add-OCI-services OIC card."""
+    hours = float(hours or HOURS_PER_MONTH)
+    msgs = 0.0
+    seen = False
+    for r in rows:
+        if not _is_oic_row(r) or (r.get("costAction") or "") == "remove":
+            continue
+        seen = True
+        ut = normalize(r.get("__usageType"))
+        unit = normalize(r.get("usage_unit"))
+        qty = to_number(r.get("usage_quantity"), 0)
+        if _is_transfer_family_row(r):
+            # File-transfer bytes -> messages (each <=50KB). Bill quantity is in GB.
+            if "byte" in ut or unit in ("gb", "gib", "gigabyte", "gigabytes"):
+                msgs += (qty * 1_000_000_000.0) / OCI_OIC_MSG_BYTES
+        elif "request" in ut or "message" in ut:
+            msgs += qty
+    if not seen:
+        return 0
+    if msgs <= 0:
+        return OCI_OIC_MESSAGE_PACKS
+    return max(1, math.ceil(msgs / (hours * OCI_OIC_MSG_PER_PACK_HR)))
 
 
 def _is_sqs_row(row):
@@ -4619,6 +4653,149 @@ def price_route53_row(row):
         "mapping": "OCI DNS does not charge per hosted zone; only per-query usage is billed.",
         "ociServiceUsage": True,
     }], OCI_DNS_PRODUCT, "Networking", OCI_DNS_SKU, False)
+
+
+# ---- AWS WorkSpaces -> OCI Secure Desktops (full stack) ---------------------
+# A real OCI Secure Desktop is the per-desktop service fee (B95518) PLUS the
+# underlying E6 compute (B111129 OCPU / B111130 memory) and its boot volume
+# (B91961 storage + B91962 performance units). This mirrors the "Secure Desktops"
+# add-in card exactly, so a mapped WorkSpaces fleet ties out to the same rates
+# instead of being under-priced at a flat $20/desktop.
+WS_DESKTOP_SKU = "B95518"; WS_DESKTOP_RATE = 20.00     # Secure Desktop / month
+WS_OCPU_SKU = "B111129"; WS_OCPU_RATE = 0.03           # E6 OCPU / hour
+WS_MEM_SKU = "B111130"; WS_MEM_RATE = 0.002            # E6 memory / GB-hour
+WS_BLOCK_SKU = "B91961"; WS_BLOCK_RATE = 0.0255        # Block storage / GB-mo
+WS_VPU_SKU = "B91962"; WS_VPU_RATE = 0.0017            # Block perf units / (GB*VPU)-mo
+WS_BOOT_VPU = 10                                       # Balanced boot volume (10 VPU/GB)
+WS_DEFAULT_BOOT_GB = 100
+WS_PRODUCT = "OCI Secure Desktops"
+WS_CATEGORY = "Other Services"
+
+
+def _is_workspaces_row(row):
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["source_service", "source_product", "__usageType"]))
+    return "workspace" in blob
+
+
+def _parse_ws_bundle(text):
+    """Pull (vcpu, mem_gb, boot_gb) from a WorkSpaces hardware line description,
+    e.g. 'Power-4vCPU,16GB Memory,175GB Root,100GB User' or
+    'General Purpose (16 vCPU, 64GB RAM), Root:175 GB,User:100 GB'."""
+    t = clean_text(text)
+    vcpu = 0
+    mem = 0.0
+    m = re.search(r"(\d+)\s*vcpu", t, re.I)
+    if m:
+        vcpu = int(m.group(1))
+    m = re.search(r"(\d+(?:\.\d+)?)\s*gb\s*(?:memory|ram)", t, re.I)
+    if m:
+        mem = float(m.group(1))
+    root = user = 0
+    m = re.search(r"(\d+)\s*gb\s*root", t, re.I) or re.search(r"root:?\s*(\d+)\s*gb", t, re.I)
+    if m:
+        root = int(m.group(1))
+    m = re.search(r"(\d+)\s*gb\s*user", t, re.I) or re.search(r"user:?\s*(\d+)\s*gb", t, re.I)
+    if m:
+        user = int(m.group(1))
+    boot = (root + user) or WS_DEFAULT_BOOT_GB
+    return vcpu, mem, boot
+
+
+def price_workspaces_row(row, hours=None):
+    """Price an AWS WorkSpaces bill row on OCI Secure Desktops.
+
+    AWS bills WorkSpaces as separate hardware (compute) and software (Office/
+    utilities) lines. Only the hardware desktop lines represent provisioned
+    desktops; software is BYOL on OCI, and AutoStop hourly-usage lines are just
+    runtime of a desktop already counted on its monthly base line. Hardware
+    desktop lines emit the full Secure Desktop stack sized from the bundle specs.
+    Returns (line_items, label, category, sku, carried) or None."""
+    if not _is_workspaces_row(row):
+        return None
+    full_month = hours if hours and hours > 0 else HOURS_PER_MONTH
+    ut = (clean_text(row.get("__usageType")) or "").upper()
+    prod = clean_text(row.get("source_product"))
+    qty = to_number(row.get("usage_quantity"), 0)
+    is_software = ("-AW-SW" in ut) or ("(software)" in prod.lower())
+    # Software lines are BYOL on OCI Secure Desktops — no added charge.
+    if is_software or "-AW-HW" not in ut:
+        return ([{
+            "sku": WS_DESKTOP_SKU, "description": "OCI Secure Desktops — bundled software (BYOL)",
+            "quantity": round(qty, 4), "unit": "line", "rate": 0.0, "monthly": 0.0,
+            "mapping": "WorkSpaces bundled software (Office/utilities) is BYOL on OCI "
+                       "Secure Desktops — no added charge.",
+            "ociServiceUsage": True,
+        }], WS_PRODUCT, WS_CATEGORY, WS_DESKTOP_SKU, False)
+    vcpu, mem, boot = _parse_ws_bundle(prod)
+    ocpu = max(1, math.ceil(vcpu / 2)) if vcpu else 2
+    if not mem:
+        mem = float(ocpu)
+    if ocpu > mem:            # OCPU can never exceed RAM GB
+        ocpu = int(mem)
+    is_autostop_usage = "AUTOSTOP-USAGE" in ut
+    is_autostop_user = "AUTOSTOP-USER" in ut
+
+    # AutoStop hourly-usage line: qty = aggregate desktop-hours actually run. Price ONLY
+    # the underlying E6 compute at those real running hours (the desktop fee and boot
+    # volume are billed monthly on the matching -AutoStop-User line, below).
+    if is_autostop_usage:
+        run_hours = qty
+        return ([{
+            "sku": WS_OCPU_SKU, "description": f"OCI Secure Desktops — E6 Compute OCPU ({ocpu} OCPU, running hrs)",
+            "quantity": round(ocpu * run_hours, 4), "unit": "OCPU-hour", "rate": WS_OCPU_RATE,
+            "monthly": money(ocpu * run_hours * WS_OCPU_RATE),
+            "mapping": f"AutoStop desktops: {ocpu} OCPU × {run_hours:,.0f} actual running hrs (from the bill).",
+            "ociServiceUsage": True,
+        }, {
+            "sku": WS_MEM_SKU, "description": f"OCI Secure Desktops — E6 Compute Memory ({mem:g} GB, running hrs)",
+            "quantity": round(mem * run_hours, 4), "unit": "GB-hour", "rate": WS_MEM_RATE,
+            "monthly": money(mem * run_hours * WS_MEM_RATE),
+            "mapping": f"AutoStop desktops: {mem:g} GB × {run_hours:,.0f} actual running hrs (from the bill).",
+            "ociServiceUsage": True,
+        }], WS_PRODUCT, WS_CATEGORY, WS_OCPU_SKU, False)
+
+    # Desktop provisioning line: qty = provisioned desktops (fractional = partial month).
+    # Always bill the $20 desktop fee and the boot volume per desktop-month.
+    n = qty
+    items = [{
+        "sku": WS_DESKTOP_SKU, "description": "OCI Secure Desktops — Secure Desktop",
+        "quantity": round(n, 4), "unit": "desktop per month", "rate": WS_DESKTOP_RATE,
+        "monthly": money(n * WS_DESKTOP_RATE),
+        "mapping": f"AWS WorkSpaces desktop → OCI Secure Desktop at ${WS_DESKTOP_RATE}/desktop-mo (B95518).",
+        "ociServiceUsage": True,
+    }, {
+        "sku": WS_BLOCK_SKU, "description": f"OCI Secure Desktops — Boot Volume ({boot:g} GB)",
+        "quantity": round(boot * n, 4), "unit": "GB per month", "rate": WS_BLOCK_RATE,
+        "monthly": money(boot * n * WS_BLOCK_RATE),
+        "mapping": f"Boot volume: {boot:g} GB (root+user) × {n:g} desktops.",
+        "ociServiceUsage": True,
+    }, {
+        "sku": WS_VPU_SKU, "description": "OCI Secure Desktops — Boot Volume Performance Units",
+        "quantity": round(boot * WS_BOOT_VPU * n, 4), "unit": "Performance Units per month", "rate": WS_VPU_RATE,
+        "monthly": money(boot * WS_BOOT_VPU * n * WS_VPU_RATE),
+        "mapping": f"Boot volume performance ({WS_BOOT_VPU} VPU/GB) × {boot:g} GB × {n:g} desktops.",
+        "ociServiceUsage": True,
+    }]
+    # AlwaysOn / monthly desktops run the full month, so their compute is billed here.
+    # AutoStop -User lines add NO compute here — it comes from the -AutoStop-Usage line
+    # at the real running hours.
+    if not is_autostop_user:
+        items.insert(1, {
+            "sku": WS_OCPU_SKU, "description": f"OCI Secure Desktops — E6 Compute OCPU ({ocpu} OCPU)",
+            "quantity": round(ocpu * n * full_month, 4), "unit": "OCPU-hour", "rate": WS_OCPU_RATE,
+            "monthly": money(ocpu * n * full_month * WS_OCPU_RATE),
+            "mapping": f"Always-on E6 compute: {ocpu} OCPU (from {vcpu or ocpu * 2} vCPU) × {n:g} desktops × {full_month:,.0f} hrs.",
+            "ociServiceUsage": True,
+        })
+        items.insert(2, {
+            "sku": WS_MEM_SKU, "description": f"OCI Secure Desktops — E6 Compute Memory ({mem:g} GB)",
+            "quantity": round(mem * n * full_month, 4), "unit": "GB-hour", "rate": WS_MEM_RATE,
+            "monthly": money(mem * n * full_month * WS_MEM_RATE),
+            "mapping": f"Always-on E6 memory: {mem:g} GB × {n:g} desktops × {full_month:,.0f} hrs.",
+            "ociServiceUsage": True,
+        })
+    return (items, WS_PRODUCT, WS_CATEGORY, WS_DESKTOP_SKU, False)
 
 
 def enrich_cloud_bill_resource_fields(row):
@@ -6678,8 +6855,13 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     rds_sql_server_instances = collect_sql_server_rds_instances(rows) if cloud_bill_mode else set()
     elb_free_tier_row_id = collect_elb_free_tier_row(rows) if cloud_bill_mode else None
     redshift_compute_ctx = collect_redshift_compute(rows) if cloud_bill_mode else None
-    # The single row that carries the one Oracle Integration Cloud message-pack charge.
+    # The single row that carries the Oracle Integration Cloud message-pack charge, and the
+    # pack count: a manual override (oic_message_packs) wins, else auto-size from the actual
+    # SQS/SNS message counts + Transfer Family byte volume (same message-pack math as the
+    # Add-OCI-services OIC card).
     oic_anchor_row_id = collect_oic_anchor_row(rows) if cloud_bill_mode else None
+    oic_effective_packs = (oic_message_packs if (oic_message_packs and oic_message_packs > 0)
+                           else (_oic_auto_packs(rows) if cloud_bill_mode else None))
 
     for row_index, row in enumerate(rows, start=1):
         if row.get("__approved") is False:
@@ -6751,6 +6933,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             original_ocpus = app_vm_ocpu
             original_memory_gb = app_vm_mem
             app_vm_ocpu, app_vm_mem = _apply_rightsize(app_vm_ocpu, app_vm_mem, rs_plan)
+            # OCPU can never exceed RAM: RAM (GB) is floored at the OCPU count.
+            app_vm_mem = max(app_vm_mem, app_vm_ocpu)
             db_ocpus = 0.0
             ocpus = app_vm_ocpu
             memory_gb = app_vm_mem
@@ -6765,6 +6949,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             original_memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
             app_vm_ocpu, app_vm_mem = _apply_rightsize(app_vm_ocpu, app_vm_mem, rs_plan)
             db_vm_ocpu, db_vm_mem = _apply_rightsize(db_vm_ocpu, db_vm_mem, rs_plan)
+            # OCPU can never exceed RAM: floor each VM's RAM (GB) at its OCPU count.
+            app_vm_mem = max(app_vm_mem, app_vm_ocpu)
+            db_vm_mem = max(db_vm_mem, db_vm_ocpu)
             app_ocpus = app_servers * app_vm_ocpu if app_servers else 0.0
             db_ocpus = db_servers * db_vm_ocpu if db_servers else 0.0
             ocpus = app_ocpus + db_ocpus
@@ -6907,7 +7094,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # workload is one message pack, charged once on the anchor row.
         oic_handled = False
         if cloud_bill_mode and not row_free_on_oci and not rds_handled and _is_oic_row(row):
-            oic_items, oic_label, oic_cat, oic_sku, oic_carried = price_oic_row(row, oic_anchor_row_id, oic_message_packs)
+            oic_items, oic_label, oic_cat, oic_sku, oic_carried = price_oic_row(row, oic_anchor_row_id, oic_effective_packs)
             line_items.extend(oic_items)
             row["oci_product"] = oic_label
             row["oci_service_category"] = oic_cat
@@ -7054,12 +7241,43 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in obs_items)
                 obs_handled = True
 
+        # AWS WorkSpaces -> OCI Secure Desktops: full stack (desktop fee + underlying
+        # E6 compute + boot volume), sized from the WorkSpaces bundle specs, matching
+        # the Secure Desktops add-in instead of a flat $20/desktop.
+        ws_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled:
+            ws_result = price_workspaces_row(row)
+            if ws_result is not None:
+                ws_items, ws_label, ws_cat, ws_sku, ws_carried = ws_result
+                line_items.extend(ws_items)
+                row["oci_product"] = ws_label
+                row["oci_service_category"] = ws_cat
+                _ws_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": ws_sku,
+                    "ociProduct": ws_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_ws_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (ws_items[0].get("unit") if ws_items else ""),
+                    "confidence": 0.9,
+                    "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _ws_src
+                totals["mappedSourceMonthlyCost"] += _ws_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in ws_items)
+                ws_handled = True
+
         # Authoritative storage pricing: a storage service maps to ONE OCI storage
         # product at its real rate (S3->Object Storage, EFS/FSx->File Storage,
         # EBS->Block Volume), priced on the actual storage-capacity quantity from the
         # bill — not scattered across catalog items per line.
-        storage_handled = oic_handled or rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled
-        if cloud_bill_mode and not row_free_on_oci and not oic_handled and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled:
+        storage_handled = oic_handled or rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled or ws_handled
+        if cloud_bill_mode and not row_free_on_oci and not oic_handled and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled and not ws_handled:
             ut2 = normalize(row.get("__usageType"))
             base = clean_text(row.get("oci_product")).split(" (approx")[0].strip()
             # EBS volumes/snapshots bill under EC2 — route them to Block Volume.

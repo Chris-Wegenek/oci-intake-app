@@ -1131,47 +1131,50 @@ def _add_extra_services(wb, extra_priced):
 
 
 def _itemize_extra_services(wb, extra_priced):
-    """Write an 'Added OCI Services' table onto the Networking sheet's cleared area so every
-    app-added line is documented with its SKU, sizing and monthly cost. This is a paper
-    trail only — the totals already flow through the Pricing Overview category lines, so
-    these rows are NOT summed anywhere (no double counting)."""
-    from copy import copy
-    ws = wb["Networking"]
-    r0 = 11                     # rows 11-18 were cleared by _zero_unmodeled_sheets
-    hdr_style = copy(ws.cell(10, 1)._style)
-    ws.cell(r0, 1, "Added OCI Services (configured in app)")
-    ws.cell(r0, 1)._style = hdr_style
-    # Columns aligned to the outer table: Service | SKU | Unit | Unit Rate | Qty |
-    # Hours | Est. Monthly | Notes. Hours shows the app's hours-per-month setting for
-    # per-hour meters (FastConnect ports, load balancers, ...) and blank otherwise.
-    headers = ["Service", "SKU", "Unit", "Unit Rate", "Qty / Input",
-               "Hours / Month", "Est. Monthly", "Notes / Category"]
+    """Write a dedicated 'Added OCI Services' sheet listing EVERY constituent SKU of each
+    app-added service (the estimator's 'Pricing Details'). Pure paper trail — the amounts
+    already flow to the Pricing Overview category lines via _add_extra_services, so nothing
+    here is summed into any total that feeds the BOM (no double-counting)."""
+    if not extra_priced:
+        return
+    name = "Added OCI Services"
+    ws = wb[name] if name in wb.sheetnames else wb.create_sheet(name)
+    for col, w in (("A", 30), ("B", 14), ("C", 42), ("D", 12), ("E", 16),
+                   ("F", 14), ("G", 16), ("H", 20)):
+        ws.column_dimensions[col].width = w
+    ws["A1"] = "Added OCI Services — full SKU breakdown"
+    ws["A1"].font = Font(name="Calibri", size=14, bold=True)
+    headers = ["Service", "SKU", "SKU Description", "Unit Rate", "Qty / Input",
+               "Hours / Month", "Est. Monthly", "Category"]
+    hdr_fill = PatternFill("solid", fgColor="FF4472C4")
     for j, h in enumerate(headers, start=1):
-        ws.cell(r0 + 1, j, h)
-    last = r0 + 1
-    for i, s in enumerate(extra_priced):
-        r = r0 + 2 + i
-        ws.cell(r, 1, s["name"])
-        ws.cell(r, 2, s["sku"])
-        ws.cell(r, 3, s.get("unit"))
-        rc = ws.cell(r, 4, round(float(s.get("rate") or 0), 4)); rc.number_format = "#,##0.0000"
-        ws.cell(r, 5, s.get("qty"))
-        hrs = s.get("hours")
-        ws.cell(r, 6, hrs if isinstance(hrs, (int, float)) and hrs else None)
-        mc = ws.cell(r, 7, round(float(s["monthly"] or 0), 2)); mc.number_format = "#,##0.00"
-        ws.cell(r, 8, s.get("group"))
-        last = r
-    # Total Est. Monthly across the added services (display only).
-    tr = last + 1
-    tc = ws.cell(tr, 1, "Total Added OCI Services"); tc.font = Font(bold=True)
-    tot = ws.cell(tr, 7, f"=SUM(G{r0 + 2}:G{last})" if extra_priced else 0)
-    tot.number_format = "#,##0.00"; tot.font = Font(bold=True)
-    # This itemized table is a PAPER TRAIL only — every added service's cost already flows
-    # to the correct Pricing Overview line via _add_extra_services. The Networking sheet's
-    # "Modeled Monthly" (B5=G19=SUM(G11:G18)) feeds Pricing Overview B18, so leaving these
-    # values inside that SUM would double-count them. Native networking is always zeroed in
-    # this app, so pin G19 to 0 to keep _add_extra_services the single source of truth.
-    ws["G19"] = 0
+        c = ws.cell(3, j, h)
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFFFF")
+        c.fill = hdr_fill
+    # One row per constituent SKU so every service's full SKU list is documented.
+    r = 4
+    first = r
+    for s in extra_priced:
+        skus = s.get("skus") or [{"sku": s.get("sku"), "desc": s.get("name"),
+                                  "qty": s.get("qty"), "rate": s.get("rate"),
+                                  "hours": s.get("hours"), "monthly": s.get("monthly")}]
+        for k, sk in enumerate(skus):
+            ac = ws.cell(r, 1, s["name"] if k == 0 else "  ↳")
+            if k == 0:
+                ac.font = Font(name="Calibri", size=11, bold=True)
+            ws.cell(r, 2, sk.get("sku"))
+            ws.cell(r, 3, sk.get("desc"))
+            rc = ws.cell(r, 4, round(float(sk.get("rate") or 0), 4)); rc.number_format = "#,##0.0000"
+            ws.cell(r, 5, sk.get("qty"))
+            hrs = sk.get("hours")
+            ws.cell(r, 6, hrs if isinstance(hrs, (int, float)) and hrs else None)
+            mc = ws.cell(r, 7, round(float(sk.get("monthly") or 0), 2)); mc.number_format = "#,##0.00"
+            ws.cell(r, 8, s.get("group"))
+            r += 1
+    tc = ws.cell(r, 1, "Total Added OCI Services"); tc.font = Font(name="Calibri", size=12, bold=True)
+    tot = ws.cell(r, 7, f"=SUM(G{first}:G{r - 1})")
+    tot.number_format = "#,##0.00"; tot.font = Font(name="Calibri", size=12, bold=True)
+    ws.freeze_panes = "A4"
 
 
 def _repoint_ramp_refs(ws_po, months, include_windows=False):
