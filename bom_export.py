@@ -267,7 +267,33 @@ def _line(ws, row, part, desc, qty, instance_qty, hours, unit_price):
     g.number_format = MONEY2
 
 
-def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="BOM w E6 Acceleron", existing_label="Existing Infra Cost (enter):", oci_discount=0.0):
+def _build_extra_services_sheet(wb, priced, total):
+    """Itemize app-added OCI services on their own sheet in the Quick BOM."""
+    ws = wb.create_sheet("Additional Services")
+    ws.column_dimensions["A"].width = 34
+    for col in "BCDE":
+        ws.column_dimensions[col].width = 16
+    ws["A1"] = "Additional OCI Services (configured in app)"
+    ws["A1"].font = Font(bold=True, size=14)
+    for j, h in enumerate(["Service", "Category", "SKU", "Sizing", "Monthly (USD)"], start=1):
+        c = ws.cell(2, j, h)
+        c.font = Font(bold=True, color="FFFFFFFF")
+        c.fill = _fill(OV_BLUE)
+    for i, s in enumerate(priced):
+        r = 3 + i
+        ws.cell(r, 1, s["name"])
+        ws.cell(r, 2, s["group"])
+        ws.cell(r, 3, s["sku"])
+        ws.cell(r, 4, s["sizing"])
+        ws.cell(r, 5, round(float(s["monthly"] or 0), 2)).number_format = MONEY2
+    tr = 3 + len(priced)
+    ws.cell(tr, 4, "Total Monthly:").font = Font(bold=True)
+    tc = ws.cell(tr, 5, round(float(total or 0), 2))
+    tc.font = Font(bold=True)
+    tc.number_format = MONEY2
+
+
+def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="BOM w E6 Acceleron", existing_label="Existing Infra Cost (enter):", oci_discount=0.0, extra_oci=0.0, extra_third_party=0.0):
     """Render the 'Overview' sheet, pulling the 5-year utilization ramp from the app.
     oci_discount (0-1) is applied to the OCI totals and shown in a discount cell."""
     BOM = f"'{bom_sheet_name}'"
@@ -314,11 +340,17 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
     ws.merge_cells("B4:C4")
     band("B4", "Total Monthly Cost")
     ws.merge_cells("B5:C6")
-    ws["B5"] = f"={BOM}!J15*(1-$G$5)"
+    # Added services roll into the monthly + annual totals. Native OCI services take the
+    # OCI discount ($G$5); 3rd-party licensing (Windows / SQL Server) is billed at list.
+    oci = round(float(extra_oci or 0), 2)
+    tp = round(float(extra_third_party or 0), 2)
+    m_extra = (f"+{oci}*(1-$G$5)" if oci else "") + (f"+{tp}" if tp else "")
+    a_extra = (f"+{round(oci * 12, 2)}*(1-$G$5)" if oci else "") + (f"+{round(tp * 12, 2)}" if tp else "")
+    ws["B5"] = f"={BOM}!J15*(1-$G$5){m_extra}"
     ws.merge_cells("E4:F4")
     band("E4", "Total Annual Cost (Full)")
     ws.merge_cells("E5:F6")
-    ws["E5"] = f"={BOM}!J18*(1-$G$5)"
+    ws["E5"] = f"={BOM}!J18*(1-$G$5){a_extra}"
     for cell in ("B4", "E4"):
         ws[cell].fill = _fill(OV_BLUE)
     for cell in ("B5", "E5"):
@@ -803,7 +835,15 @@ def _ref_lookup(aws_service):
     return None
 
 
-def _cloud_product_group(category, aws_service):
+def _cloud_product_group(category, aws_service, oci_product=None):
+    cat_l = (category or "").strip().lower()
+    prod_l = (oci_product or "").lower()
+    # GPU / AI compute always rolls up under AI & Machine Learning, even though the
+    # underlying AWS service (EC2) would otherwise ref-lookup to Compute.
+    if ("gpu" in prod_l
+            or cat_l in ("ai & machine learning", "ai and machine learning",
+                         "artificial intelligence")):
+        return "AI & Machine Learning"
     ref = _ref_lookup(aws_service)
     if ref and ref.get("group"):
         return ref["group"]
@@ -920,15 +960,14 @@ def read_workflow_state(path):
     return json.loads(text) if text else None
 
 
-def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0.0, workflow_json=None):
-    """AWS -> OCI bill comparison workbook that reproduces the reference's
-    'Product Breakdown ' printout. OCI prices are written as values; no
-    cross-sheet pricing engine is needed.
+def add_cloud_comparison_sheets(wb, pricing, ramp=None, bom_name="", oci_discount=0.0,
+                                extra_services=None, hours=HOURS, use_active=False):
+    """Add the AWS->OCI bill-comparison sheets (Product Breakdown, Service Mapping,
+    Notes + Assumptions, Overview) to an existing workbook.
 
-    oci_discount is a fraction (0.0-1.0) set by the user near the ramp graph.
-    The reference's discount logic is preserved (Total - Discounted column =
-    list * (1 - discount)); at 0 the discounted column equals the app's OCI
-    total exactly."""
+    `use_active=True` renders Product Breakdown onto wb.active (for a standalone workbook);
+    otherwise all four are new sheets (for appending onto the Full BOM template so no bill
+    data or mappings are lost). Returns the Product Breakdown worksheet."""
     try:
         oci_discount = float(oci_discount or 0)
     except (TypeError, ValueError):
@@ -936,18 +975,13 @@ def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0
     oci_discount = min(max(oci_discount, 0.0), 1.0)
     rows = pricing.get("rows", []) or []
 
-    # Aggregate by (group, AWS service, OCI product). Skip "remove" rows.
-    # A line is "carried" ONLY when the user chose "Carry over AWS cost" — a
-    # mapping flag alone ("May not be an optimal mapping") does NOT carry the
-    # cost; the app's `monthly` already holds the correct OCI estimate. (Carrying
-    # a flagged row would wrongly force its OCI cost to equal the AWS cost.)
     agg = {}
     for r in rows:
         if (r.get("costAction") or "") == "remove":
             continue
         aws_svc = r.get("sourceService") or "Other"
         oci_prod = r.get("ociProduct") or "Needs review"
-        group = _cloud_product_group(r.get("ociServiceCategory"), aws_svc)
+        group = _cloud_product_group(r.get("ociServiceCategory"), aws_svc, oci_prod)
         key = (group, aws_svc, oci_prod)
         a = agg.setdefault(key, {"aws": 0.0, "oci": 0.0, "carry": False})
         a["aws"] += float(r.get("sourceMonthlyCost") or 0)
@@ -955,7 +989,6 @@ def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0
         if (r.get("costAction") or "") == "carry":
             a["carry"] = True
 
-    # Flatten + order: by GROUP_ORDER, then descending AWS cost within a group.
     by_group = {}
     for (group, aws_svc, oci_prod), v in agg.items():
         by_group.setdefault(group, []).append((aws_svc, oci_prod, v))
@@ -968,10 +1001,7 @@ def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0
         for aws_svc, oci_prod, v in sorted(by_group[group], key=lambda x: -x[2]["aws"]):
             ordered.append((group, aws_svc, oci_prod, v))
 
-    # ---- Overview figures (tie to the Product Breakdown totals) ----
     totals = pricing.get("totals", {}) or {}
-    # OCI figure: discounted total, computed with the SAME rule the Product
-    # Breakdown uses (carry rows / rows without a monthly estimate stay at list).
     oci_monthly = 0.0
     for r in rows:
         if (r.get("costAction") or "") == "remove":
@@ -981,21 +1011,62 @@ def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0
             oci_monthly += m
         else:
             oci_monthly += m * (1.0 - oci_discount)
-    # Fall back to the published OCI list total if there were no priced rows.
     if not rows:
         oci_monthly = float(totals.get("monthly") or 0)
-    # Existing/current spend = AWS source total (remove rows already excluded).
+
+    if extra_services:
+        import oci_catalog
+        priced, _ = oci_catalog.price_extras(extra_services, hours)
+        for s in priced:
+            grp = "Added OCI Services"
+            if grp not in present_groups:
+                present_groups.append(grp)
+            third = bool(s.get("thirdParty"))
+            ordered.append((grp, s.get("sizing") or "Added in app", s["name"],
+                            {"aws": 0.0, "oci": float(s["monthly"] or 0), "carry": third}))
+            m = float(s["monthly"] or 0)
+            oci_monthly += m if third else m * (1.0 - oci_discount)
+
+    # 3rd-party Windows OS licensing. On OCI, Windows is a separate SKU (AWS bakes it into
+    # the instance rate), so it MUST be added to the OCI side for a fair comparison. It's
+    # already 0 when the Hide Windows toggle is on, so summing it here honors that toggle.
+    windows_total = sum(float(r.get("windowsLicenseMonthly") or 0)
+                        for r in rows if (r.get("costAction") or "") != "remove")
+    if windows_total > 0:
+        grp = "3rd-Party Licensing"
+        if grp not in present_groups:
+            present_groups.append(grp)
+        # carry=False so the OCI cost is written as a real value (a carried row would force
+        # OCI = AWS cost, which is 0 for this line since AWS bundles Windows into compute).
+        ordered.append((grp, "Windows OS licensing", "OCI Windows OS License (per OCPU-hr)",
+                        {"aws": 0.0, "oci": windows_total, "carry": False}))
+        oci_monthly += windows_total
+
     existing_monthly = float(totals.get("sourceMonthlyCost") or 0)
 
-    wb = Workbook()
-    _cloud_product_breakdown(wb.active, ordered, present_groups, bom_name, oci_discount)
-    _cloud_service_mapping_sheet(wb.create_sheet("Service Mapping", 1), rows, oci_discount)
+    pb = wb.active if use_active else wb.create_sheet("Product Breakdown ")
+    _cloud_product_breakdown(pb, ordered, present_groups, bom_name, oci_discount)
+    _cloud_service_mapping_sheet(wb.create_sheet("Service Mapping"), rows, oci_discount)
     _cloud_notes_sheet(wb.create_sheet("Notes + Assumptions"))
     build_cloud_overview_sheet(
-        wb.create_sheet("Overview"),
-        _util_by_year(ramp), oci_monthly, existing_monthly,
-        oci_discount=oci_discount,
+        wb.create_sheet("Overview" if use_active else "Cloud Bill Overview"),
+        _util_by_year(ramp), oci_monthly, existing_monthly, oci_discount=oci_discount,
     )
+    return pb
+
+
+def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0.0, workflow_json=None, extra_services=None, hours=HOURS):
+    """AWS -> OCI bill comparison workbook that reproduces the reference's
+    'Product Breakdown ' printout. OCI prices are written as values; no
+    cross-sheet pricing engine is needed.
+
+    oci_discount is a fraction (0.0-1.0) set by the user near the ramp graph.
+    The reference's discount logic is preserved (Total - Discounted column =
+    list * (1 - discount)); at 0 the discounted column equals the app's OCI
+    total exactly."""
+    wb = Workbook()
+    add_cloud_comparison_sheets(wb, pricing, ramp, bom_name, oci_discount,
+                               extra_services, hours, use_active=True)
     embed_workflow_state(wb, workflow_json)
     wb.active = 0  # keep "Product Breakdown " as the active/first sheet
     buf = BytesIO()
@@ -1033,10 +1104,16 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
     box2_save = box2_hdr + 1
     box2_pct = box2_save + 1
 
+    # The Cloud Service Product Group summary (Monthly + Annual) is placed BELOW the
+    # main table, a few rows under the savings boxes.
+    pg = len(present_groups)
+    summary_start = box2_pct + 3
+    summary_bottom = summary_start + 5 + 2 * (pg + 1) + 3
+
     # ---- row heights ----
     for r in range(1, 32):
         ws.row_dimensions[r].height = 18.0
-    for r in range(32, max(51, box2_pct + 2)):
+    for r in range(32, max(51, summary_bottom + 2)):
         ws.row_dimensions[r].height = 18.75
 
     base_font = Font(name="Calibri", size=14)
@@ -1217,8 +1294,8 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
     box_label(f"I{box2_pct}", "Total % Savings", gold)
     c = cell(f"J{box2_pct}", f"=IFERROR(J{box2_save}/D{tr},0)"); c.fill = gold; c.number_format = _PCT
 
-    # ---- right legend block ----
-    _cloud_legend(ws, present_groups, first, last if N else first, total_row)
+    # ---- product-group summary (below the main table) ----
+    _cloud_legend(ws, present_groups, first, last if N else first, total_row, summary_start)
 
     # ---- conditional formatting ----
     if N:
@@ -1229,30 +1306,26 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
             f"L{first}:L{last}",
             Rule(type="cellIs", operator="greaterThan", formula=["0"], dxf=good))
 
-    # per-group fill on Product Group cells (data + legend names)
-    legend_n_lo = 6
-    legend_n_hi = 6 + len(present_groups) - 1
-    grp_ranges = []
+    # per-group fill on the main-table Product Group cells (the summary tables handle
+    # their own group coloring below the table).
     if N:
-        grp_ranges.append(f"B{first}:B{last}")
-    if present_groups:
-        grp_ranges.append(f"N{legend_n_lo}:N{legend_n_hi}")
-    for rng_str in grp_ranges:
         for grp, color in _CLOUD_GROUP_COLORS.items():
             dxf = DifferentialStyle(fill=PatternFill(bgColor="FF" + color))
             ws.conditional_formatting.add(
-                rng_str,
+                f"B{first}:B{last}",
                 Rule(type="cellIs", operator="equal",
                      formula=[f'"{grp}"'], dxf=dxf))
 
 
-def _cloud_legend(ws, present_groups, first, last, total_row):
-    """Right-side N:T monthly + annual summary tables (one row per present group)."""
+def _cloud_legend(ws, present_groups, first, last, total_row, start_row):
+    """Monthly + annual "Cloud Service Product Group" summary tables, placed BELOW the
+    main Product Breakdown table (columns B:H) rather than off to the right."""
     base = Font(name="Calibri", size=14)
+    n = len(present_groups)
 
-    # ---- disclaimer banner N2:T3 ----
-    ws.merge_cells("N2:T3")
-    nb = ws["N2"]
+    # ---- disclaimer banner (B:G) ----
+    ws.merge_cells(f"B{start_row}:G{start_row + 1}")
+    nb = ws[f"B{start_row}"]
     nb.value = ("Oracle Pricing Proposal. This is not an Official Contract - "
                 "For Budgetary Purposes Only")
     nb.fill = _fill(_C_GRAY)
@@ -1274,94 +1347,68 @@ def _cloud_legend(ws, present_groups, first, last, total_row):
         c.number_format = fmt
         return c
 
-    n = len(present_groups)
-
-    # ===== Monthly table =====
-    m_hdr = 5
-    m_lo = 6
-    m_hi = m_lo + n - 1
-    m_tot = m_hi + 1
-    head("N", m_hdr, "Cloud Service Product Group", _C_HDR, "FFFFFF")
-    head("O", m_hdr, "% of Bill", _C_GREEN_HDR)
-    head("P", m_hdr, "AWS Cost", _C_BLUE, "FFFFFF")
-    head("Q", m_hdr, "OCI Cost", _C_RED2, "FFFFFF")
-    head("R", m_hdr, "Savings in $", _C_GREEN_HDR)
-    head("S", m_hdr, "% Savings", _C_GREEN_HDR)
-    ws.merge_cells(f"T{m_lo}:T{m_hi if n else m_lo}")
-    tcell = ws[f"T{m_lo}"]
-    tcell.value = "Monthly"
-    tcell.font = Font(name="Calibri", size=14, bold=True)
-    tcell.alignment = _CTR
-
+    g = _fill(_C_GREEN_HDR)
     sumrng = f"$B${first}:$B${last}"
     fsum = f"$F${first}:$F${last}"
     ksum = f"$K${first}:$K${last}"
-    for i, grp in enumerate(present_groups):
-        r = m_lo + i
-        c = ws[f"N{r}"]; c.value = grp; c.font = Font(name="Calibri", size=14, bold=True)
-        money("O", r, f"=IFERROR(P{r}/$P${m_tot},0)", _PCT)
-        money("P", r, f"=SUMIF({sumrng},N{r},{fsum})", _ACCT0)
-        money("Q", r, f"=SUMIF({sumrng},N{r},{ksum})", _ACCT0)
-        money("R", r, f"=P{r}-Q{r}", _ACCT0)
-        money("S", r, f"=IFERROR(R{r}/P{r},0)", _PCT)
-    # monthly total row
-    head("N", m_tot, "Total", _C_GREEN_HDR)
-    g = _fill(_C_GREEN_HDR)
-    for col, formula, fmt in (
-        ("O", f"=SUM(O{m_lo}:O{m_hi})", _PCT),
-        ("P", f"=SUM(P{m_lo}:P{m_hi})", _MONEY0),
-        ("Q", f"=SUM(Q{m_lo}:Q{m_hi})", _MONEY0),
-        ("R", f"=P{m_tot}-Q{m_tot}", _MONEY0),
-        ("S", f"=IFERROR(R{m_tot}/P{m_tot},0)", _PCT)):
-        c = money(col, m_tot, formula, fmt)
-        c.fill = g
-        c.font = Font(name="Calibri", size=14, bold=True)
 
-    # ===== Annual table =====
+    def build_table(hdr_row, label, annual=False, month_lo=None):
+        """Columns: B=group, C=% of bill, D=AWS, E=OCI, F=Savings, G=% Savings,
+        H=Monthly/Annual label. Returns (lo, tot)."""
+        lo = hdr_row + 1
+        hi = lo + n - 1
+        tot = hi + 1
+        head("B", hdr_row, "Cloud Service Product Group", _C_HDR, "FFFFFF")
+        head("C", hdr_row, "% of Bill", _C_GREEN_HDR)
+        head("D", hdr_row, "AWS Cost", _C_BLUE, "FFFFFF")
+        head("E", hdr_row, "OCI Cost", _C_RED2, "FFFFFF")
+        head("F", hdr_row, "Savings in $", _C_GREEN_HDR)
+        head("G", hdr_row, "% Savings", _C_GREEN_HDR)
+        ws.merge_cells(f"H{lo}:H{hi if n else lo}")
+        lc = ws[f"H{lo}"]
+        lc.value = label
+        lc.font = Font(name="Calibri", size=14, bold=True)
+        lc.alignment = _CTR
+        for i, grp in enumerate(present_groups):
+            r = lo + i
+            if annual:
+                mr = month_lo + i
+                c = ws[f"B{r}"]; c.value = f"=B{mr}"
+                money("D", r, f"=D{mr}*12", _ACCT0)
+                money("E", r, f"=E{mr}*12", _ACCT0)
+            else:
+                c = ws[f"B{r}"]; c.value = grp
+                money("D", r, f"=SUMIF({sumrng},B{r},{fsum})", _ACCT0)
+                money("E", r, f"=SUMIF({sumrng},B{r},{ksum})", _ACCT0)
+            c.font = Font(name="Calibri", size=14, bold=True)
+            money("C", r, f"=IFERROR(D{r}/$D${tot},0)", _PCT)
+            money("F", r, f"=D{r}-E{r}", _ACCT0)
+            money("G", r, f"=IFERROR(F{r}/D{r},0)", _PCT)
+        # total row
+        head("B", tot, "Total", _C_GREEN_HDR)
+        for col, formula, fmt in (
+            ("C", f"=SUM(C{lo}:C{hi})", _PCT),
+            ("D", f"=SUM(D{lo}:D{hi})", _MONEY0),
+            ("E", f"=SUM(E{lo}:E{hi})", _MONEY0),
+            ("F", f"=D{tot}-E{tot}", _MONEY0),
+            ("G", f"=IFERROR(F{tot}/D{tot},0)", _PCT)):
+            c = money(col, tot, formula, fmt)
+            c.fill = g
+            c.font = Font(name="Calibri", size=14, bold=True)
+        # per-group conditional fill on the group-name cells
+        if n:
+            for grp, color in _CLOUD_GROUP_COLORS.items():
+                dxf = DifferentialStyle(fill=PatternFill(bgColor="FF" + color))
+                ws.conditional_formatting.add(
+                    f"B{lo}:B{hi}",
+                    Rule(type="cellIs", operator="equal",
+                         formula=[f'"{grp}"'], dxf=dxf))
+        return lo, tot
+
+    m_hdr = start_row + 3
+    m_lo, m_tot = build_table(m_hdr, "Monthly", annual=False)
     a_hdr = m_tot + 2
-    a_lo = a_hdr + 1
-    a_hi = a_lo + n - 1
-    a_tot = a_hi + 1
-    head("N", a_hdr, "Cloud Service Product Group", _C_HDR, "FFFFFF")
-    head("O", a_hdr, "% of Bill", _C_GREEN_HDR)
-    head("P", a_hdr, "AWS Cost", _C_BLUE, "FFFFFF")
-    head("Q", a_hdr, "OCI Cost", _C_RED2, "FFFFFF")
-    head("R", a_hdr, "Savings in $", _C_GREEN_HDR)
-    head("S", a_hdr, "% Savings", _C_GREEN_HDR)
-    ws.merge_cells(f"T{a_lo}:T{a_hi if n else a_lo}")
-    tcell = ws[f"T{a_lo}"]
-    tcell.value = "Annual"
-    tcell.font = Font(name="Calibri", size=14, bold=True)
-    tcell.alignment = _CTR
-
-    for i in range(n):
-        r = a_lo + i
-        mr = m_lo + i
-        c = ws[f"N{r}"]; c.value = f"=N{mr}"; c.font = Font(name="Calibri", size=14, bold=True)
-        money("O", r, f"=IFERROR(P{r}/$P${a_tot},0)", _PCT)
-        money("P", r, f"=P{mr}*12", _ACCT0)
-        money("Q", r, f"=Q{mr}*12", _ACCT0)
-        money("R", r, f"=P{r}-Q{r}", _ACCT0)
-        money("S", r, f"=IFERROR(R{r}/P{r},0)", _PCT)
-    head("N", a_tot, "Total", _C_GREEN_HDR)
-    for col, formula, fmt in (
-        ("O", f"=SUM(O{a_lo}:O{a_hi})", _PCT),
-        ("P", f"=SUM(P{a_lo}:P{a_hi})", _MONEY0),
-        ("Q", f"=SUM(Q{a_lo}:Q{a_hi})", _MONEY0),
-        ("R", f"=P{a_tot}-Q{a_tot}", _MONEY0),
-        ("S", f"=IFERROR(R{a_tot}/P{a_tot},0)", _PCT)):
-        c = money(col, a_tot, formula, fmt)
-        c.fill = g
-        c.font = Font(name="Calibri", size=14, bold=True)
-
-    # per-group conditional fill on the annual group-name cells too
-    if n:
-        for grp, color in _CLOUD_GROUP_COLORS.items():
-            dxf = DifferentialStyle(fill=PatternFill(bgColor="FF" + color))
-            ws.conditional_formatting.add(
-                f"N{a_lo}:N{a_hi}",
-                Rule(type="cellIs", operator="equal",
-                     formula=[f'"{grp}"'], dxf=dxf))
+    build_table(a_hdr, "Annual", annual=True, month_lo=m_lo)
 
 
 _CLOUD_NOTES = [
@@ -1412,18 +1459,26 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
         c.alignment = _CTR
         c.border = _THIN_BORDER
 
-    # Order by product group, then descending source cost within a group.
-    def grp(r):
-        return _cloud_product_group(r.get("ociServiceCategory"), r.get("sourceService"))
-    order_index = {g: i for i, g in enumerate(_CLOUD_GROUP_ORDER)}
-    ordered = sorted(
-        rows,
-        key=lambda r: (order_index.get(grp(r), 99), -float(r.get("sourceMonthlyCost") or 0)),
-    )
+    # Collapsible outline: the +/- toggle sits on the group HEADER row (above its detail),
+    # so each product group can be collapsed away when you don't care about it.
+    from openpyxl.worksheet.properties import Outline
+    ws.sheet_properties.outlinePr = Outline(summaryBelow=False, summaryRight=False,
+                                            showOutlineSymbols=True)
 
-    r = 3
-    src_total = oci_total = 0.0
-    for row in ordered:
+    def grp(r):
+        return _cloud_product_group(r.get("ociServiceCategory"), r.get("sourceService"),
+                                    r.get("ociProduct"))
+
+    # Bucket the lines by product group, in the SAME order they appear on the Pricing
+    # Overview; within a group, cluster by AWS service (biggest-spend service first) and
+    # order each service's lines by descending source cost so it's easy to follow.
+    order_index = {g: i for i, g in enumerate(_CLOUD_GROUP_ORDER)}
+    buckets = {}
+    for row in rows:
+        buckets.setdefault(grp(row), []).append(row)
+    ordered_groups = sorted(buckets.keys(), key=lambda g: order_index.get(g, 99))
+
+    def _write_detail(r, row):
         fsm = row.get("fullServiceMapping") or {}
         action = (row.get("costAction") or "")
         src = float(row.get("sourceMonthlyCost") or 0)
@@ -1438,30 +1493,66 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
             status = "Mapped"
         oci_prod = row.get("ociProduct") or fsm.get("ociProduct") or "Needs review"
         qty = fsm.get("quantity")
-        usage = (f"{qty:,.0f} {fsm.get('unit','')}".strip() if isinstance(qty, (int, float)) and qty else "")
-        vals = [
-            grp(row),
-            row.get("sourceService") or "",
-            fsm.get("sourceProduct") or "",
-            usage,
-            round(src, 2),
-            oci_prod,
-            round(oci, 2),
-            round(src - oci, 2),
-            status,
-        ]
+        usage = (f"{qty:,.0f} {fsm.get('unit','')}".strip()
+                 if isinstance(qty, (int, float)) and qty else "")
+        vals = [grp(row), row.get("sourceService") or "", fsm.get("sourceProduct") or "",
+                usage, round(src, 2), oci_prod, round(oci, 2), round(src - oci, 2), status]
         for i, v in enumerate(vals, start=2):
             c = ws.cell(row=r, column=i, value=v)
             c.font = Font(name="Calibri", size=11)
             c.border = _THIN_BORDER
-            if i in (6, 8, 9):  # Source Cost, OCI Cost, Savings
+            if i in (6, 8, 9):
                 c.number_format = MONEY2
         if oci_prod == "Needs review":
             ws.cell(row=r, column=7).font = Font(name="Calibri", size=11, color="FFC00000", bold=True)
-        if action != "remove":
-            src_total += src
-            oci_total += oci
+        # Level-1 detail row -> collapses under its group header. Hidden by default so the
+        # sheet opens with every group collapsed (expand the ones you care about).
+        rd = ws.row_dimensions[r]
+        rd.outline_level = 1
+        rd.hidden = True
+        return src, oci, (action != "remove")
+
+    r = 3
+    src_total = oci_total = 0.0
+    for g in ordered_groups:
+        grows = buckets[g]
+        g_src = sum(float(x.get("sourceMonthlyCost") or 0) for x in grows)
+        g_oci = sum(float(x.get("monthly") or 0) for x in grows
+                    if (x.get("costAction") or "") != "remove")
+        # ---- group header row (level 0; carries the collapse button) ----
+        color = _CLOUD_GROUP_COLORS.get(g, _C_HDR)
+        hdr_fill = _fill(color)
+        gh = ws.cell(row=r, column=2, value=f"{g}  ({len(grows)} lines)")
+        gh.font = Font(name="Calibri", size=12, bold=True)
+        for i in range(2, 11):
+            c = ws.cell(row=r, column=i)
+            c.fill = hdr_fill
+            c.border = _THIN_BORDER
+            if not c.font or not c.font.bold:
+                c.font = Font(name="Calibri", size=12, bold=True)
+        ws.cell(row=r, column=6, value=round(g_src, 2)).number_format = MONEY2
+        ws.cell(row=r, column=8, value=round(g_oci, 2)).number_format = MONEY2
+        ws.cell(row=r, column=9, value=round(g_src - g_oci, 2)).number_format = MONEY2
+        # Header carries the collapse button (summaryBelow=False); mark it collapsed so the
+        # sheet opens with the group folded away.
+        ws.row_dimensions[r].collapsed = True
         r += 1
+        # ---- detail rows, clustered by AWS service (biggest spend first) ----
+        svc_total = {}
+        for x in grows:
+            svc_total[x.get("sourceService") or ""] = svc_total.get(x.get("sourceService") or "", 0.0) + float(x.get("sourceMonthlyCost") or 0)
+        grows_sorted = sorted(
+            grows,
+            key=lambda x: (-svc_total.get(x.get("sourceService") or "", 0.0),
+                           x.get("sourceService") or "",
+                           -float(x.get("sourceMonthlyCost") or 0)),
+        )
+        for row in grows_sorted:
+            s, o, counted = _write_detail(r, row)
+            if counted:
+                src_total += s
+                oci_total += o
+            r += 1
 
     # Totals row
     tot = ws.cell(row=r, column=2, value="Total (excl. removed)")
@@ -1480,18 +1571,6 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
         c.fill = _fill(_C_TOTAL)
         c.font = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
     ws.freeze_panes = "B3"
-
-    # Turn the mapping into an Excel Table so every column gets a filter/sort
-    # dropdown — lets you organize the product mapping by Product Group, AWS
-    # Service, OCI Product, Status, etc. (header row 2, data rows 3..data_end).
-    data_end = r - 1
-    if data_end >= 3:
-        tbl = Table(displayName="ServiceMapping", ref=f"B2:J{data_end}")
-        tbl.tableStyleInfo = TableStyleInfo(
-            name="TableStyleMedium2", showRowStripes=True,
-            showColumnStripes=False, showFirstColumn=False, showLastColumn=False,
-        )
-        ws.add_table(tbl)
 
 
 def _cloud_notes_sheet(ws):
@@ -1536,7 +1615,7 @@ def _util_by_year(ramp):
     return vals[:5]
 
 
-def build_workbook_bytes(servers, ramp=None, existing_infra_cost=0, shape=None, hide_windows=False, hours=HOURS, bom_name="", auto=False, existing_label="Existing Infra Cost (enter):", oci_discount=0.0):
+def build_workbook_bytes(servers, ramp=None, existing_infra_cost=0, shape=None, hide_windows=False, hours=HOURS, bom_name="", auto=False, existing_label="Existing Infra Cost (enter):", oci_discount=0.0, extra_services=None):
     shape = _resolve_shape(shape)
     # Sheet name auto-fills with the chosen shape (e.g. "BOM w E6 Ax"); in
     # processor-matching mode each workload gets its own best-fit shape, so say that.
@@ -1545,8 +1624,20 @@ def build_workbook_bytes(servers, ramp=None, existing_infra_cost=0, shape=None, 
     bom = wb.active
     bom.title = sheet_name
     build_bom_sheet(bom, servers, shape, hide_windows, hours)
+    # App-added OCI services: price them and add both an itemized sheet and their totals.
+    # Split into native OCI (eligible for the OCI discount) and 3rd-party licensing (not).
+    extra_oci = extra_tp = 0.0
+    if extra_services:
+        import oci_catalog
+        priced, _ = oci_catalog.price_extras(extra_services, hours)
+        for s in priced:
+            if s.get("thirdParty"):
+                extra_tp += float(s["monthly"] or 0)
+            else:
+                extra_oci += float(s["monthly"] or 0)
+        _build_extra_services_sheet(wb, priced, extra_oci + extra_tp)
     overview = wb.create_sheet("Overview")
-    build_overview_sheet(overview, _util_by_year(ramp), float(existing_infra_cost or 0), sheet_name, existing_label, oci_discount)
+    build_overview_sheet(overview, _util_by_year(ramp), float(existing_infra_cost or 0), sheet_name, existing_label, oci_discount, round(extra_oci, 2), round(extra_tp, 2))
     overview.sheet_view.tabSelected = True
     wb.active = wb.sheetnames.index("Overview")
     buf = BytesIO()

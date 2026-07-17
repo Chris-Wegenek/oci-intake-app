@@ -1,0 +1,111 @@
+{
+  "total_aws": 41874.37,
+  "free_total": 29749.95,
+  "rows": [
+    {
+      "aws": "Transit Gateway (attachment-hours + data)",
+      "aws_cost": 22901.93,
+      "oci": "DRG \u2014 Dynamic Routing Gateway + remote peering",
+      "status": "free",
+      "note": "DRG, VCN attachments, and intra/inter-region peering on the OCI backbone are not charged."
+    },
+    {
+      "aws": "Site-to-Site VPN (IPSec connection-hours)",
+      "aws_cost": 4103.4,
+      "oci": "OCI Site-to-Site VPN",
+      "status": "free",
+      "note": "OCI does not charge for IPSec VPN connections."
+    },
+    {
+      "aws": "Data Transfer \u2014 egress + inter-region",
+      "aws_cost": 5979.45,
+      "oci": "OCI Outbound Data Transfer",
+      "status": "partial",
+      "note": "Inbound free; first 10 TB/mo outbound free, then ~$0.0085/GB (vs AWS $0.09/GB)."
+    },
+    {
+      "aws": "Public IPv4 addresses (in-use + idle)",
+      "aws_cost": 1689.34,
+      "oci": "OCI Public IP (ephemeral & reserved)",
+      "status": "free",
+      "note": "OCI does not charge for public IPv4 addresses."
+    },
+    {
+      "aws": "PrivateLink / VPC Endpoints",
+      "aws_cost": 795.28,
+      "oci": "OCI Service Gateway / Private Endpoints",
+      "status": "free",
+      "note": "Service Gateway and private endpoints are free."
+    },
+    {
+      "aws": "IP Address Manager (IPAM)",
+      "aws_cost": 260.0,
+      "oci": "OCI VCN IP management",
+      "status": "free",
+      "note": "IP management is built into the VCN at no charge."
+    },
+    {
+      "aws": "NAT Gateway (hours + data)",
+      "aws_cost": 0.0,
+      "oci": "OCI NAT Gateway",
+      "status": "free",
+      "note": "OCI NAT Gateway has no hourly or per-GB charge."
+    },
+    {
+      "aws": "VCN, subnets, route tables, Internet Gateway",
+      "aws_cost": 0.0,
+      "oci": "OCI VCN / subnets / IGW",
+      "status": "free",
+      "note": "Core network constructs are free on both, listed for completeness."
+    },
+    {
+      "aws": "AWS Transfer Family (SFTP endpoint-hours)",
+      "aws_cost": 2464.37,
+      "oci": "SFTPGo on OCI Compute -> Object Storage",
+      "status": "paid",
+      "note": "No per-endpoint fee; re-hosted on a small VM (~$196/mo for all 12 endpoints)."
+    },
+    {
+      "aws": "Elastic Load Balancing (LB-hrs + LCU)",
+      "aws_cost": 1106.0,
+      "oci": "OCI Network LB / Flexible LB",
+      "status": "partial",
+      "note": "Network Load Balancer is free; Flexible LB ~$0.0113/LB-hr; LCU/capacity free."
+    },
+    {
+      "aws": "AWS Direct Connect (port-hrs + data)",
+      "aws_cost": 654.22,
+      "oci": "OCI FastConnect",
+      "status": "paid",
+      "note": "Port-hour by speed; FastConnect does not meter data transfer."
+    },
+    {
+      "aws": "Global Accelerator (accelerator-hrs + premium)",
+      "aws_cost": 376.49,
+      "oci": "OCI Load Balancer + backbone",
+      "status": "partial",
+      "note": "No separate accelerator fee; traffic rides the OCI LB and backbone."
+    },
+    {
+      "aws": "Amazon Verified Access (app-hours)",
+      "aws_cost": 1478.65,
+      "oci": "OCI Zero Trust (WAF + Bastion / IAM)",
+      "status": "partial",
+      "note": "No per-app hourly charge; first WAF instance free."
+    },
+    {
+      "aws": "Route 53 (hosted zones + queries)",
+      "aws_cost": 64.84,
+      "oci": "OCI DNS",
+      "status": "partial",
+      "note": "Hosted zones free; $0.85 per 1M queries."
+    },
+    {
+      "aws": "API Gateway (requests)",
+      "aws_cost": 0.4,
+      "oci": "OCI API Gateway",
+      "status": "partial",
+      "note": "Low volume; effectively negligible."
+    }
+  ]
+}

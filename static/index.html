@@ -109,6 +109,13 @@
             </div>
             <button type="button" id="switchToOnPrem" class="primary-button">Switch to On-prem inventory</button>
           </div>
+          <div id="comparisonBomNotice" class="inventory-notice" hidden>
+            <span class="inventory-notice-icon" aria-hidden="true">⚠</span>
+            <div class="inventory-notice-text">
+              <strong>This looks like a finished comparison / BOM, not a raw cloud bill.</strong>
+              <span id="comparisonBomNoticeText">Cloud-bill mode expects a raw AWS/Azure/GCP cost export. Parsing an already-built comparison produces wrong totals. Use “Convert an alternate OCI BOM,” or upload the original raw bill.</span>
+            </div>
+          </div>
           <div class="toolbar">
             <div>
               <h2>Adjust your table</h2>
@@ -155,6 +162,16 @@
             </div>
             <span id="cpuUnitDetected" class="cpuunit-detected" hidden></span>
           </div>
+
+          <section class="datacheck" id="dataCheck" hidden>
+            <div class="datacheck-head">
+              <h3>Data check</h3>
+              <p>What this file actually contains. Anything missing is left blank in the BOM and
+                the architecture diagram — the app never invents it.</p>
+            </div>
+            <ul class="datacheck-list" id="dataCheckList"></ul>
+            <p class="datacheck-note" id="dataCheckNote" hidden></p>
+          </section>
 
           <div class="table-wrap" aria-label="Editable inventory table">
             <table id="reviewTable"></table>
@@ -273,9 +290,11 @@
         <div class="results-actions">
           <button id="backToReview" class="ghost-button" type="button">Back to review</button>
           <div class="export-stack">
-            <button id="exportExcel" class="ghost-button" type="button">Export to Excel</button>
+            <button id="exportExcel" class="ghost-button bom-btn bom-btn-quick" type="button" title="Quick BOM — the compact workbook: the BOM sheet plus the Overview/ramp sheet.">Quick BOM</button>
             <button id="exportJson" class="export-json-btn" type="button">Export .json</button>
           </div>
+          <button id="exportFullBom" class="ghost-button bom-btn bom-btn-full" type="button" title="Full BOM — the 12-sheet customer deliverable: Table of Contents, Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR, Security KMS, Consumption Ramp, Annexure and Applications Migrated to OCI. Includes the OCI architecture diagram generated from this BOM. Takes a few seconds to build.">Full BOM</button>
+          <button id="downloadDiagram" class="ghost-button" type="button" title="Download just the OCI architecture diagram generated from this BOM — the rendered PNG and the editable draw.io file, zipped together. No workbook.">Download diagram</button>
           <button id="loadWorkflow" class="ghost-button" type="button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
           <input id="loadWorkflowFile" type="file" accept=".json,.xlsx" hidden />
           <button id="rerunPricing" class="primary-button" type="button">Reprice estimate</button>
@@ -303,9 +322,11 @@
             <p>Drag any dot to adjust that section of the ramp. Click the graph or add a dot to create another section. The red dashed line is the BOM maximum.</p>
           </div>
           <div class="ramp-heading-right">
-            <div class="mode-switch ramp-years-switch" role="group" aria-label="Ramp length">
-              <button type="button" class="mode-opt is-active" data-ramp-years="3">3 years</button>
-              <button type="button" class="mode-opt" data-ramp-years="5">5 years</button>
+            <div class="mode-switch ramp-months-switch" role="group" aria-label="Ramp length in months" title="Ramp length. The Full BOM's Consumption Ramp sheet is generated with exactly this many months.">
+              <button type="button" class="mode-opt" data-ramp-months="12">12 mo</button>
+              <button type="button" class="mode-opt" data-ramp-months="24">24 mo</button>
+              <button type="button" class="mode-opt is-active" data-ramp-months="36">36 mo</button>
+              <button type="button" class="mode-opt" data-ramp-months="60">60 mo</button>
             </div>
             <span id="rampCeilingLabel">BOM maximum</span>
           </div>
@@ -345,6 +366,16 @@
                   <b aria-hidden="true">%</b>
                 </div>
                 <small>Applied to the OCI estimate and the export (cloud and on-prem). Leave at 0 for no discount.</small>
+              </label>
+            </div>
+            <div class="ramp-discount" id="oicMessagePacksControl">
+              <label class="ramp-control">
+                <span>OIC message packs</span>
+                <div class="pct-input">
+                  <input id="oicMessagePacks" type="number" min="1" step="1" value="1" inputmode="numeric" aria-label="Oracle Integration Cloud message packs" />
+                  <b aria-hidden="true">×</b>
+                </div>
+                <small>Cloud-bill mode: SQS/SNS + Transfer Family map to Oracle Integration Cloud. Each pack = 5K messages/hour (744 hrs × $0.6452, SKU B89639).</small>
               </label>
             </div>
             <div class="ramp-years" aria-label="Annual ramp totals">
@@ -388,6 +419,42 @@
           </div>
           <div id="topWorkloads" class="bar-list"></div>
         </article>
+      </section>
+
+      <section class="add-services-section" aria-label="Add OCI services">
+        <button type="button" id="addServicesToggle" class="add-services-toggle" aria-expanded="false" aria-controls="addServicesBody">
+          <span class="add-services-toggle-icon" aria-hidden="true">＋</span>
+          <span class="add-services-toggle-text">
+            <strong>Add OCI services to the BOM</strong>
+            <span>Search Networking, Storage, Database, PaaS and more — size each one and add it to your estimate and export.</span>
+          </span>
+          <span class="add-services-caret" aria-hidden="true">▾</span>
+        </button>
+
+        <div id="addServicesBody" class="add-services-body" hidden>
+          <div class="add-services-search-row">
+            <input id="serviceSearch" type="search" placeholder="Search services, e.g. load balancer, object storage, WAF, Autonomous…" autocomplete="off" aria-label="Search OCI services" />
+          </div>
+          <div id="serviceChips" class="service-chips" role="group" aria-label="Service categories"></div>
+
+          <div class="add-services-columns">
+            <div class="service-results-col">
+              <div id="serviceResults" class="service-results" aria-live="polite"></div>
+            </div>
+            <aside class="service-cart" aria-label="Added services">
+              <div class="service-cart-head">
+                <h4>Added services</h4>
+                <span id="serviceCartCount" class="service-cart-count">0</span>
+              </div>
+              <div id="serviceCartList" class="service-cart-list"></div>
+              <div class="service-cart-foot">
+                <span>Added monthly</span>
+                <strong id="serviceCartTotal">$0.00</strong>
+              </div>
+              <p class="service-cart-note">Added services are included in the totals above and in both BOM exports. Networking / Security / DR / Storage lines land on the matching Pricing Overview row.</p>
+            </aside>
+          </div>
+        </div>
       </section>
 
       <section class="insight-panel result-detail-panel">

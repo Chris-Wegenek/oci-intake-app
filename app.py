@@ -4,6 +4,12 @@ import warnings
 
 warnings.filterwarnings("ignore", message="'cgi' is deprecated.*", category=DeprecationWarning)
 
+# Install any missing dependency BEFORE the third-party imports below. Must come first:
+# pandas/pypdf/Pillow may not exist yet in a fresh or stale virtualenv, and a missing
+# Pillow used to kill the Full BOM export with a cryptic ImportError from inside openpyxl.
+import bootstrap
+bootstrap.ensure()
+
 import cgi
 import json
 import math
@@ -11,6 +17,7 @@ import mimetypes
 import os
 import re
 import time
+import traceback
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -757,20 +764,31 @@ OCI_GEN_RANK = {
 BEST_GEN_RANK = {"amd": 3, "intel": 2, "arm": 3}
 
 
+# Ax shapes deepen the rightsize cut for older source instances: the base trim is
+# multiplied by 2 for each generation behind the first (1 gen = base, 2 gens = base x2,
+# 3 gens = base x4, ...). The regular E6 stays flat regardless of generation gap.
+AX_GEN_MULTIPLIER = 2.0
+
+
 def rightsize_plan(shape_key, src_rec):
     """Return (ocpu_rate, ram_rate, gens_behind) for the gen-gap rightsize, or None.
 
     Only the Ax shapes and the regular E6 are rightsized:
-      - Ax shapes (E6 Ax / X12 Ax / A4 Ax): 15% OCPU and 20% RAM per generation behind.
-      - Regular E6 (non-Ax): 10% OCPU and 15% RAM per generation behind.
+      - Ax shapes (E6 Ax / X12 Ax / A4 Ax): base 15% OCPU / 20% RAM, then multiplied by
+        2 for each generation behind the first (compounding with the source instance's
+        generation gap), capped at 95%.
+      - Regular E6 (non-Ax): flat 10% OCPU and 15% RAM whenever it qualifies (no scaling).
     "Generations behind" is how far the source instance's generation sits below the
     newest OCI generation for the chosen shape's vendor. On-prem / unidentifiable
-    source data is treated as exactly one generation behind."""
+    source data is treated as exactly one generation behind (so Ax scaling is neutral
+    there and only deepens for a bill whose instances are genuinely older)."""
     key = str(shape_key or "")
     if key.endswith("-ax"):
         ocpu_rate, ram_rate = 0.15, 0.20
+        is_ax = True
     elif key == "e6-standard":
         ocpu_rate, ram_rate = 0.10, 0.15
+        is_ax = False
     else:
         return None
     vendor = SHAPE_LOOKUP.get(shape_key, {}).get("processorVendor")
@@ -784,6 +802,11 @@ def rightsize_plan(shape_key, src_rec):
         gens_behind = 1  # on-prem / unknown: assume one generation behind
     if gens_behind <= 0:
         return None
+    # Ax: deepen the cut by x1.5 per generation beyond the first (E6 stays flat).
+    if is_ax and gens_behind > 1:
+        factor = AX_GEN_MULTIPLIER ** (gens_behind - 1)
+        ocpu_rate = min(0.95, ocpu_rate * factor)
+        ram_rate = min(0.95, ram_rate * factor)
     return (ocpu_rate, ram_rate, gens_behind)
 
 STORAGE_RATE_ITEMS = [
@@ -812,6 +835,20 @@ STORAGE_RATE_ITEMS = [
 
 # Block-volume performance units billed per GB of block storage (BOM script uses Balanced = 10).
 BLOCK_PERFORMANCE_UNITS_PER_GB = 10
+
+
+def storage_rate(sku):
+    """The app's authoritative rate for a storage SKU.
+
+    Single source of truth for anything that prices storage — the pricing engine AND the
+    Full BOM export. The exported Rate Card used to carry the source template's own
+    numbers, so a rate change in the app would silently leave the deliverable on the old
+    ones. Everything now reads from here.
+    """
+    for item in STORAGE_RATE_ITEMS:
+        if item["sku"] == sku:
+            return float(item["rate"])
+    raise KeyError(f"No storage rate for SKU {sku}")
 
 # Windows OS licensing (BOM script): charged per OCPU-hour for rows detected as Windows.
 WINDOWS_LICENSE_SKU = "B88318"
@@ -1107,7 +1144,7 @@ def spreadsheet_storage_label(label):
         return False
     if header_is_bare_disk_count(text):
         return False
-    return any(
+    if any(
         term in text
         for term in [
             "storage",
@@ -1120,7 +1157,13 @@ def spreadsheet_storage_label(label):
             "volume size",
             "data size",
         ]
-    )
+    ):
+        return True
+    # Token match so "Disk in GB", "Disk (GB)", "Provisioned Disk GB" all count — a filler
+    # word ("in") shouldn't stop a disk-capacity column from being recognized as storage.
+    tokens = set(text.split())
+    return ("disk" in tokens and ("gb" in tokens or "tb" in tokens or "mb" in tokens)) or (
+        "disk" in tokens and "capacity" in tokens)
 
 
 def ocpu_review_label(label):
@@ -1161,6 +1204,135 @@ def to_gb(value, default=0.0):
     if re.search(r"(?:^|\d|\s)kbs?(?:$|\s)|kilobytes?", text):
         return number / (1024 * 1024)
     return number
+
+
+_NON_STORAGE_HEADER_TERMS = (
+    "uuid", "bios", "serial", "guid", "gateway", "address", "url", "folder",
+    "version", "vendor", "firmware", "domain", "hostname", "mac", "ip ",
+)
+
+
+def plausible_storage_field(fields, key):
+    """True only if `key` really looks like a storage-capacity column. Blocks identifier
+    /metadata columns (SMBios UUID, VM UUID, firmware, ...) from being priced as GB."""
+    if not key:
+        return False
+    field = next((f for f in fields or [] if isinstance(f, dict) and f.get("key") == key), None)
+    if not field:
+        return False
+    text = normalize(" ".join(clean_text(field.get(k)) for k in ("label", "sourceHeader")))
+    if any(term.strip() in text for term in _NON_STORAGE_HEADER_TERMS):
+        return False
+    return bool(re.search(r"storage|disk|capacity|volume|datastore|allocated|size", text))
+
+
+# What the app looks for in an uploaded inventory. Header keywords -> what it unlocks.
+# Needles are matched on WORD BOUNDARIES, not substrings: "Total storage capacity" must not
+# register as a site column just because "capacity" ends in "city".
+_DATA_CHECK_SIGNALS = [
+    ("cpu",         "CPU / cores",        [["vcpu"], ["cpu"], ["core"], ["cores"]]),
+    ("memory",      "Memory",             [["memory"], ["mem"], ["ram"]]),
+    ("storage",     "Storage",            [["storage"], ["disk"], ["capacity"]]),
+    ("os",          "OS family",          [["os", "family"], ["os", "type"], ["operating", "system"],
+                                           ["os", "name"], ["os"]]),
+    ("server",      "Server / VM name",   [["vm", "name"], ["server", "name"], ["machine", "name"],
+                                           ["host", "name"], ["hostname"], ["name"]]),
+    ("environment", "Environment",        [["environment"], ["env"]]),
+    ("tier",        "Tier",               [["tier"]]),
+    ("application", "Application",        [["application"], ["app", "name"], ["app"]]),
+    ("site",        "Site / location",    [["site"], ["location"], ["region"], ["city"],
+                                           ["country"], ["campus"], ["datacenter"], ["data", "center"],
+                                           ["data", "centre"], ["facility"]]),
+]
+
+# Columns whose header matches a signal but which never carry that signal's data.
+_DATA_CHECK_EXCLUDE = {
+    "site": ("capacity", "uuid", "id", "url", "path"),
+    "application": ("details",),   # "Application Details: Memory" is a memory column
+}
+
+
+def _header_has_words(header, needles):
+    """True when every needle appears in `header` as a whole word."""
+    for n in needles:
+        if not re.search(r"(?<![a-z0-9])" + re.escape(n) + r"(?![a-z0-9])", header):
+            return False
+    return True
+
+
+def inventory_data_check(fields, rows):
+    """Pre-flight: what does this upload ACTUALLY contain?
+
+    Counts POPULATED values, not just header presence — an inventory can ship a 'Domain'
+    or 'vCenter URL' column that is 100% empty. Anything not found here is something the
+    app must leave blank rather than invent (tiers, applications, sites...).
+    """
+    total = len(rows or [])
+    found = []
+    for key, label, needle_sets in _DATA_CHECK_SIGNALS:
+        col_key = col_label = ""
+        populated = 0
+        blocked = _DATA_CHECK_EXCLUDE.get(key, ())
+        for needles in needle_sets:
+            for f in fields or []:
+                if not isinstance(f, dict):
+                    continue
+                # Match the ORIGINAL header — the parser renames CPU/memory columns.
+                src = normalize(f.get("cpuSourceLabel") or f.get("memorySourceLabel")
+                                or f.get("sourceHeader") or f.get("label"))
+                if not _header_has_words(src, needles):
+                    continue
+                if any(_header_has_words(src, [b]) for b in blocked):
+                    continue
+                k = f.get("key")
+                n = sum(1 for r in (rows or []) if clean_text(r.get(k)))
+                if n > populated:
+                    col_key, col_label, populated = k, clean_text(f.get("sourceHeader") or f.get("label")), n
+            if populated:
+                break
+        found.append({
+            "key": key, "label": label, "column": col_label,
+            "populated": populated, "total": total,
+            "present": bool(populated),
+        })
+
+    by = {f["key"]: f for f in found}
+    capabilities = {
+        "priceCompute": by["cpu"]["present"] and by["memory"]["present"],
+        "priceStorage": by["storage"]["present"],
+        # Spokes in the architecture diagram segment by tier -> environment -> OS -> application.
+        "segmentBy": next((k for k in ("tier", "environment", "os", "application")
+                           if by[k]["present"]), None),
+        # A site->region topology needs real site data. No site column => no topology.
+        "topology": by["site"]["present"],
+        "tierColumns": by["tier"]["present"],
+        "applicationColumns": by["application"]["present"],
+    }
+    return {"signals": found, "capabilities": capabilities}
+
+
+def header_unit_factor_to_gb(label):
+    """Scale factor to GB implied by a COLUMN HEADER's unit, e.g. 'Memory (MB)' -> 1/1024
+    or 'Storage (TB)' -> 1024. Inventories (RVTools-style) usually put the unit in the
+    header and leave the cells as bare numbers, which to_gb() alone can't see."""
+    text = normalize(label)
+    if re.search(r"(?:^|\s)mb(?:$|\s)|megabyte", text):
+        return 1.0 / 1024.0
+    if re.search(r"(?:^|\s)tb(?:$|\s)|terabyte", text):
+        return 1024.0
+    if re.search(r"(?:^|\s)kb(?:$|\s)|kilobyte", text):
+        return 1.0 / (1024.0 * 1024.0)
+    return 1.0
+
+
+def to_gb_with_header(value, factor=1.0):
+    """to_gb(), but when the CELL carries no unit, fall back to the header's unit."""
+    raw = to_number(value, 0)
+    converted = to_gb(value)
+    # to_gb returns the bare number when the cell had no unit text — apply the header's.
+    if converted == raw and factor != 1.0:
+        return raw * factor
+    return converted
 
 
 def header_has_database_signal(label):
@@ -1726,6 +1898,25 @@ def rule_based_row_has_inventory_signal(row, fields):
     return has_resource or has_environment or has_descriptive_detail
 
 
+# Sheet names that only appear in a finished AWS->OCI comparison / BOM workbook (an OUTPUT),
+# never in a raw cloud bill. Two or more present => it's a comparison, not a bill.
+_COMPARISON_BOM_SHEET_SIGNATURES = (
+    "product breakdown", "service mapping", "facts figures", "service comp list",
+    "product groupings", "ax compute mapping", "obs management",
+)
+
+
+def looks_like_comparison_bom(sheet_names):
+    """True when the workbook's sheets match the signature of a built comparison/BOM output
+    (as opposed to a raw cloud-bill export)."""
+    if not sheet_names:
+        return False
+    norm = [re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip() for s in sheet_names]
+    hits = sum(1 for sig in _COMPARISON_BOM_SHEET_SIGNATURES
+               if any(sig in n for n in norm))
+    return hits >= 2
+
+
 def parse_workbook_rule_based(path, full_service_beta=False):
     excel_file = pd.ExcelFile(path)
     sheet = pick_sheet(excel_file)
@@ -1735,6 +1926,7 @@ def parse_workbook_rule_based(path, full_service_beta=False):
     cpu_field_keys = set()
     memory_field_keys = set()
     storage_field_keys = set()
+    unit_factor = {}  # field key -> GB scale implied by the source header (MB/TB/KB)
     for field in fields:
         if spreadsheet_cpu_label(field["label"]):
             cpu_field_keys.add(field["key"])
@@ -1744,9 +1936,17 @@ def parse_workbook_rule_based(path, full_service_beta=False):
             field["label"] = ocpu_review_label(field["label"])
         elif spreadsheet_memory_label(field["label"]):
             memory_field_keys.add(field["key"])
+            # Honor the header's unit (e.g. "Memory (MB)") before renaming the label.
+            unit_factor[field["key"]] = header_unit_factor_to_gb(field["label"])
+            field["memorySourceLabel"] = field["label"]
             field["label"] = memory_review_label(field["label"])
         elif spreadsheet_storage_label(field["label"]):
             storage_field_keys.add(field["key"])
+            unit_factor[field["key"]] = header_unit_factor_to_gb(field["label"])
+            # Recognized storage sits alongside CPU/memory as a core inventory signal, so
+            # surface it on the review page instead of leaving it as an incidental column.
+            field["important"] = True
+            field["storageSourceLabel"] = field["label"]
 
     rows = []
     for raw_idx in range(data_start, len(raw.index)):
@@ -1759,9 +1959,9 @@ def parse_workbook_rule_based(path, full_service_beta=False):
             if field["key"] in cpu_field_keys and clean_text(value) != "":
                 value = compact_number(to_number(value) / 2)
             elif field["key"] in memory_field_keys and clean_text(value) != "":
-                value = compact_number(to_gb(value))
+                value = compact_number(to_gb_with_header(value, unit_factor.get(field["key"], 1.0)))
             elif field["key"] in storage_field_keys and clean_text(value) != "":
-                value = compact_number(to_gb(value))
+                value = compact_number(to_gb_with_header(value, unit_factor.get(field["key"], 1.0)))
             row[field["key"]] = value
         if rule_based_row_has_inventory_signal(row, fields):
             rows.append(row)
@@ -1903,6 +2103,7 @@ def alias_score(label, field):
     }:
         return 0
     aliases = [field["label"], *field["aliases"]]
+    label_tokens = set(label_norm.split())
     score = 0
     for alias in aliases:
         alias_norm = normalize(alias)
@@ -1914,6 +2115,14 @@ def alias_score(label, field):
             score = max(score, 60 + len(alias_norm))
         elif label_norm in alias_norm and len(label_norm) >= 4:
             score = max(score, 30 + len(label_norm))
+        else:
+            # Token-subset match: every word of a multi-word alias is present in the
+            # header, in any order and with filler words between — so "disk gb" matches
+            # "Disk in GB", "storage gb" matches "Storage (GB)". Guards against single-token
+            # aliases (too loose) and against the alias being just one word.
+            alias_tokens = alias_norm.split()
+            if len(alias_tokens) >= 2 and set(alias_tokens) <= label_tokens:
+                score = max(score, 55 + len(alias_norm))
 
     is_database = any(term in label_norm for term in ["database", "db ", " db", "sql", "oracle db"])
     field_is_database = field["key"].startswith("database_details")
@@ -3842,6 +4051,90 @@ def _is_transfer_family_row(row):
 
 def is_networking_service_row(row):
     return _is_elb_row(row) or _is_direct_connect_row(row) or _is_transfer_family_row(row)
+
+
+# ---------------------------------------------------------------------------
+# AWS messaging + managed file transfer -> Oracle Integration Cloud (OIC).
+# AWS SQS (Simple Queue Service), SNS (Simple Notification Service) and Transfer
+# Family consolidate onto a single Oracle Integration Cloud instance. OIC bills per
+# "message pack" (5,000 messages/hour) per hour: SKU B89639, $0.6452/pack-hour,
+# 744 hrs/month. The whole workload is sized at 1 message pack, so the pack is
+# charged ONCE across all these rows (one anchor line carries the cost; every other
+# OIC row is consolidated at $0 so nothing is double-counted). Transfer Family keeps
+# the SFTPGo-on-Compute mapping described in its note as an alternate option.
+# ---------------------------------------------------------------------------
+OCI_OIC_PRODUCT = "Oracle Integration Cloud"
+OCI_OIC_SKU = "B89639"
+OCI_OIC_PACK_RATE = 0.6452       # $ per message pack (5K msg/hr) per hour
+OCI_OIC_PACK_HOURS = 744         # hours/month used for OIC message-pack billing
+OCI_OIC_MESSAGE_PACKS = 1        # workload sized at 1 message pack (per requirement)
+
+
+def _is_sqs_row(row):
+    code = _bill_source_code(row)
+    return "awsqueueservice" in code or "simplequeueservice" in code
+
+
+def _is_sns_row(row):
+    code = _bill_source_code(row)
+    return "amazonsns" in code or "simplenotificationservice" in code
+
+
+def _is_oic_row(row):
+    """SQS / SNS / Transfer Family -> consolidated onto Oracle Integration Cloud."""
+    return _is_sqs_row(row) or _is_sns_row(row) or _is_transfer_family_row(row)
+
+
+def collect_oic_anchor_row(rows):
+    """The single row that carries the one Oracle Integration Cloud message-pack
+    charge (highest source cost among the OIC-eligible rows; ties -> first)."""
+    best_id, best_cost = None, None
+    for r in rows:
+        if not _is_oic_row(r):
+            continue
+        c = to_number(r.get("source_monthly_cost"), 0)
+        if best_id is None or c > best_cost:
+            best_id, best_cost = r.get("__id"), c
+    return best_id
+
+
+def price_oic_row(row, oic_anchor_row_id=None, packs=None):
+    """Map an SQS / SNS / Transfer Family row to Oracle Integration Cloud. The whole
+    workload is sized at `packs` message pack(s) (defaults to OCI_OIC_MESSAGE_PACKS,
+    user-editable); the anchor row carries that single charge and every other OIC row
+    is consolidated at $0.
+    Returns (line_items, oci_product_label, oci_category, sku, carried)."""
+    packs = packs if (packs and packs > 0) else OCI_OIC_MESSAGE_PACKS
+    alt = ("  Alternate mapping (also shown in the app): re-host SFTP as SFTPGo on OCI "
+           "Compute (Ampere ~$0.022/VM-hour) writing to Object Storage via the "
+           "S3-compatible API." if _is_transfer_family_row(row) else "")
+    if row.get("__id") == oic_anchor_row_id:
+        monthly = packs * OCI_OIC_PACK_RATE * OCI_OIC_PACK_HOURS
+        _pk = int(packs) if float(packs).is_integer() else packs
+        mapping = (f"AWS SQS + SNS messaging and Transfer Family consolidated onto "
+                   f"Oracle Integration Cloud - Standard: {_pk} message "
+                   f"pack(s) (5K messages/hour) x {OCI_OIC_PACK_HOURS} hrs x "
+                   f"${OCI_OIC_PACK_RATE}/pack-hour (SKU {OCI_OIC_SKU})." + alt)
+        return ([{
+            "sku": OCI_OIC_SKU,
+            "description": "Oracle Integration Cloud Service - Standard (5K msg/hr message pack)",
+            "quantity": _pk,
+            "unit": f"message pack x {OCI_OIC_PACK_HOURS} hrs",
+            "rate": OCI_OIC_PACK_RATE,
+            "monthly": money(monthly),
+            "mapping": mapping,
+        }], OCI_OIC_PRODUCT, "Application Integration", OCI_OIC_SKU, False)
+    # non-anchor OIC rows -> consolidated into the single message pack (no extra cost)
+    return ([{
+        "sku": OCI_OIC_SKU,
+        "description": "Consolidated into Oracle Integration Cloud message pack",
+        "quantity": 0,
+        "unit": "",
+        "rate": 0,
+        "monthly": 0.0,
+        "mapping": ("Consolidated into the single Oracle Integration Cloud message pack "
+                    "(counted once on the anchor line)." + alt),
+    }], OCI_OIC_PRODUCT, "Application Integration", OCI_OIC_SKU, False)
 
 
 # ---- Amazon Redshift -> Oracle Autonomous Data Warehouse (ADW) ----
@@ -6218,7 +6511,7 @@ def detect_cpu_unit(fields):
     return "vcpu"
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto"):
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto", hours_override=False, oic_message_packs=None):
     # cpu_unit override (on-prem uploads): the parser normalizes the source CPU column
     # to OCPUs assuming it holds vCPUs (2 vCPU = 1 OCPU). 'auto' (default) detects the
     # unit from the column header and falls back to vCPU; 'ocpu' uses the source count
@@ -6230,17 +6523,25 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     cpu_ocpu_mult = 2.0 if cpu_unit_resolved == "ocpu" else 1.0
     eff_hours = hours_per_month if (hours_per_month and hours_per_month > 0) else HOURS_PER_MONTH
     def _apply_rightsize(ocpu_value, mem_value, plan):
-        # Generation-gap rightsize: reduce OCPUs and RAM by a per-generation percentage
-        # (set by rightsize_plan), rounding down. Never zero out a non-empty value.
+        # Compute optimization: shrink OCPUs and RAM by a percentage, but only when the
+        # reduction actually crosses to a lower whole number — new = ceil(value*(1-pct)).
+        # e.g. 4 GB at 20% -> ceil(3.2) = 4 (no change); at 25% -> ceil(3.0) = 3. Values are
+        # never reduced below 2, and anything already <= 2 is left alone. Applied to all
+        # compute; only the Ax shapes and the regular E6 get a plan (others: unchanged).
         if not rightsize or not plan:
             return ocpu_value, mem_value
-        ocpu_rate, ram_rate, gens = plan
-        o, m = ocpu_value, mem_value
-        if ocpu_value:
-            o = math.floor(ocpu_value * max(0.0, 1 - ocpu_rate * gens)) or 1
-        if mem_value:
-            m = math.floor(mem_value * max(0.0, 1 - ram_rate * gens)) or 1
-        return o, m
+        # Flat rate per shape (Ax 15%/20%, E6 10%/15%) — NOT compounded by how many
+        # generations the source instance is behind. The Compute sheet shows this exact
+        # band as the "% approximation", so the reduction must match what's displayed.
+        ocpu_rate, ram_rate, _gens = plan
+
+        def opt(v, rate):
+            if not v or v <= 2:
+                return v
+            pct = min(0.95, max(0.0, rate))
+            return max(2, math.ceil(v * (1 - pct)))
+
+        return opt(ocpu_value, ocpu_rate), opt(mem_value, ram_rate)
     cloud_bill_mode = intake_mode == INTAKE_MODE_CLOUD_BILL
     service_catalog_enabled = bool(full_service_beta or cloud_bill_mode)
     selected_shape = shape_payload(shape_key, service_catalog_enabled)
@@ -6259,14 +6560,26 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "Application Details",
         )
         or find_key_any(fields, [["memory per server"], ["memory"], ["ram"], ["memory gb"], ["ram gb"]]),
-        "app_local_storage": find_key_any(
+        # Needle sets are AND-ed tokens, so ["disk", "gb"] matches "Disk in GB", "Disk (GB)",
+        # "Disk GB" — a literal "disk gb" would miss any of those with a word in between.
+        # Every set is anchored to a STORAGE word (storage/disk/provisioned). RAM is also in
+        # GB, so a bare capacity+gb (or gb alone) would wrongly grab a "Memory (GB)" /
+        # "RAM Capacity (GB)" column — never match on "gb" without a storage word.
+        "app_local_storage": (find_key_any(
             fields,
-            [["local storage"], ["total storage"], ["allocated storage"], ["storage gb"], ["disk gb"], ["disk size"], ["disk capacity"]],
+            [["local storage"], ["total storage"], ["allocated storage"], ["storage", "gb"],
+             ["disk", "gb"], ["disk", "size"], ["disk", "capacity"], ["provisioned", "storage"],
+             ["provisioned", "disk"]],
             "Application Details",
         )
-        or find_key_any(fields, [["local storage"], ["total storage"], ["allocated storage"], ["storage gb"], ["disk gb"], ["disk size"], ["disk capacity"]]),
-        "app_shared_storage": find_key_any(fields, [["shared storage"], ["file storage"], ["nas"], ["nfs"], ["smb"]], "Application Details")
-        or find_key_any(fields, [["shared storage"], ["file storage"], ["nas"], ["nfs"], ["smb"]]),
+        or find_key_any(fields, [["local storage"], ["total storage"], ["allocated storage"],
+                                 ["storage", "gb"], ["disk", "gb"], ["disk", "size"],
+                                 ["disk", "capacity"], ["provisioned", "storage"],
+                                 ["provisioned", "disk"]])),
+        # NOTE: needles must be specific — a bare "smb" matched "SMBios UUID" and the
+        # UUID's digits were priced as file storage. Keep these anchored to storage words.
+        "app_shared_storage": find_key_any(fields, [["shared storage"], ["file storage"], ["nas storage"], ["nfs"], ["smb share"], ["cifs"]], "Application Details")
+        or find_key_any(fields, [["shared storage"], ["file storage"], ["nas storage"], ["nfs"], ["smb share"], ["cifs"]]),
         "db_servers": find_key(fields, ["number of database servers"], "Database Details"),
         "db_cpu": find_key_any(
             fields,
@@ -6292,6 +6605,12 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             [["aws region"], ["region"], ["location"], ["datacenter"], ["data center"], ["availability domain"], ["availability zone"]],
         ),
     }
+    # Guard: never price an identifier/metadata column as storage. (A bare "smb" needle
+    # once matched "SMBios UUID" and the UUID's digits were billed as file storage.)
+    for _sk in ("app_local_storage", "app_shared_storage", "db_total_allocated",
+                "db_total_storage", "db_size"):
+        if keys.get(_sk) and not plausible_storage_field(fields, keys[_sk]):
+            keys[_sk] = None
     data_has = {"region": False, "environment": False, "hours": bool(keys.get("hours"))}
 
     priced_rows = []
@@ -6359,6 +6678,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     rds_sql_server_instances = collect_sql_server_rds_instances(rows) if cloud_bill_mode else set()
     elb_free_tier_row_id = collect_elb_free_tier_row(rows) if cloud_bill_mode else None
     redshift_compute_ctx = collect_redshift_compute(rows) if cloud_bill_mode else None
+    # The single row that carries the one Oracle Integration Cloud message-pack charge.
+    oic_anchor_row_id = collect_oic_anchor_row(rows) if cloud_bill_mode else None
 
     for row_index, row in enumerate(rows, start=1):
         if row.get("__approved") is False:
@@ -6451,7 +6772,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         # Per-server running hours: use an "hours running"/"hours per month" column if present,
         # otherwise the global hours setting (default 730).
-        row_hours = value_for(row, keys["hours"]) if keys.get("hours") else 0
+        # Hours come from the data source per row (an "Hours/month" column) UNLESS the user
+        # overrode the global hours field — then the override wins for every row.
+        row_hours = value_for(row, keys["hours"]) if (keys.get("hours") and not hours_override) else 0
         row_hours = row_hours if row_hours and row_hours > 0 else eff_hours
 
         local_storage_multiplier = 1.0 if storage_field_is_row_total(fields, keys["app_local_storage"]) else app_servers
@@ -6578,8 +6901,38 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # generic storage/catalog fallback) so each ELB / Direct Connect / Transfer
         # Family line is priced once on its own usage and never relabeled as Storage
         # or Outbound Data Transfer.
+        # AWS SQS / SNS / Transfer Family -> Oracle Integration Cloud. Runs before the
+        # networking handler so Transfer Family maps to OIC (not the SFTPGo default),
+        # while the SFTPGo option is still described in the OIC mapping note. The whole
+        # workload is one message pack, charged once on the anchor row.
+        oic_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and _is_oic_row(row):
+            oic_items, oic_label, oic_cat, oic_sku, oic_carried = price_oic_row(row, oic_anchor_row_id, oic_message_packs)
+            line_items.extend(oic_items)
+            row["oci_product"] = oic_label
+            row["oci_service_category"] = oic_cat
+            _oic_src = to_number(row.get("source_monthly_cost"), 0)
+            full_service_mapping = {
+                "sku": oic_sku,
+                "ociProduct": oic_label,
+                "sourceProvider": clean_text(row.get("source_provider")),
+                "sourceService": clean_text(row.get("source_service")),
+                "sourceProduct": clean_text(row.get("source_product")),
+                "sourceMonthlyCost": money(_oic_src),
+                "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                "unit": clean_text(row.get("usage_unit")) or (oic_items[0].get("unit") if oic_items else ""),
+                "confidence": 0.9,
+                "reviewRequired": False,
+            }
+            totals["sourceMonthlyCost"] += _oic_src
+            totals["mappedSourceMonthlyCost"] += _oic_src
+            totals["mappedServiceRows"] += 1
+            totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in oic_items)
+            oic_handled = True
+
         networking_handled = False
-        if cloud_bill_mode and not row_free_on_oci and not rds_handled:
+        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not oic_handled:
             net_result = price_networking_row(row, elb_free_tier_row_id)
             if net_result is not None:
                 net_items, net_label, net_category, net_sku, net_carried = net_result
@@ -6705,8 +7058,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # product at its real rate (S3->Object Storage, EFS/FSx->File Storage,
         # EBS->Block Volume), priced on the actual storage-capacity quantity from the
         # bill — not scattered across catalog items per line.
-        storage_handled = rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled
-        if cloud_bill_mode and not row_free_on_oci and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled:
+        storage_handled = oic_handled or rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled
+        if cloud_bill_mode and not row_free_on_oci and not oic_handled and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled:
             ut2 = normalize(row.get("__usageType"))
             base = clean_text(row.get("oci_product")).split(" (approx")[0].strip()
             # EBS volumes/snapshots bill under EC2 — route them to Block Volume.
@@ -6826,6 +7179,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             price = gpu_info.get("pricePerGpuHour")
             count = gpu_info.get("gpuCount") or 0
             gpu_desc = f"GPU - {gpu_info.get('gpuModel')} ({gpu_info['shape']})"
+            # GPU compute rolls up under AI & Machine Learning, not Compute.
+            row["oci_service_category"] = "AI & Machine Learning"
+            row["oci_product"] = gpu_desc
             if price and count and not hide_gpu_pricing:
                 qty = count * GPU_HOURS_PER_MONTH
                 line_items.append({
@@ -7496,6 +7852,18 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/catalog":
+            # Searchable OCI service catalog for the "Add OCI services" panel.
+            from urllib.parse import parse_qs
+            qs = parse_qs(parsed.query)
+            q = (qs.get("q") or [""])[0]
+            group = (qs.get("group") or [""])[0]
+            import oci_catalog
+            self.send_json(200, {
+                "groups": oci_catalog.groups_with_counts(),
+                "results": oci_catalog.search(q, group),
+            })
+            return
         if path == "/":
             self.serve_file(STATIC_DIR / "index.html")
             return
@@ -7517,6 +7885,10 @@ class IntakeHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(content)))
+        # Never let the browser cache the app shell. Without this, a hard-refresh is the
+        # only way to pick up a change to app.js/styles.css, and you end up debugging a
+        # stale copy of the frontend against a fresh backend.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(content)
 
@@ -7533,6 +7905,9 @@ class IntakeHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/export":
             self.handle_export()
+            return
+        if parsed.path == "/api/diagram":
+            self.handle_diagram()
             return
         if parsed.path == "/api/load-workflow":
             self.handle_load_workflow()
@@ -7657,6 +8032,23 @@ class IntakeHandler(BaseHTTPRequestHandler):
             parsed = parse_workbook(saved_path, full_service_beta, intake_mode, effective_hint)
             parsed["fileName"] = filename
             parsed["uploadedPath"] = str(saved_path)
+            # Warn when an already-built comparison/BOM workbook is dropped into cloud-bill
+            # mode — its numbers are outputs, not a raw bill, so parsing them produces
+            # garbage. Point the user at the "Convert an alternate OCI BOM" flow instead.
+            if intake_mode == INTAKE_MODE_CLOUD_BILL and looks_like_comparison_bom(parsed.get("sheets")):
+                parsed["comparisonBomWarning"] = (
+                    "This looks like an already-built cost-comparison / BOM workbook, not a "
+                    "raw cloud bill. Cloud-bill mode expects a raw AWS/Azure/GCP cost export; "
+                    "parsing a finished comparison produces wrong totals. Use “Convert an "
+                    "alternate OCI BOM” for this file, or upload the original raw bill."
+                )
+            # Quick pre-flight on every upload: what does this file actually contain?
+            # Drives what the app will build vs. leave blank (never fabricate).
+            if intake_mode != INTAKE_MODE_CLOUD_BILL:
+                try:
+                    parsed["dataCheck"] = inventory_data_check(parsed.get("fields"), parsed.get("rows"))
+                except Exception:
+                    parsed["dataCheck"] = None
             meta = parsed.get("metadata")
             if isinstance(meta, dict):
                 meta["filenameGuess"] = filename_guess
@@ -7698,7 +8090,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None)
             pricing["bomMatch"] = bom_match
             pricing["hideGpuPricing"] = hide_gpu_pricing
             pricing["hideWindowsPricing"] = hide_windows_pricing
@@ -7712,6 +8104,70 @@ class IntakeHandler(BaseHTTPRequestHandler):
             self.send_json(200, pricing)
         except Exception as exc:
             self.send_error_json(500, f"Could not price inventory: {exc}")
+
+    def handle_diagram(self):
+        """Build ONLY the architecture diagram from the current pricing and return a zip
+        with the generated .png and editable .drawio — no workbook."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            fields = payload.get("fields", [])
+            rows = payload.get("rows", [])
+            shape_key = payload.get("shape") or DEFAULT_SHAPE_KEY
+            intake_mode = normalize_intake_mode(payload.get("intakeMode"))
+            if shape_key not in SHAPE_LOOKUP:
+                shape_key = DEFAULT_SHAPE_KEY
+            if not fields or not rows:
+                self.send_error_json(400, "Diagram needs fields and rows.")
+                return
+            full_service_beta = bool(payload.get("fullServiceBeta")) or intake_mode == INTAKE_MODE_CLOUD_BILL
+            rightsize = bool(payload.get("rightsize"))
+            auto = bool(payload.get("auto"))
+            hours_per_month = to_number(payload.get("hoursPerMonth"), 0) or None
+            source_provider = normalize_provider_hint(payload.get("providerHint"))
+            auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
+            shape_overrides = payload.get("shapeOverrides") if isinstance(payload.get("shapeOverrides"), dict) else {}
+            cost_overrides = payload.get("costOverrides") if isinstance(payload.get("costOverrides"), dict) else {}
+            cpu_unit = str(payload.get("cpuUnit", "auto")).lower()
+            if cpu_unit not in ("auto", "vcpu", "ocpu"):
+                cpu_unit = "auto"
+            bom_name = clean_text(payload.get("bomName"))
+
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, False,
+                                        bool(payload.get("hideGpuPricing")), bool(payload.get("hideWindowsPricing")),
+                                        rightsize, auto, hours_per_month, source_provider, auto_tier,
+                                        shape_overrides, cost_overrides, cpu_unit,
+                                        hours_override=bool(payload.get("hoursOverride")))
+
+            import bom_diagram, bom_template, tempfile, zipfile, io
+            keys = bom_template._resolve_inventory_keys(fields)
+            shp = shape_payload(shape_key)
+            out_dir = tempfile.mkdtemp(prefix="ocidiag_")
+            drawio, png = bom_diagram.build_architecture(
+                pricing, rows, keys, bom_name,
+                shp.get("shortLabel") or shp.get("label") or "",
+                out_dir=out_dir, sites=bom_template._distinct_sites(fields, rows))
+            if not drawio and not png:
+                self.send_error_json(500, "Could not build the architecture diagram (no workloads found).")
+                return
+
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") or "OCI"
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                if png and Path(png).exists():
+                    z.writestr(f"{safe}_architecture.png", Path(png).read_bytes())
+                if drawio and Path(drawio).exists():
+                    z.writestr(f"{safe}_architecture.drawio", Path(drawio).read_bytes())
+            data = buf.getvalue()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{safe}_architecture.zip"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as exc:
+            traceback.print_exc()
+            self.send_error_json(500, f"Could not build diagram: {type(exc).__name__}: {exc}")
 
     def handle_export(self):
         try:
@@ -7753,7 +8209,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             # has no on-prem fields, so this must run before the fields/shape checks).
             if payload.get("converted"):
                 conv = payload.get("convertedPricing") or {"rows": rows, "totals": {}}
-                content = bom_export.build_cloud_comparison_bytes(conv, payload.get("ramp"), bom_name, oci_discount, workflow_json)
+                content = bom_export.build_cloud_comparison_bytes(conv, payload.get("ramp"), bom_name, oci_discount, workflow_json, extra_services=payload.get("extraServices") or [], hours=hours_per_month or HOURS_PER_MONTH)
                 safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
                 download_name = f"{safe_name}.xlsx" if safe_name else "OCI_BOM_Converted.xlsx"
                 self.send_response(200)
@@ -7770,12 +8226,57 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Export requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None)
+
+            # "Full BOM": the 12-sheet customer-facing deliverable (Table of Contents,
+            # Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR,
+            # Security KMS, Consumption Ramp, Annexure, Applications Migrated to OCI).
+            if str(payload.get("template", "quick")).lower() == "full":
+                import bom_template
+                # Cloud-bill Full BOM: the 12-sheet deliverable PLUS the AWS->OCI bill sheets
+                # appended, so all service data and mappings come along.
+                cloud_comparison = None
+                if intake_mode == INTAKE_MODE_CLOUD_BILL:
+                    cloud_comparison = {
+                        "pricing": pricing,
+                        "ramp": payload.get("ramp"),
+                        "ociDiscount": oci_discount,
+                        "extraServices": payload.get("extraServices") or [],
+                        "hours": hours_per_month or HOURS_PER_MONTH,
+                    }
+                # Every rate the workbook prices with comes from the app's own catalog —
+                # never from the numbers the source template happened to ship with. If a
+                # SKU rate changes in app.py, the exported Rate Card changes with it.
+                content = bom_template.build_full_bom_bytes(
+                    pricing, rows, fields, payload.get("ramp"), bom_name,
+                    shape_payload(shape_key), hours_per_month or HOURS_PER_MONTH,
+                    block_rate=storage_rate("B91961"),
+                    vpu_rate=storage_rate("B91962"),
+                    default_vpus=BLOCK_PERFORMANCE_UNITS_PER_GB,
+                    file_rate=storage_rate("B89057"),
+                    windows_rate=WINDOWS_LICENSE_RATE,
+                    windows_sku=WINDOWS_LICENSE_SKU,
+                    # Services added from the "Add OCI services" panel.
+                    extra_services=payload.get("extraServices") or [],
+                    # Optimization mirrors the app: Rightsize already trimmed the OCPU/RAM
+                    # quantities we export, so the template takes no extra OCPU discount.
+                    optimization=0.0,
+                    cloud_comparison=cloud_comparison,
+                )
+                safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
+                download_name = f"{safe_name}_Full_BOM.xlsx" if safe_name else "OCI_Full_BOM.xlsx"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
 
             # Cloud bill mode exports the AWS->OCI comparison workbook (reference style),
             # not the on-prem BOM-script workbook.
             if intake_mode == INTAKE_MODE_CLOUD_BILL:
-                content = bom_export.build_cloud_comparison_bytes(pricing, payload.get("ramp"), bom_name, oci_discount, workflow_json)
+                content = bom_export.build_cloud_comparison_bytes(pricing, payload.get("ramp"), bom_name, oci_discount, workflow_json, extra_services=payload.get("extraServices") or [], hours=hours_per_month or HOURS_PER_MONTH)
                 safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
                 download_name = f"{safe_name}.xlsx" if safe_name else "OCI_Cloud_Bill_Comparison.xlsx"
                 self.send_response(200)
@@ -7807,7 +8308,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 if annual:
                     existing_infra_cost = annual
                     existing_label = f"Existing {'AWS' if source_cloud == 'aws' else 'Azure'} Cost:"
-            content = bom_export.build_workbook_bytes(servers, ramp, existing_infra_cost, shape_for_export, hide_windows_pricing, eff_hours, bom_name, auto, existing_label, oci_discount)
+            content = bom_export.build_workbook_bytes(servers, ramp, existing_infra_cost, shape_for_export, hide_windows_pricing, eff_hours, bom_name, auto, existing_label, oci_discount, extra_services=payload.get("extraServices") or [])
             safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
             download_name = f"{safe_name}.xlsx" if safe_name else "OCI_BOM_Export.xlsx"
             self.send_response(200)
@@ -7820,7 +8321,10 @@ class IntakeHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
         except Exception as exc:
-            self.send_error_json(500, f"Could not export workbook: {exc}")
+            # Print the traceback. A bare message here made export failures undebuggable —
+            # the browser just saw "Could not export workbook" with no idea why.
+            traceback.print_exc()
+            self.send_error_json(500, f"Could not export workbook: {type(exc).__name__}: {exc}")
 
     def handle_table_edit(self):
         try:

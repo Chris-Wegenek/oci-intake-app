@@ -20,8 +20,16 @@ const state = {
   auto: false,
   cpuUnit: "auto",
   hoursPerMonth: 730,
+  // True once the user edits the hours field — then it overrides any per-row hours from
+  // the data source. Off by default so the data source's own hours are used.
+  hoursOverride: false,
   bomName: "",
   ociDiscount: 0,
+  oicMessagePacks: 1,
+  // Services the user added from the "Add OCI services" panel. Each: {id, catalogId, name,
+  // group, sku, unit, basis, values, monthly}. Included in totals and both BOM exports.
+  extraServices: [],
+  catalog: { groups: [], results: [], group: "", query: "", groupsOpen: {} },
   autoTier: "best",
   shapeOverrides: {},
   costOverrides: {},
@@ -196,6 +204,8 @@ const els = {
   cpuUnitRow: document.getElementById("cpuUnitRow"),
   hoursPerMonth: document.querySelector("#hoursPerMonth"),
   exportExcel: document.querySelector("#exportExcel"),
+  exportFullBom: document.querySelector("#exportFullBom"),
+  downloadDiagram: document.querySelector("#downloadDiagram"),
   exportJson: document.querySelector("#exportJson"),
   loadWorkflow: document.querySelector("#loadWorkflow"),
   loadWorkflowFile: document.querySelector("#loadWorkflowFile"),
@@ -206,7 +216,17 @@ const els = {
   convertBomStatus: document.querySelector("#convertBomStatus"),
   bomName: document.querySelector("#bomName"),
   ociDiscount: document.querySelector("#ociDiscount"),
+  oicMessagePacks: document.querySelector("#oicMessagePacks"),
+  oicMessagePacksControl: document.querySelector("#oicMessagePacksControl"),
   crossCloudTile: document.querySelector("#crossCloudTile"),
+  addServicesToggle: document.querySelector("#addServicesToggle"),
+  addServicesBody: document.querySelector("#addServicesBody"),
+  serviceSearch: document.querySelector("#serviceSearch"),
+  serviceChips: document.querySelector("#serviceChips"),
+  serviceResults: document.querySelector("#serviceResults"),
+  serviceCartList: document.querySelector("#serviceCartList"),
+  serviceCartCount: document.querySelector("#serviceCartCount"),
+  serviceCartTotal: document.querySelector("#serviceCartTotal"),
   crossCloudResults: document.querySelector("#crossCloudResults"),
   selectedDocTile: document.querySelector("#selectedDocTile"),
   selectedDocName: document.querySelector("#selectedDocName"),
@@ -270,6 +290,24 @@ const els = {
   bulkClear: document.querySelector("#bulkClear"),
   steps: document.querySelectorAll(".step"),
 };
+
+// "Add OCI services to the BOM" expand/collapse. Delegated on document and re-querying
+// the nodes on every click, so it works regardless of load order or any later re-render
+// (a stale node reference or an init error further down can't break it).
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("#addServicesToggle");
+  if (!toggle) return;
+  const body = document.querySelector("#addServicesBody");
+  if (!body) return;
+  const willOpen = body.hasAttribute("hidden");
+  body.toggleAttribute("hidden", !willOpen);
+  toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  toggle.classList.toggle("is-open", willOpen);
+  if (willOpen && typeof fetchCatalog === "function"
+      && !(state.catalog && state.catalog.groups && state.catalog.groups.length)) {
+    fetchCatalog();
+  }
+});
 
 function rowSourceName(row) {
   return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
@@ -707,6 +745,8 @@ function syncModeUi() {
   els.modeOnPrem?.classList.toggle("is-selected", !cloudBill);
   els.modeCloudBill?.classList.toggle("is-selected", cloudBill);
   els.providerControl?.classList.toggle("is-hidden", !cloudBill);
+  // OIC message packs only apply in cloud-bill mode (SQS/SNS/Transfer Family mapping).
+  els.oicMessagePacksControl?.classList.toggle("is-hidden", !cloudBill);
   if (els.providerHint) {
     els.providerHint.value = state.providerHint;
   }
@@ -879,6 +919,8 @@ function renderShapeDetail() {
       </table>
     `;
   }
+  // Enable/disable Rightsize based on whether the selected shape supports it.
+  if (typeof syncRightsizeAvailability === "function") syncRightsizeAvailability();
 }
 
 function renderStats(meta = {}) {
@@ -926,6 +968,57 @@ function updateCpuUnitHint() {
   } else {
     els.cpuUnitDetected.hidden = true;
   }
+}
+
+// Pre-flight data check. Runs on every upload: says exactly which inputs the file carries
+// and, for the ones it doesn't, what the app will therefore leave blank. Nothing downstream
+// (BOM sheets, architecture diagram, topology) is allowed to invent what isn't here.
+const DATA_CHECK_CONSEQUENCE = {
+  cpu: "no compute can be priced",
+  memory: "no compute can be priced",
+  storage: "block storage is left out of the BOM",
+  os: "no OS split and no Windows licensing line",
+  server: "Compute sheet rows will be unnamed",
+  environment: "the Environment column stays blank",
+  tier: "the Tier column stays blank; spokes can't be split by tier",
+  application: "the Applications sheet and Master Application column stay empty",
+  site: "no site-to-region topology diagram is drawn",
+};
+
+function renderDataCheck(check) {
+  const panel = document.getElementById("dataCheck");
+  const list = document.getElementById("dataCheckList");
+  const note = document.getElementById("dataCheckNote");
+  if (!panel || !list) return;
+  if (!check || !Array.isArray(check.signals) || !check.signals.length) {
+    panel.hidden = true;
+    return;
+  }
+  list.innerHTML = "";
+  check.signals.forEach((s) => {
+    const li = document.createElement("li");
+    li.className = s.present ? "dc-ok" : "dc-missing";
+    const detail = s.present
+      ? `${s.column} — ${formatNumber(s.populated)} of ${formatNumber(s.total)} rows`
+      : `not in this file — ${DATA_CHECK_CONSEQUENCE[s.key] || "left blank"}`;
+    li.innerHTML =
+      `<span class="dc-mark" aria-hidden="true">${s.present ? "✓" : "—"}</span>` +
+      `<span class="dc-label">${escapeHtml(s.label)}</span>` +
+      `<span class="dc-detail">${escapeHtml(detail)}</span>`;
+    list.appendChild(li);
+  });
+  const missing = check.signals.filter((s) => !s.present).map((s) => s.label);
+  const caps = check.capabilities || {};
+  const bits = [];
+  if (!caps.priceCompute) bits.push("Compute can't be priced without both a CPU and a memory column.");
+  if (caps.segmentBy) {
+    const by = { tier: "Tier", environment: "Environment", os: "OS family", application: "Application" }[caps.segmentBy];
+    bits.push(`Architecture spokes will be split by ${by}.`);
+  }
+  if (missing.length) bits.push(`Missing: ${missing.join(", ")}. Those stay blank.`);
+  note.textContent = bits.join(" ");
+  note.hidden = !bits.length;
+  panel.hidden = false;
 }
 
 function renderTable() {
@@ -1228,6 +1321,14 @@ async function uploadFile(file) {
       : "On-prem inventory";
     showSelectedDoc(payload.fileName, `${formatNumber(payload.rows.length)} rows · ${docModeLabel}`);
     if (els.inventoryNotice) els.inventoryNotice.hidden = !payload.metadata?.inventorySuspected;
+    // Warn if a finished comparison/BOM workbook was dropped into cloud-bill mode.
+    const cmpNotice = document.getElementById("comparisonBomNotice");
+    if (cmpNotice) {
+      const msg = payload.comparisonBomWarning;
+      const txt = document.getElementById("comparisonBomNoticeText");
+      if (msg && txt) txt.textContent = msg;
+      cmpNotice.hidden = !msg;
+    }
     // Reflect the detected/guessed provider in the toggle so the user sees the guess
     // and can override it. (Only when they hadn't already forced a provider.)
     if (state.intakeMode === "cloud_bill" && state.providerHint === "auto") {
@@ -1261,6 +1362,7 @@ async function uploadFile(file) {
     els.sheetMeta.textContent = payload.fileName;
     els.sheetMeta.title = `Sheet "${payload.sheetName}" • ${parserLabel}${modeLabel}${grain} • data begins on row ${payload.metadata.dataStartRow}`;
     els.sheetName.textContent = payload.sheetName;
+    renderDataCheck(payload.dataCheck);
     renderRateCard();
     renderProcessorPicker();
     renderShapeChoices();
@@ -1330,6 +1432,7 @@ function initializeManualReviewTable() {
   els.sheetMeta.textContent = "Manual entry";
   els.sheetMeta.title = "Blank table for manual entry.";
   els.sheetName.textContent = "Manual entry";
+  renderDataCheck(null);
   renderRateCard();
   renderProcessorPicker();
   renderShapeChoices();
@@ -1503,6 +1606,8 @@ async function priceRows({ keepView = false } = {}) {
           shapeOverrides: state.shapeOverrides,
           costOverrides: state.costOverrides,
           hoursPerMonth: state.hoursPerMonth,
+          hoursOverride: state.hoursOverride,
+          oicMessagePacks: state.oicMessagePacks,
         }),
       },
       70000,
@@ -1537,13 +1642,49 @@ async function priceRows({ keepView = false } = {}) {
   }
 }
 
-async function exportToExcel() {
-  if (!state.pricing) return;
-  const button = els.exportExcel;
-  const original = button.textContent;
+// The Full BOM takes a few seconds (12 sheets + the architecture diagram), so the overlay
+// walks through what it's doing rather than sitting on one frozen line — otherwise a slow
+// build is indistinguishable from a dead button.
+const FULL_BOM_STAGES = [
+  "Pricing every server against the OCI rate card…",
+  "Building Compute, Storage and Applications sheets…",
+  "Rendering the OCI architecture diagram…",
+  "Laying out the Pricing Overview and Consumption Ramp…",
+  "Finishing the workbook — almost there…",
+];
+
+async function exportToExcel(template = "quick") {
+  const isFull = template === "full";
+  const button = isFull ? els.exportFullBom : els.exportExcel;
+  const original = button ? button.textContent : "";
   const overlay = document.querySelector("#exportOverlay");
-  button.disabled = true;
-  button.textContent = "Exporting...";
+  const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
+
+  // Don't fail silently. Without pricing there is nothing to export, and a dead-looking
+  // button is worse than a message saying why.
+  if (!state.pricing) {
+    els.engineStatus.textContent =
+      "Nothing to export yet — run \"Reprice estimate\" first, then try the BOM again.";
+    return;
+  }
+
+  let stageTimer = null;
+  let failed = false;
+  if (button) {
+    button.disabled = true;
+    button.textContent = isFull ? "Building Full BOM..." : "Exporting...";
+  }
+  if (overlayText) {
+    const stages = FULL_BOM_STAGES;
+    overlayText.textContent = isFull ? stages[0] : "Generating your Excel workbook…";
+    if (isFull) {
+      let i = 0;
+      stageTimer = setInterval(() => {
+        i = Math.min(i + 1, stages.length - 1);
+        overlayText.textContent = stages[i];
+      }, 1200);
+    }
+  }
   if (overlay) overlay.hidden = false;
   try {
     const monthly = (typeof rampMonthlyValues === "function" && state.ramp.points.length)
@@ -1569,8 +1710,10 @@ async function exportToExcel() {
         shapeOverrides: state.shapeOverrides,
         costOverrides: state.costOverrides,
         hoursPerMonth: state.hoursPerMonth,
+        hoursOverride: state.hoursOverride,
         bomName: state.bomName || "",
         ociDiscount: (state.ociDiscount || 0) / 100,
+        oicMessagePacks: state.oicMessagePacks,
         ramp,
         existingInfraCost: state.existingInfraCost || 0,
         workflowState: collectWorkflowState(),
@@ -1580,6 +1723,10 @@ async function exportToExcel() {
         convertedPricing: (state.pricing && state.pricing.converted)
           ? { rows: state.pricing.rows, totals: state.pricing.totals }
           : null,
+        // Services added from the "Add OCI services" panel — priced server-side and folded
+        // into the export totals and the matching Pricing Overview lines.
+        extraServices: state.extraServices || [],
+        template, // "quick" = compact BOM+Overview, "full" = 12-sheet deliverable
       }),
     });
     if (!response.ok) {
@@ -1595,18 +1742,61 @@ async function exportToExcel() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
+    // Filename = the BOM name the user typed at the top + today's date, so repeat exports
+    // never silently overwrite each other in Downloads.
     const safeName = (state.bomName || "").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_");
-    link.download = safeName ? `${safeName}.xlsx` : "OCI_BOM_Export.xlsx";
+    const suffix = isFull ? "_Full_BOM" : "_BOM";
+    const today = new Date();
+    const stamp = [
+      today.getFullYear(),
+      String(today.getMonth() + 1).padStart(2, "0"),
+      String(today.getDate()).padStart(2, "0"),
+    ].join("-");
+    link.download = `${safeName || "OCI"}${suffix}_${stamp}.xlsx`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+    // Confirm it landed — the browser saves silently, which reads as "nothing happened".
+    els.engineStatus.textContent = `${isFull ? "Full BOM" : "Quick BOM"} downloaded: ${link.download}`;
   } catch (error) {
-    els.engineStatus.textContent = error.message;
+    // A failed export used to just blink the overlay and write to a status line nobody
+    // was looking at, so it read as "nothing happened". Say it out loud, and don't
+    // dismiss until the user acknowledges it.
+    failed = true;
+    const msg = `${isFull ? "Full BOM" : "Quick BOM"} export failed — ${error.message}`;
+    els.engineStatus.textContent = msg;
+    console.error("BOM export failed", error);
+    if (stageTimer) clearInterval(stageTimer);
+    stageTimer = null;
+    if (overlayText) {
+      overlayText.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "export-error-msg";
+      p.textContent = msg;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost-button";
+      btn.textContent = "Dismiss";
+      btn.addEventListener("click", () => {
+        if (overlay) overlay.hidden = true;
+        overlayText.textContent = "";
+      });
+      overlayText.append(p, btn);
+    }
+    const spinner = overlay ? overlay.querySelector(".export-spinner") : null;
+    if (spinner) spinner.hidden = true;
   } finally {
-    button.disabled = false;
-    button.textContent = original;
-    if (overlay) overlay.hidden = true;
+    if (stageTimer) clearInterval(stageTimer);
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+    const spinner = overlay ? overlay.querySelector(".export-spinner") : null;
+    if (!failed) {
+      if (spinner) spinner.hidden = false;
+      if (overlay) overlay.hidden = true;
+    }
   }
 }
 
@@ -1630,6 +1820,7 @@ function collectWorkflowState() {
     hoursPerMonth: state.hoursPerMonth,
     bomName: state.bomName,
     ociDiscount: state.ociDiscount,
+    oicMessagePacks: state.oicMessagePacks,
     selectedShape: state.selectedShape,
     existingInfraCost: state.existingInfraCost,
     crossCloudTopTier: state.crossCloudTopTier,
@@ -1686,8 +1877,8 @@ async function applyWorkflowState(wf) {
   if (!wf || !wf.rows) throw new Error("That file has no saved workflow data.");
   const assign = [
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
-    "hideWindowsPricing", "rightsize", "auto", "autoTier", "hoursPerMonth",
-    "bomName", "ociDiscount", "selectedShape", "existingInfraCost",
+    "hideWindowsPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
+    "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
     "crossCloudTopTier", "fields", "rows", "shapeOverrides", "costOverrides",
     "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs", "resultSort",
   ];
@@ -1701,6 +1892,7 @@ async function applyWorkflowState(wf) {
   // Reflect restored simple inputs back into their controls if present.
   if (els.bomName) els.bomName.value = state.bomName || "";
   if (els.ociDiscount) els.ociDiscount.value = state.ociDiscount || 0;
+  if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
   if (typeof renderTable === "function") renderTable();
   await priceRows();
   // Opening a previous BOM jumps straight to the results page (page 4).
@@ -2168,7 +2360,16 @@ function renderConsumptionRamp() {
   // Show/hide years 4-5 and update labels for the chosen ramp length.
   if (els.rampYearFourBox) els.rampYearFourBox.hidden = years < 4;
   if (els.rampYearFiveBox) els.rampYearFiveBox.hidden = years < 5;
-  if (els.rampHeading) els.rampHeading.textContent = `Build a ${years}-year ramp`;
+  if (els.rampHeading) {
+    const m = state.ramp.months || 36;
+    els.rampHeading.textContent = `Build a ${m}-month ramp`;
+    // Keep the "selected dot month" control in step with the chosen ramp length.
+    if (els.rampPeakMonth) {
+      els.rampPeakMonth.max = String(m);
+      const hint = els.rampPeakMonth.parentElement?.querySelector("small");
+      if (hint) hint.textContent = `Month 1 to month ${m}`;
+    }
+  }
   if (els.rampContractNote) {
     els.rampContractNote.textContent = Array.from({ length: years }, (_, i) => `Year ${i + 1}`).join(" + ");
   }
@@ -2352,21 +2553,26 @@ function renderResults(pricing) {
     + Number(pricing.totals.cloudStorageGb || 0);
   const storageScale = Math.min(100, Math.max(12, Math.log10(Math.max(10, storageGb || 0)) * 20));
   const discPct = state.ociDiscount || 0;
-  const ociEff = ociEffectiveMonthly(pricing);
+  const extrasList = extraServicesMonthly();          // list price (for the "before discount" figure)
+  const extras = extraServicesEffective();            // after OCI discount (excl. 3rd-party licensing)
+  const ociEff = ociEffectiveMonthly(pricing) + extras;
   const ociEffAnnual = ociEff * 12;
+  const extrasMeta = extras
+    ? ` · incl. ${formatCompactCurrency(extras)} added services`
+    : "";
   const pricingCards = `
     ${resultKpiCard({
       label: (cloudBill ? "OCI-equivalent monthly" : "Monthly run rate") + (discPct ? ` (after ${discPct}% discount)` : ""),
       value: formatCompactCurrency(ociEff),
-      meta: discPct
-        ? `${formatCompactCurrency(ociEffAnnual)} annualized · ${formatCompactCurrency(pricing.totals.monthly)} list before discount`
-        : `${formatCompactCurrency(ociEffAnnual)} annualized`,
+      meta: (discPct
+        ? `${formatCompactCurrency(ociEffAnnual)} annualized · ${formatCompactCurrency(pricing.totals.monthly + extrasList)} list before discount`
+        : `${formatCompactCurrency(ociEffAnnual)} annualized`) + extrasMeta,
       accent: "#c74634",
       fill: monthlyScale,
       primary: true,
       title: discPct
-        ? `${formatCurrency(ociEff)} monthly after ${discPct}% OCI discount (list ${formatCurrency(pricing.totals.monthly)})`
-        : `${formatCurrency(pricing.totals.monthly)} monthly; ${formatCurrency(pricing.totals.annual)} annualized`,
+        ? `${formatCurrency(ociEff)} monthly after ${discPct}% OCI discount (list ${formatCurrency(pricing.totals.monthly + extrasList)}); 3rd-party licensing excluded from discount`
+        : `${formatCurrency(ociEff)} monthly; ${formatCurrency(ociEffAnnual)} annualized`,
     })}
     ${resultKpiCard({
       label: "Flex shape",
@@ -3349,7 +3555,30 @@ els.hideGpuToggle?.addEventListener("change", (event) => {
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
 });
+// Compute optimization (Rightsize) is only meaningful on the Ax shapes and the regular E6
+// — those are the only shapes with a defined OCPU/RAM reduction. For anything else it would
+// do nothing, so the control is disabled rather than silently no-op.
+function rightsizeEligible() {
+  const key = String((selectedShape() || {}).key || "");
+  return key.endsWith("-ax") || key === "e6-standard";
+}
+function syncRightsizeAvailability() {
+  const ok = rightsizeEligible();
+  document.querySelectorAll(".rightsize-switch").forEach((sw) => {
+    sw.classList.toggle("is-disabled", !ok);
+    sw.querySelectorAll("[data-rightsize]").forEach((b) => {
+      b.disabled = !ok;
+    });
+    sw.title = ok
+      ? sw.dataset.titleOn || sw.title
+      : "Rightsize is only available for the Ax shapes and the regular E6 — those are the shapes with a defined OCPU/RAM optimization. Select an Ax or E6 shape to enable it.";
+  });
+  // Force back to 1-to-1 if the current shape can't be rightsized.
+  if (!ok && state.rightsize) setRightsizeMode(false);
+}
 function setRightsizeMode(value) {
+  // Guard: never turn rightsize on for an ineligible shape.
+  if (value && !rightsizeEligible()) value = false;
   state.rightsize = value;
   document.querySelectorAll(".rightsize-switch .mode-opt").forEach((b) => {
     b.classList.toggle("is-active", (b.dataset.rightsize === "true") === value);
@@ -3358,7 +3587,7 @@ function setRightsizeMode(value) {
 els.rightsizeSwitches?.forEach((sw) => {
   sw.addEventListener("click", (event) => {
     const opt = event.target.closest("[data-rightsize]");
-    if (!opt) return;
+    if (!opt || opt.disabled) return;
     setRightsizeMode(opt.dataset.rightsize === "true");
   });
 });
@@ -3383,8 +3612,8 @@ els.cpuUnitSwitches?.forEach((sw) => {
   });
 });
 
-function setRampYears(years) {
-  const newMonths = Math.max(12, Math.round(years) * 12);
+function setRampMonths(months) {
+  const newMonths = Math.max(1, Math.min(60, Math.round(months)));
   const oldMonths = state.ramp.months || 36;
   if (newMonths === oldMonths) return;
   const factor = newMonths / oldMonths;
@@ -3401,26 +3630,99 @@ function setRampYears(years) {
     sorted[sorted.length - 1].monthly = state.ramp.ceiling;
   }
   if (els.rampPeakMonth) els.rampPeakMonth.max = String(newMonths);
-  document.querySelectorAll(".ramp-years-switch .mode-opt").forEach((b) => {
-    b.classList.toggle("is-active", Number(b.dataset.rampYears) * 12 === newMonths);
+  document.querySelectorAll(".ramp-months-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", Number(b.dataset.rampMonths) === newMonths);
   });
   renderConsumptionRamp();
 }
-document.querySelector(".ramp-years-switch")?.addEventListener("click", (event) => {
-  const opt = event.target.closest("[data-ramp-years]");
+document.querySelector(".ramp-months-switch")?.addEventListener("click", (event) => {
+  const opt = event.target.closest("[data-ramp-months]");
   if (!opt) return;
-  setRampYears(Number(opt.dataset.rampYears));
+  setRampMonths(Number(opt.dataset.rampMonths));
 });
 els.hoursPerMonth?.addEventListener("change", (event) => {
   const v = Number(event.target.value);
   state.hoursPerMonth = v > 0 ? v : 730;
   if (!(v > 0)) event.target.value = 730;
+  // The user edited hours -> treat it as an override that wins over per-row data hours.
+  state.hoursOverride = true;
+  // Per-hour added services (ECPU, OCPU, LB, port) follow the hours setting — re-price them.
+  repriceExtraServices();
+});
+els.oicMessagePacks?.addEventListener("change", (event) => {
+  let v = Math.round(Number(event.target.value));
+  if (!(v >= 1)) v = 1;
+  event.target.value = v;
+  state.oicMessagePacks = v;
+  // Message-pack sizing changes the OCI cost server-side (cloud-bill mode) — re-price
+  // so the app view + export reflect the new Oracle Integration Cloud line.
+  if (state.pricing) priceRows({ keepView: true });
 });
 function applyAutoUI() {
   // Grey out only the shape grid/detail (keep the processor picker clickable so you can switch back).
   if (els.shapeDropdown) els.shapeDropdown.classList.toggle("shape-auto-disabled", state.auto);
 }
-els.exportExcel?.addEventListener("click", exportToExcel);
+els.exportExcel?.addEventListener("click", () => exportToExcel("quick"));
+els.exportFullBom?.addEventListener("click", () => exportToExcel("full"));
+
+// Download ONLY the architecture diagram (PNG + editable .drawio, zipped) for this BOM.
+async function downloadDiagram() {
+  if (!state.pricing) {
+    els.engineStatus.textContent = "Run \"Reprice estimate\" first, then download the diagram.";
+    return;
+  }
+  const btn = els.downloadDiagram;
+  const original = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Rendering diagram…"; }
+  els.engineStatus.textContent = "Rendering the OCI architecture diagram…";
+  try {
+    const res = await fetch("/api/diagram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fields: state.fields,
+        rows: state.rows,
+        shape: state.selectedShape,
+        intakeMode: state.intakeMode,
+        providerHint: state.providerHint,
+        fullServiceBeta: state.fullServiceBeta,
+        hideGpuPricing: state.hideGpuPricing,
+        hideWindowsPricing: state.hideWindowsPricing,
+        rightsize: state.rightsize,
+        cpuUnit: state.cpuUnit,
+        auto: state.auto,
+        autoTier: state.autoTier,
+        shapeOverrides: state.shapeOverrides,
+        costOverrides: state.costOverrides,
+        hoursPerMonth: state.hoursPerMonth,
+        hoursOverride: state.hoursOverride,
+        bomName: state.bomName || "",
+      }),
+    });
+    if (!res.ok) {
+      let msg = "Diagram build failed.";
+      try { msg = (await res.json()).error || msg; } catch (e) { /* non-JSON */ }
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const safe = (state.bomName || "OCI").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_") || "OCI";
+    link.download = `${safe}_architecture.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    els.engineStatus.textContent = `Diagram downloaded: ${link.download} (PNG + draw.io)`;
+  } catch (error) {
+    els.engineStatus.textContent = `Diagram download failed — ${error.message}`;
+    console.error("diagram download failed", error);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = original; }
+  }
+}
+els.downloadDiagram?.addEventListener("click", downloadDiagram);
 els.exportJson?.addEventListener("click", exportWorkflowJson);
 els.loadWorkflow?.addEventListener("click", () => els.loadWorkflowFile?.click());
 els.loadPrevBom?.addEventListener("click", () => els.loadWorkflowFile?.click());
@@ -3464,7 +3766,8 @@ async function convertBomFromFile(file) {
     if (Array.isArray(payload.rateCards)) state.rateCards = payload.rateCards;
     state.selectedShape = payload.selectedShape?.key || state.selectedShape;
     state.pricing = payload;
-    state.bomName = state.bomName || (payload.fileName || "").replace(/\.[^.]+$/, "");
+    // Don't seed the BOM name from the uploaded filename — the export name comes from
+    // what the user actually types at the top, nothing else.
     // A converted BOM starts on the Shape page (page 3): pick a shape (or keep the
     // detected per-server shapes) and continue to results. Pages 2 & 3 are navigable.
     renderPricing(payload);
@@ -3650,6 +3953,286 @@ window.addEventListener("resize", () => {
     renderConsumptionRamp();
   }
 });
+
+// ===========================================================================
+// "Add OCI services" panel — search the OCI catalog, size a service, add it to
+// the BOM. Added services flow into the results total and both exports.
+// ===========================================================================
+// List (undiscounted) monthly of added services — used for the cart display.
+function extraServicesMonthly() {
+  return (state.extraServices || []).reduce((t, s) => t + Number(s.monthly || 0), 0);
+}
+
+// Effective monthly of added services after the OCI discount. Native OCI services are
+// discounted; 3rd-party licensing (Windows, SQL Server) is charged at list.
+function extraServicesEffective() {
+  const d = (state.ociDiscount || 0) / 100;
+  return (state.extraServices || []).reduce((t, s) => {
+    const m = Number(s.monthly || 0);
+    return t + (s.thirdParty ? m : m * (1 - d));
+  }, 0);
+}
+
+async function fetchCatalog() {
+  const q = state.catalog.query || "";
+  const g = state.catalog.group || "";
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (g) params.set("group", g);
+    const r = await fetch(`/api/catalog?${params.toString()}`);
+    const d = await r.json();
+    state.catalog.groups = d.groups || [];
+    state.catalog.results = d.results || [];
+  } catch (e) {
+    state.catalog.results = [];
+  }
+  renderServiceChips();
+  renderServiceResults();
+}
+
+function renderServiceChips() {
+  if (!els.serviceChips) return;
+  const chips = [{ group: "", count: 0, label: "All" }].concat(
+    (state.catalog.groups || []).map((g) => ({ ...g, label: g.group })),
+  );
+  els.serviceChips.innerHTML = chips
+    .map((c) => {
+      const active = (state.catalog.group || "") === c.group ? " is-active" : "";
+      const count = c.group ? ` <span class="chip-count">${c.count}</span>` : "";
+      return `<button type="button" class="service-chip${active}" data-group="${escapeHtml(c.group)}">${escapeHtml(c.label)}${count}</button>`;
+    })
+    .join("");
+}
+
+function serviceCardHtml(e, i) {
+  const fields = (e.fields || [])
+    .map(
+      (f) =>
+        `<label class="svc-field"><span>${escapeHtml(f.label)}</span>
+           <input type="number" class="svc-input" data-idx="${i}" data-key="${escapeHtml(f.key)}"
+                  value="${f.default ?? 0}" min="${f.min ?? 0}" step="${f.step ?? 1}" />
+           <em>${escapeHtml(f.unit)}</em></label>`,
+    )
+    .join("");
+  const rateTxt = `$${Number(e.rate).toLocaleString(undefined, { maximumFractionDigits: 4 })} / ${escapeHtml(e.unit)}`;
+  return `
+    <div class="service-card" data-idx="${i}">
+      <div class="service-card-head">
+        <div>
+          <strong>${escapeHtml(e.name)}</strong>
+          <span class="service-card-meta">${escapeHtml(e.group)} · ${escapeHtml(e.sku)} · ${rateTxt}</span>
+        </div>
+        <span class="service-card-cost" data-cost="${i}">$0.00/mo</span>
+      </div>
+      ${e.note ? `<p class="service-card-note">${escapeHtml(e.note)}</p>` : ""}
+      <div class="service-card-fields">${fields}</div>
+      <div class="service-card-actions">
+        <button type="button" class="ghost-button svc-add" data-idx="${i}">Add to BOM</button>
+      </div>
+    </div>`;
+}
+
+function renderServiceResults() {
+  if (!els.serviceResults) return;
+  const items = state.catalog.results || [];
+  if (!items.length) {
+    els.serviceResults.innerHTML =
+      `<p class="service-empty">${state.catalog.query ? "No services match that search." : "Pick a category or search to add services."}</p>`;
+    return;
+  }
+  // Group results by category into collapsible sections. Remembering open/closed per group
+  // means browsing stays tidy — expand only the category you care about.
+  const groupsInOrder = [];
+  const byGroup = new Map();
+  items.forEach((e, i) => {
+    if (!byGroup.has(e.group)) {
+      byGroup.set(e.group, []);
+      groupsInOrder.push(e.group);
+    }
+    byGroup.get(e.group).push({ e, i });
+  });
+
+  // Default open state: open everything on a text search or a single group; otherwise only
+  // the first category, so a long "All" list starts compact.
+  const openState = state.catalog.groupsOpen || {};
+  const singleOrSearch = groupsInOrder.length === 1 || !!state.catalog.query;
+
+  els.serviceResults.innerHTML = groupsInOrder
+    .map((g, gi) => {
+      const entries = byGroup.get(g);
+      const open = g in openState ? openState[g] : (singleOrSearch || gi === 0);
+      const cards = entries.map(({ e, i }) => serviceCardHtml(e, i)).join("");
+      return `
+        <section class="service-group${open ? " is-open" : ""}" data-group="${escapeHtml(g)}">
+          <button type="button" class="service-group-head" data-group-toggle="${escapeHtml(g)}" aria-expanded="${open}">
+            <span class="service-group-caret" aria-hidden="true">▸</span>
+            <span class="service-group-title">${escapeHtml(g)}</span>
+            <span class="service-group-count">${entries.length}</span>
+          </button>
+          <div class="service-group-body"${open ? "" : " hidden"}>${cards}</div>
+        </section>`;
+    })
+    .join("");
+
+  els.serviceResults.querySelectorAll(".service-card").forEach((card) => {
+    updateCardCost(Number(card.dataset.idx));
+  });
+}
+
+function cardValues(idx) {
+  const vals = {};
+  els.serviceResults
+    .querySelectorAll(`.svc-input[data-idx="${idx}"]`)
+    .forEach((inp) => (vals[inp.dataset.key] = Number(inp.value) || 0));
+  return vals;
+}
+
+// Mirror of oci_catalog.line_cost so the preview is instant (server recomputes on add/export).
+// Per-hour services use the app's hours-per-month setting, not a static 730.
+function clientLineCost(entry, v) {
+  const rate = Number(entry.rate || 0);
+  const free = entry.free || {};
+  const hours = Number(state.hoursPerMonth) > 0 ? Number(state.hoursPerMonth) : 730;
+  const cid = entry.id || entry.catalogId;
+  if (cid === "block") {
+    const gb = Number(v.gb || 0), vpus = Number(v.vpus || 10);
+    return Math.round((gb * 0.0255 + gb * vpus * 0.0017) * 100) / 100;
+  }
+  const fkey = entry.fields?.[0]?.key;
+  let qty = fkey ? Number(v[fkey] || 0) : 0;
+  if (fkey in free) qty = Math.max(0, qty - free[fkey]);
+  const m = entry.basis === "hour" ? rate * qty * hours : rate * qty;
+  return Math.round(m * 100) / 100;
+}
+
+// Re-price every already-added service when the hours setting changes, so the cart, the
+// results total and the exports all stay on the same hours basis.
+function repriceExtraServices() {
+  (state.extraServices || []).forEach((s) => {
+    s.monthly = clientLineCost(s, s.values || {});
+  });
+  renderServiceCart();
+  renderServiceResults();
+  refreshResultsTotals();
+}
+
+function updateCardCost(idx) {
+  const entry = state.catalog.results[idx];
+  if (!entry) return;
+  const cost = clientLineCost(entry, cardValues(idx));
+  const el = els.serviceResults.querySelector(`[data-cost="${idx}"]`);
+  if (el) el.textContent = `${formatCurrency(cost)}/mo`;
+}
+
+function renderServiceCart() {
+  if (!els.serviceCartList) return;
+  const items = state.extraServices || [];
+  els.serviceCartCount.textContent = String(items.length);
+  els.serviceCartTotal.textContent = formatCurrency(extraServicesMonthly());
+  if (!items.length) {
+    els.serviceCartList.innerHTML = `<p class="service-empty">Nothing added yet.</p>`;
+    return;
+  }
+  els.serviceCartList.innerHTML = items
+    .map((s, i) => {
+      const sizing = Object.entries(s.values || {})
+        .map(([k, val]) => `${val} ${k}`)
+        .join(" · ");
+      return `
+        <div class="cart-item">
+          <div class="cart-item-main">
+            <strong>${escapeHtml(s.name)}</strong>
+            <span>${escapeHtml(sizing)}</span>
+          </div>
+          <span class="cart-item-cost">${formatCurrency(s.monthly)}/mo</span>
+          <button type="button" class="cart-item-remove" data-remove="${i}" aria-label="Remove">✕</button>
+        </div>`;
+    })
+    .join("");
+}
+
+function addServiceFromCard(idx) {
+  const entry = state.catalog.results[idx];
+  if (!entry) return;
+  const values = cardValues(idx);
+  const monthly = clientLineCost(entry, values);
+  state.extraServices.push({
+    catalogId: entry.id,
+    name: entry.name,
+    group: entry.group,
+    sku: entry.sku,
+    unit: entry.unit,
+    basis: entry.basis,
+    rate: entry.rate,
+    free: entry.free || {},
+    fields: entry.fields,
+    thirdParty: !!entry.thirdParty || entry.group === "Licensing",
+    values,
+    monthly,
+  });
+  renderServiceCart();
+  refreshResultsTotals();
+  els.engineStatus.textContent = `Added ${entry.name} (${formatCurrency(monthly)}/mo) to the BOM.`;
+}
+
+// Re-render the KPI tiles + subtitle so an added service shows up in the total immediately,
+// without a full server reprice.
+function refreshResultsTotals() {
+  if (state.pricing) renderResults(state.pricing);
+}
+
+// Add-OCI-services toggle is wired via a delegated document listener (see top of file)
+// so it keeps working even if the results DOM is re-rendered.
+if (els.serviceChips) {
+  els.serviceChips.addEventListener("click", (e) => {
+    const btn = e.target.closest(".service-chip");
+    if (!btn) return;
+    state.catalog.group = btn.dataset.group || "";
+    state.catalog.groupsOpen = {};   // reset accordions to defaults for the new view
+    fetchCatalog();
+  });
+}
+if (els.serviceSearch) {
+  let t = null;
+  els.serviceSearch.addEventListener("input", (e) => {
+    state.catalog.query = e.target.value.trim();
+    clearTimeout(t);
+    t = setTimeout(fetchCatalog, 200);
+  });
+}
+if (els.serviceResults) {
+  els.serviceResults.addEventListener("input", (e) => {
+    if (e.target.classList.contains("svc-input")) updateCardCost(Number(e.target.dataset.idx));
+  });
+  els.serviceResults.addEventListener("click", (e) => {
+    const add = e.target.closest(".svc-add");
+    if (add) {
+      addServiceFromCard(Number(add.dataset.idx));
+      return;
+    }
+    const head = e.target.closest(".service-group-head");
+    if (head) {
+      const g = head.dataset.groupToggle;
+      const section = head.closest(".service-group");
+      const body = section.querySelector(".service-group-body");
+      const open = section.classList.toggle("is-open");
+      head.setAttribute("aria-expanded", String(open));
+      if (open) body.removeAttribute("hidden");
+      else body.setAttribute("hidden", "");
+      state.catalog.groupsOpen[g] = open;   // remember so re-render keeps your choice
+    }
+  });
+}
+if (els.serviceCartList) {
+  els.serviceCartList.addEventListener("click", (e) => {
+    const rm = e.target.closest(".cart-item-remove");
+    if (!rm) return;
+    state.extraServices.splice(Number(rm.dataset.remove), 1);
+    renderServiceCart();
+    refreshResultsTotals();
+  });
+}
 
 fetch("/api/health")
   .then((response) => response.json())

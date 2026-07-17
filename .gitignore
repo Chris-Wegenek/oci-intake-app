@@ -41,3 +41,8 @@ cost_model.json
 data/customer_sites.json
 data/oci_di_rest_task_sftp.json
 data/oci_resiliency_best_practices.json
+
+# Presentation decks (may be built from a customer's bill)
+*.pptx
+# Agent scratch notes (may reference customer names)
+AGENT_READOUT.md

@@ -1,0 +1,205 @@
+{
+  "name": "oci_network_diagram",
+  "title": "Global Network Connectivity — Customer Sites to OCI Regions",
+  "subtitle": "Site-to-Site VPN & FastConnect into regional DRG/VCN, interconnected over the OCI backbone (DRG remote peering)",
+  "backbone_label": "OCI Backbone · DRG Remote Peering",
+  "width": 1840,
+  "sites_width": 760,
+  "show_legend": true,
+  "cost": {
+    "hours_mo": 730,
+    "fastconnect_port_hr": 1.275,
+    "egress_free_tb": 10,
+    "egress_per_gb": 0.0085
+  },
+  "regions": [
+    {
+      "area": "US East",
+      "oci": "US East (Ashburn)",
+      "rid": "us-ashburn-1",
+      "vcn": "10.10.0.0/16",
+      "hub": {
+        "name": "Chelmsford Campus",
+        "sub": "Bldg 15 & 12 · W-Hemisphere VPN access",
+        "conn": "FastConnect 5 Gbps"
+      },
+      "spokes": [
+        [
+          "Chelmsford Mfg",
+          "Manufacturing"
+        ],
+        [
+          "New Chelmsford Whse",
+          "Warehouse · Q4"
+        ],
+        [
+          "Agile / Visual Factory",
+          "Apps"
+        ]
+      ],
+      "anchor": "FSX · AppStream · Verified Access",
+      "sftpgo": true
+    },
+    {
+      "area": "US West",
+      "oci": "US West (Phoenix)",
+      "rid": "us-phoenix-1",
+      "vcn": "10.20.0.0/16",
+      "hub": {
+        "name": "Livermore, CA",
+        "sub": "Mfg & Engineering · West-coast VPN hub",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [
+        [
+          "Fremont, CA",
+          "Mfg & Eng"
+        ],
+        [
+          "Little Fremont, CA",
+          "Repair"
+        ],
+        [
+          "Austin, TX",
+          "Sales & Svc"
+        ]
+      ],
+      "anchor": "FSX · partner RDP (robot licensing)"
+    },
+    {
+      "area": "Frankfurt",
+      "oci": "Germany Central (Frankfurt)",
+      "rid": "eu-frankfurt-1",
+      "vcn": "10.30.0.0/16",
+      "hub": {
+        "name": "Steisling 6 & 7",
+        "sub": "Mfg hub · Europe VPN hub (survivability)",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [
+        [
+          "Tägerwilen (CH)",
+          "Small Mfg"
+        ],
+        [
+          "Dresden",
+          "Sales & Svc"
+        ],
+        [
+          "Torino",
+          "Engineering"
+        ],
+        [
+          "Kiryat (IL)",
+          "Service"
+        ]
+      ],
+      "anchor": "FSX · partner RDP",
+      "sftpgo": true
+    },
+    {
+      "area": "Hong Kong / Taiwan / China",
+      "oci": "Japan East (Tokyo)",
+      "rid": "ap-tokyo-1",
+      "vcn": "10.40.0.0/16",
+      "hub": {
+        "name": "HSI – Taiwan",
+        "sub": "Taiwan Mfg · Taiwan VPN hub",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [
+        [
+          "China offices (Suzhou→HK)",
+          "Shanghai/Beijing/Suzhou · in-country VPN"
+        ],
+        [
+          "HSI – Eagle Eye",
+          "Engineering"
+        ],
+        [
+          "HSI – TTC",
+          "Service"
+        ],
+        [
+          "TAI – Taiwan",
+          "Service"
+        ],
+        [
+          "TCG – Taiwan",
+          "Engineering"
+        ]
+      ],
+      "anchor": "FSX"
+    },
+    {
+      "area": "Singapore",
+      "oci": "Singapore",
+      "rid": "ap-singapore-1",
+      "vcn": "10.50.0.0/16",
+      "hub": {
+        "name": "Singapore",
+        "sub": "Singapore VPN hub · Sales & Svc",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [
+        [
+          "Johor (2 sites)",
+          "Main Asia Mfg"
+        ],
+        [
+          "Penang",
+          "Sales & Svc"
+        ]
+      ],
+      "anchor": "FSX · Workspaces hub · AppStream (Asia)"
+    },
+    {
+      "area": "Korea",
+      "oci": "South Korea Central (Seoul)",
+      "rid": "ap-seoul-1",
+      "vcn": "10.60.0.0/16",
+      "hub": {
+        "name": "KHH",
+        "sub": "Manufacturing site",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [
+        [
+          "KOR-DON",
+          "Sales & Svc"
+        ],
+        [
+          "KOR-DTC",
+          "Training & Svc"
+        ]
+      ],
+      "anchor": "FSX · Workspaces hub · AppStream (Asia)"
+    },
+    {
+      "area": "Japan",
+      "oci": "Japan East (Tokyo)",
+      "rid": "ap-tokyo-1",
+      "vcn": "10.70.0.0/16",
+      "hub": {
+        "name": "SYH",
+        "sub": "Warehouse & Sales office",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [],
+      "anchor": "FSX"
+    },
+    {
+      "area": "Australia",
+      "oci": "Australia East (Sydney)",
+      "rid": "ap-sydney-1",
+      "vcn": "10.80.0.0/16",
+      "hub": {
+        "name": "BNE – Brisbane",
+        "sub": "Sales · Service · Mfg · Regional VPN access",
+        "conn": "Site-to-Site VPN"
+      },
+      "spokes": [],
+      "anchor": "FSX"
+    }
+  ]
+}

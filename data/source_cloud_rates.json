@@ -2138,6 +2138,8 @@
   "azure:D32als v6": 1.286,
   "azure:D48als v6": 1.93,
   "azure:D64als v6": 2.573,
-  "azure:D96als v6": 3.859
+  "azure:D96als v6": 3.859,
+  "c3.2xlarge": 0.535,
+  "t3.large": 0.0832
  }
 }

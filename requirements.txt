@@ -4,3 +4,12 @@ xlrd
 pypdf
 boto3
 legacy-cgi; python_version >= "3.13"
+# openpyxl needs Pillow to embed ANY image. Without it the Full BOM export dies with
+# "You must install Pillow to fetch image objects" — the template puts the Oracle logo
+# on every sheet, so it fails long before the architecture diagram. Also used to render
+# the diagram PNG itself.
+pillow
+# pycairo renders the architecture-diagram PNG (needs system cairo: `brew install cairo`
+# on macOS, or libcairo2 on Linux). Without it the .drawio still builds but the embedded
+# PNG is skipped. openpyxl embedding itself no longer needs Pillow — see bom_template.
+pycairo
