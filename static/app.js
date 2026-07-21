@@ -1689,9 +1689,17 @@ async function exportToExcel(template = "quick") {
   }
   if (overlay) overlay.hidden = false;
   try {
-    const monthly = (typeof rampMonthlyValues === "function" && state.ramp.points.length)
+    const rampVals = (typeof rampMonthlyValues === "function" && state.ramp.points.length)
       ? rampMonthlyValues()
       : [];
+    // Short ramps (12/24 mo) still print a full 3-year contract: months past the ramp
+    // run at the full BOM maximum. Longer ramps (36/60) already fill the contract.
+    const monthly = rampVals.slice();
+    if (rampVals.length) {
+      const rampYears = Math.max(1, Math.round((state.ramp.months || 12) / 12));
+      const contractMonths = Math.max(rampYears, 3) * 12;
+      for (let m = monthly.length; m < contractMonths; m += 1) monthly.push(state.ramp.ceiling);
+    }
     const ramp = { ceiling: state.ramp.ceiling, monthly };
     const response = await fetch("/api/export", {
       method: "POST",
@@ -2222,7 +2230,7 @@ function rampValueAtMonth(month) {
 }
 
 function addRampPoint(month, monthly) {
-  if (state.ramp.points.length >= 8) return selectedRampPoint();
+  if (state.ramp.points.length >= 12) return selectedRampPoint();
   const point = newRampPoint(month, monthly);
   state.ramp.points.push(point);
   state.ramp.selectedPointId = point.id;
@@ -2297,9 +2305,15 @@ function initializeConsumptionRamp(pricing) {
     state.ramp.signature = signature;
     state.ramp.ceiling = ceiling;
     state.ramp.nextPointId = 1;
-    const years = Math.max(1, Math.round((state.ramp.months || 36) / 12));
-    state.ramp.points = Array.from({ length: years }, (_, i) =>
-      newRampPoint((i + 1) * 12, ceiling * ((i + 1) / years)),
+    // Seed 4 evenly-spaced ramp dots regardless of ramp length (e.g. 12-month
+    // ramp -> dots at months 3, 6, 9, 12 climbing to the BOM maximum).
+    const seedDots = 4;
+    const seedMonths = state.ramp.months || 12;
+    state.ramp.points = Array.from({ length: seedDots }, (_, i) =>
+      newRampPoint(
+        Math.max(1, Math.round((seedMonths * (i + 1)) / seedDots)),
+        ceiling * ((i + 1) / seedDots),
+      ),
     );
     state.ramp.selectedPointId = state.ramp.points.at(-1).id;
   } else {
@@ -2340,7 +2354,12 @@ function renderConsumptionRamp() {
   const labelAnchor = labelOnLeft ? "end" : "start";
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
   const xTicks = [];
-  for (let m = 0; m <= months; m += 12) xTicks.push(m);
+  // Short ramps (<=12 mo) label every month 1..N; longer ramps label every 12.
+  if (months <= 12) {
+    for (let m = 1; m <= months; m += 1) xTicks.push(m);
+  } else {
+    for (let m = 0; m <= months; m += 12) xTicks.push(m);
+  }
 
   els.rampChart.setAttribute("viewBox", `0 0 ${width} ${height}`);
   els.rampCeilingLabel.textContent = `BOM maximum ${formatCurrency(ceiling)}/mo`;
@@ -2348,29 +2367,50 @@ function renderConsumptionRamp() {
   els.rampPeakMonthly.max = ceiling.toFixed(2);
   els.rampPeakMonthly.value = selected ? selected.monthly.toFixed(2) : "";
   els.removeRampPoint.disabled = state.ramp.points.length <= 1;
-  els.addRampPoint.disabled = state.ramp.points.length >= 8;
+  els.addRampPoint.disabled = state.ramp.points.length >= 12;
 
   const values = rampMonthlyValues();
-  const total = values.reduce((sum, value) => sum + value, 0);
-  const years = Math.round(months / 12);
-  const yearSpend = (y) => values.slice(y * 12, (y + 1) * 12).reduce((sum, value) => sum + value, 0);
+  const rampYears = Math.max(1, Math.round(months / 12));
+  // Short ramps (12/24 mo) still model a full 3-year contract: the ramp covers the
+  // early months and every year after the ramp runs at the full BOM maximum.
+  const contractYears = Math.max(rampYears, 3);
+  const contractMonths = contractYears * 12;
+  const fullYear = ceiling * 12;
+  // OCI discount applies to the money tiles (matching the export) but NOT to the ramp
+  // dots/graph — the curve stays a list-price consumption shape. Exclude 3rd-party
+  // licensing from the discount by deriving the ratio from the priced totals.
+  const p = state.pricing;
+  let discRatio = 1;
+  if (p && p.totals) {
+    const listCeil = ociMonthlyWithWindows(p);
+    const windows = Math.max(0, listCeil - Number(p.totals.monthly || 0));
+    if (listCeil > 0) discRatio = (ociEffectiveMonthly(p) + windows) / listCeil;
+  }
+  const yearListSpend = (y) =>
+    y < rampYears
+      ? values.slice(y * 12, (y + 1) * 12).reduce((sum, value) => sum + value, 0)
+      : fullYear;
+  let contractListTotal = 0;
+  for (let y = 0; y < contractYears; y += 1) contractListTotal += yearListSpend(y);
 
-  els.rampThreeYearTotal.textContent = formatCurrency(total);
-  els.rampAvgMonthly.textContent = formatCurrency(total / months);
+  els.rampThreeYearTotal.textContent = formatCurrency(contractListTotal * discRatio);
+  els.rampAvgMonthly.textContent = formatCurrency((contractListTotal * discRatio) / contractMonths);
   [
-    [els.rampYearOneTotal, yearSpend(0)],
-    [els.rampYearTwoTotal, yearSpend(1)],
-    [els.rampYearThreeTotal, yearSpend(2)],
-    [els.rampYearFourTotal, yearSpend(3)],
-    [els.rampYearFiveTotal, yearSpend(4)],
-  ].forEach(([element, value]) => {
+    [els.rampYearOneTotal, yearListSpend(0)],
+    [els.rampYearTwoTotal, yearListSpend(1)],
+    [els.rampYearThreeTotal, yearListSpend(2)],
+    [els.rampYearFourTotal, yearListSpend(3)],
+    [els.rampYearFiveTotal, yearListSpend(4)],
+  ].forEach(([element, listValue]) => {
     if (!element) return;
+    const value = listValue * discRatio;
     element.textContent = formatCompactCurrency(value);
     element.title = formatCurrency(value);
   });
-  // Show/hide years 4-5 and update labels for the chosen ramp length.
-  if (els.rampYearFourBox) els.rampYearFourBox.hidden = years < 4;
-  if (els.rampYearFiveBox) els.rampYearFiveBox.hidden = years < 5;
+  // Show/hide years 4-5 for the chosen contract length.
+  if (els.rampYearFourBox) els.rampYearFourBox.hidden = contractYears < 4;
+  if (els.rampYearFiveBox) els.rampYearFiveBox.hidden = contractYears < 5;
+  const years = contractYears;
   if (els.rampHeading) {
     const m = state.ramp.months || 36;
     els.rampHeading.textContent = `Build a ${m}-month ramp`;
@@ -3824,10 +3864,16 @@ function renderCrossCloud() {
   // Support both the new {bestMatch, topTier} shape and the older flat shape.
   const hasModes = raw.bestMatch || raw.topTier;
   const cc = hasModes ? (state.crossCloudTopTier ? raw.topTier : raw.bestMatch) : raw;
+  const bestTip = raw.cloudBillMode
+    ? "Best match: your source cloud stays at its ACTUAL billed cost; the other cloud is estimated on the closest equivalent shape."
+    : "Best match: price every workload on the closest equivalent shape, using your real source-cloud instance prices where known.";
+  const topTip = raw.cloudBillMode
+    ? "Top of the line: a what-if — re-estimate EVERY cloud (including your source bill) on each cloud's newest-generation shape. Non-compute services stay at billed cost."
+    : "Top of the line: price every workload on each cloud's newest-generation shape.";
   const toggle = hasModes
     ? `<div class="mode-switch cross-cloud-switch" role="group" aria-label="Equivalent shape mode">
-         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "" : "is-active"}" data-cc-tier="best">Best match</button>
-         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "is-active" : ""}" data-cc-tier="top">Top of the line</button>
+         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "" : "is-active"}" data-cc-tier="best" title="${escapeHtml(bestTip)}">Best match</button>
+         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "is-active" : ""}" data-cc-tier="top" title="${escapeHtml(topTip)}">Top of the line</button>
        </div>`
     : "";
   const cards = [];
@@ -3841,6 +3887,7 @@ function renderCrossCloud() {
   const tier = state.crossCloudTopTier;
   const basisLabel = (v) => {
     if (v.basis === "actual bill") return "your actual billed cost";
+    if (v.basis === "what-if: bill re-shaped on newest-gen") return "what-if: your bill re-shaped on newest-gen";
     if (v.carriedRows) return `compute estimated · ${v.carriedRows} services at billed cost`;
     if (v.liveRows) return `live AWS Price List API (${v.liveRows} priced live)`;
     if (tier) return "newest-generation equivalent shape";
@@ -3878,8 +3925,11 @@ function renderCrossCloud() {
     `);
   }
   const srcCloud = raw.sourceCloud;
+  const srcName = srcCloud === "azure" ? "Azure" : "AWS";
   const note = raw.cloudBillMode
-    ? `Your ${srcCloud === "azure" ? "Azure" : "AWS"} total is your actual billed cost — no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services (storage, data transfer, managed services) at their billed cost. For directional comparison only — not a quote.`
+    ? (tier
+        ? `Top-of-the-line (what-if): every cloud — including your ${srcName} bill — is re-estimated on that cloud's newest-generation equivalent shape, so you can see what the same workloads would cost re-shaped. Non-compute services (storage, data transfer, managed services) stay at their actual billed cost. For directional comparison only — not a quote.`
+        : `Best match: your ${srcName} total is your actual billed cost — no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services at their billed cost. Switch to Top of the line to re-estimate your bill on newest-generation shapes. For directional comparison only — not a quote.`)
     : tier
     ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote."
     : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote.";

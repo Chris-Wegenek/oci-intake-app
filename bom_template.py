@@ -1359,11 +1359,17 @@ def _populate_ramp(ws, ramp, include_windows=False):
     chart_sty = {c: sty(51, c) for c in (1, 2)}
 
     # ---- clear everything below the month header ----
+    # Reset BOTH value and style: the reference layout has dark/blue header fills at
+    # fixed rows (e.g. the wave-sequencing and chart headers). When the month table
+    # grows past 12 months the layout shifts, so any fill we don't overwrite would be
+    # left behind as an orphan block. Blanking the style first prevents that; every
+    # cell we actually use gets its style re-applied below.
     for r in range(RAMP_FIRST_MONTH_ROW, 12 + RAMP_MAX_MONTHS + 60):
         for c in range(1, 2 + RAMP_MAX_MONTHS + 2):
             cell = ws.cell(r, c)
             if not isinstance(cell, MergedCell):
                 cell.value = None
+                cell.style = "Normal"
 
     # ---- layout: months -> grid -> wave sequencing -> chart source ----
     m_first, m_last = RAMP_FIRST_MONTH_ROW, RAMP_FIRST_MONTH_ROW + n - 1

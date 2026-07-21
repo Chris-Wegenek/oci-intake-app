@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import collections
+import functools
 import warnings
 
 warnings.filterwarnings("ignore", message="'cgi' is deprecated.*", category=DeprecationWarning)
@@ -2995,15 +2996,24 @@ CLOUD_SHAPE_MAP = _load_cloud_shape_map()
 CLOUD_SHAPE_KEYS_BY_LEN = sorted(CLOUD_SHAPE_MAP.keys(), key=len, reverse=True)
 
 
+@functools.lru_cache(maxsize=32768)
+def _cloud_shape_for_collapsed(collapsed):
+    """Pure substring scan over the instance-type keys. Memoized on the collapsed
+    alphanumeric string so the same workload context isn't re-scanned thousands of
+    times on a large bill. Returns the exact same shared CLOUD_SHAPE_MAP record the
+    uncached scan would, so results are byte-for-byte identical."""
+    for key in CLOUD_SHAPE_KEYS_BY_LEN:
+        if len(key) >= 4 and key in collapsed:
+            return CLOUD_SHAPE_MAP[key]
+    return None
+
+
 def lookup_cloud_shape(context):
     """Return the mapping-doc record whose instance type appears in the bill context, else None."""
     collapsed = re.sub(r"[^a-z0-9]", "", str(context).lower())
     if not collapsed:
         return None
-    for key in CLOUD_SHAPE_KEYS_BY_LEN:
-        if len(key) >= 4 and key in collapsed:
-            return CLOUD_SHAPE_MAP[key]
-    return None
+    return _cloud_shape_for_collapsed(collapsed)
 
 
 def _load_oci_shapes():
@@ -3167,12 +3177,17 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
             src_cost = to_number(row.get("sourceMonthlyCost"), 0)
 
             if cloud_bill_mode:
-                # Source cloud = the real bill: use the actual billed cost as-is.
-                if source_cloud and cloud == source_cloud:
+                source_is_this = bool(source_cloud and cloud == source_cloud)
+                # Best-match: the source cloud is your real bill — actual billed cost.
+                # Top-of-the-line: re-estimate even the source cloud on newest-gen
+                # shapes (a "what-if" — what the bill would cost re-shaped), so the
+                # toggle visibly moves the source card too.
+                if source_is_this and not top_of_line:
                     total += src_cost
                     actual_rows += 1
                     continue
-                # Other cloud: carry non-compute services at their source cost.
+                # Non-compute services can't be cross-priced, so carry them at their
+                # actual billed cost in every estimated mode.
                 if not is_compute:
                     total += src_cost
                     carried_rows += 1
@@ -3217,8 +3232,10 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                 continue
             total += inst["hourly"] * hours + windows
             estimated_rows += 1
-        if cloud_bill_mode and source_cloud and cloud == source_cloud:
+        if cloud_bill_mode and source_cloud and cloud == source_cloud and not top_of_line:
             basis = "actual bill"
+        elif cloud_bill_mode and source_cloud and cloud == source_cloud and top_of_line:
+            basis = "what-if: bill re-shaped on newest-gen"
         elif cloud_bill_mode and carried_rows:
             basis = "compute estimated · other services at source cost"
         elif live_rows:
@@ -4798,7 +4815,188 @@ def price_workspaces_row(row, hours=None):
     return (items, WS_PRODUCT, WS_CATEGORY, WS_DESKTOP_SKU, False)
 
 
+# ---- Azure usage-details resolvers -----------------------------------------
+# Azure VM families carry a fixed RAM-per-vCPU ratio, so the VM size token
+# (E16as v5, D8as v5, F8s v2 ...) fully determines vCPU and RAM. Suffix 'a' = AMD.
+AZURE_VM_RAM_PER_VCPU = {
+    "b": 4, "d": 4, "e": 8, "f": 2, "l": 8, "m": 14, "a": 2, "h": 4, "g": 15, "n": 6,
+}
+# Azure managed-disk / snapshot tier number -> provisioned GB (P/S/E share one ladder).
+AZURE_DISK_TIER_GB = {
+    1: 4, 2: 8, 3: 16, 4: 32, 6: 64, 10: 128, 15: 256, 20: 512, 30: 1024,
+    40: 2048, 50: 4096, 60: 8192, 70: 16384, 80: 32768,
+}
+
+
+def azure_vm_specs(*texts):
+    """Resolve an Azure VM size to (vcpu, ram_gb, vendor).
+    Reads the size token from MeterName / AdditionalInfo ServiceType, e.g.
+    'E16as v5', 'Standard_D8as_v5', 'E8-4as v5'. Returns None if not a VM size."""
+    blob = " ".join(clean_text(t) for t in texts if t)
+    if not blob:
+        return None
+    norm = blob.replace("Standard_", " ").replace("_", " ")
+    # family(1-2 letters) + size digits + optional -constrained + feature letters + vN
+    m = re.search(r"\b([A-Za-z]{1,2})(\d+)(?:-(\d+))?([a-z]*)\s*v?(\d+)?\b", norm)
+    if not m:
+        return None
+    family = m.group(1).lower()
+    size = int(m.group(2))
+    suffix = (m.group(4) or "").lower()
+    if size <= 0 or size > 512:
+        return None
+    ratio = AZURE_VM_RAM_PER_VCPU.get(family[0], 4)
+    vcpu = size
+    ram = size * ratio
+    vendor = "amd" if "a" in suffix else "intel"
+    return (vcpu, float(ram), vendor)
+
+
+def azure_disk_gb(*texts):
+    """Provisioned GB for one Azure managed disk / snapshot from its tier code
+    (P10/S15/E20 -> 128/256/512). Returns 0 if no tier code is present."""
+    blob = clean_text(" ".join(clean_text(t) for t in texts if t))
+    m = re.search(r"\b([PSE])(\d+)\b", blob)
+    if not m:
+        return 0
+    return AZURE_DISK_TIER_GB.get(int(m.group(2)), 0)
+
+
+def price_azure_vm_license_row(row):
+    """Azure 'Virtual Machines Licenses' lines are SQL Server / Windows licenses, NOT
+    compute. Left alone they match the generic Compute catalog item and get a bogus
+    inferred OCPU line. Map them the way the reference does: SQL Server -> Microsoft
+    SQL Server license-included (Standard $0.37 / Enterprise $1.47 per OCPU-hr, Express
+    $0); Windows -> BYOL ($0). Returns (items, label, category, sku, carried) or None."""
+    if "virtual machines licenses" not in normalize(row.get("__meterCategory")):
+        return None
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["source_product", "__meterName", "__meterSub", "__azureInfo"]))
+    qty = to_number(row.get("usage_quantity"), 0)
+    if "sql" in blob:
+        rate = sql_license_rate(blob)  # express -> 0, enterprise -> 1.47, else 0.37
+        edition = ("Express" if rate == 0 else
+                   "Enterprise" if rate == OCI_SQL_LICENSE_ENT_RATE else "Standard")
+        ocpu_hr = qty / 2.0            # Azure license vCPU-hours -> OCPU-hours (2 vCPU = 1 OCPU)
+        sku = "B91372" if rate == OCI_SQL_LICENSE_ENT_RATE else "B91373"
+        return ([{
+            "sku": sku,
+            "description": f"Microsoft SQL Server {edition} license-included",
+            "quantity": round(ocpu_hr, 4), "unit": "OCPU-hour", "rate": rate,
+            "monthly": money(ocpu_hr * rate),
+            "mapping": f"Azure SQL Server {edition} license re-priced on OCI: {qty:g} vCPU-hr / 2 "
+                       f"= {ocpu_hr:g} OCPU-hr x ${rate}/OCPU-hr. Express edition is $0. {SQL_NO_MANAGED_NOTE}",
+            "ociServiceUsage": True,
+        }], "Microsoft SQL Server License", "Database", sku, False)
+    # Windows (or other) VM license -> BYOL on OCI, no added charge.
+    return ([{
+        "sku": "", "description": "Windows Server license (BYOL on OCI)",
+        "quantity": round(qty, 4), "unit": "hour", "rate": 0.0, "monthly": 0.0,
+        "mapping": "Azure Windows Server VM license is BYOL on OCI — no added license charge.",
+        "ociServiceUsage": True,
+    }], "Windows Server License", "Licensing", "", False)
+
+
+def remap_snapshot_storage(row):
+    """Snapshots / volume backups are backup data that lives in object storage, not an
+    attachable block volume. Route the STORAGE (capacity) lines to OCI Object Storage
+    (Standard, $0.0255/GB, no performance units), or Archive ($0.0030/GB) when the tier
+    is explicitly cold (EBS Snapshot Archive, Azure archive tier, Glacier/Coldline).
+    Snapshot API/list/copy meters are left as-is (handled as requests, not capacity)."""
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["__usageType", "__meterName", "source_product", "source_service", "__meterSub"]))
+    if "snapshot" not in blob and "backup" not in blob:
+        return
+    # API / list / copy / operation meters are request counts, not stored GB.
+    if any(k in blob for k in ["list", "copy", "operation", "transaction", "apicall",
+                               "api call", "directapi", "request"]):
+        return
+    cold = any(k in blob for k in ["archive", "cold", "glacier", "deep archive", "coldline"])
+    row["oci_product"] = "OCI Archive Storage" if cold else "OCI Object Storage"
+    row["oci_service_category"] = "Storage"
+
+
+def price_azure_storage_ops_row(row):
+    """Azure disk/blob operation (transaction) meters bill in '10K' units. Left alone
+    they map to Block Volume and get mis-priced as GB. Managed-disk I/O is bundled into
+    OCI Block Volume performance units (no charge); blob/object operations map to OCI
+    Object Requests (B91627, $0.0034 / 10,000). Returns (items, label, cat, sku, carried)
+    or None."""
+    meter = normalize(row.get("__meterName"))
+    if "operation" not in meter and "transaction" not in meter:
+        return None
+    if not (clean_text(row.get("__meterCategory")) or clean_text(row.get("__consumedService"))):
+        return None
+    qty = to_number(row.get("usage_quantity"), 0)  # in 10,000-operation units
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["__meterName", "source_product", "__meterSub"]))
+    if "disk" in blob:
+        return ([{
+            "sku": "", "description": "Block Volume I/O (included on OCI)",
+            "quantity": round(qty, 4), "unit": "10,000 operations", "rate": 0.0, "monthly": 0.0,
+            "mapping": "Azure managed-disk operations are bundled into OCI Block Volume "
+                       "performance units — no per-operation charge.",
+            "ociServiceUsage": True,
+        }], "OCI Block Volumes", "Storage", "", False)
+    rate = 0.0034
+    return ([{
+        "sku": "B91627", "description": "OCI Object Storage - Requests (per 10K)",
+        "quantity": round(qty, 4), "unit": "10,000 requests", "rate": rate, "monthly": money(qty * rate),
+        "mapping": "Azure storage operations re-priced on OCI Object Requests at $0.0034 per 10,000.",
+        "ociServiceUsage": True,
+    }], "OCI Object Storage", "Storage", "B91627", False)
+
+
+def normalize_azure_storage_units(row):
+    """Azure managed-disk lines bill in disk-months; convert to provisioned GB
+    (disk-months x tier GB, e.g. 29 P10 disks x 128 GB) so the OCI Block Volume
+    pricer sees the real capacity. Snapshots already bill in GB, and disk-operation
+    lines are request counts — both are left untouched."""
+    meter = clean_text(row.get("__meterName"))
+    if not meter:
+        return
+    low = meter.lower()
+    if "operation" in low or "snapshot" in low or "transaction" in low or "disk" not in low:
+        return
+    gb = azure_disk_gb(meter)
+    qty = to_number(row.get("usage_quantity"), 0)
+    if gb <= 0 or qty <= 0:
+        return
+    row["usage_quantity"] = compact_number(qty * gb)
+    row["usage_unit"] = "GB"
+    row["__azureDiskGb"] = gb
+
+
+def is_azure_vm_row(row):
+    """True for an Azure Virtual Machine compute-hour line (not a disk/license/network)."""
+    cat = normalize(row.get("__meterCategory"))
+    consumed = normalize(row.get("__consumedService"))
+    info = clean_text(row.get("__azureInfo"))
+    if "virtual machines licenses" in cat:
+        return False
+    if cat == "virtual machines" or "computehr" in normalize(info):
+        return True
+    return "microsoft.compute" in consumed and normalize(row.get("usage_unit")) in ("1hour", "hour", "hours")
+
+
 def enrich_cloud_bill_resource_fields(row):
+    # Azure usage export: VM size comes from MeterName / AdditionalInfo, not a spec
+    # column. Size compute from the Azure family ratio (vCPU -> OCPU, RAM by family);
+    # every OTHER Azure line (storage, network, license, snapshot) is not OCI compute,
+    # so clear its specs — otherwise the meter-inference fallback invents bogus OCPU/RAM.
+    if clean_text(row.get("__meterCategory")) or clean_text(row.get("__consumedService")):
+        if is_azure_vm_row(row):
+            specs = azure_vm_specs(row.get("__meterName"), row.get("__azureInfo"),
+                                   row.get("source_product"))
+            if specs:
+                vcpu, ram, _vendor = specs
+                row["resource_ocpus"] = compact_number(max(1, math.ceil(vcpu / 2)))
+                row["resource_memory_gb"] = compact_number(ram)
+                return
+        row["resource_ocpus"] = ""
+        row["resource_memory_gb"] = ""
+        return
+
     # Detailed bills carry a usageType — use it to decide what is real compute.
     # Only EC2 instance-run lines (BoxUsage/SpotUsage/DedicatedUsage) are OCI compute;
     # everything else (EBS-optimized surcharges, CPU credits, RDS instance hours, etc.)
@@ -5041,9 +5239,12 @@ def dt_region_group(region, usagetype=""):
 
 
 def block_perf_units_per_gb(*texts):
-    """OCI Block Volume performance units per GB, by source EBS volume type:
-    gp3 -> 20, gp2 -> 15, everything else -> 10 (default Balanced)."""
+    """OCI Block Volume performance units per GB, by source volume type:
+    gp3 -> 20, gp2 -> 15, everything else -> 10 (default Balanced). Snapshots /
+    backups carry no provisioned performance, so they get 0 VPU (capacity only)."""
     blob = normalize(" ".join(clean_text(t) for t in texts if t))
+    if "snapshot" in blob or "backup" in blob:
+        return 0
     if "gp3" in blob:
         return 20
     if "gp2" in blob:
@@ -5967,6 +6168,17 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
     # RecordType column (AWS detailed billing reports stack rollup levels that each
     # re-total the whole bill — we keep only the most granular line-item level).
     recordtype_idx = next((i for i, h in enumerate(headers) if normalize(h).replace(" ", "") == "recordtype"), None)
+    # Azure usage-details exports carry the VM size, vCPU count, Windows flag, and disk
+    # tier in these columns (not in the generic mapped fields), so capture them raw for
+    # Azure compute sizing and disk-tier -> GB resolution.
+    def _hidx(*names):
+        want = {normalize(n).replace(" ", "") for n in names}
+        return next((i for i, h in enumerate(headers) if normalize(h).replace(" ", "") in want), None)
+    az_addinfo_idx = _hidx("additionalinfo")
+    az_meter_idx = _hidx("metername")
+    az_metercat_idx = _hidx("metercategory")
+    az_metersub_idx = _hidx("metersubcategory")
+    az_consumed_idx = _hidx("consumedservice")
     rows = []
     rate_card = build_rate_card(DEFAULT_SHAPE_KEY, True)
     provider_label = detected_provider if detected_provider != "Unknown" else ""
@@ -5990,8 +6202,15 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
             row["__usageType"] = clean_text(values[usagetype_idx])
         if recordtype_idx is not None and recordtype_idx < len(values):
             row["__recordType"] = clean_text(values[recordtype_idx])
+        for _key, _idx in (("__azureInfo", az_addinfo_idx), ("__meterName", az_meter_idx),
+                           ("__meterCategory", az_metercat_idx), ("__meterSub", az_metersub_idx),
+                           ("__consumedService", az_consumed_idx)):
+            if _idx is not None and _idx < len(values):
+                row[_key] = clean_text(values[_idx])
+        normalize_azure_storage_units(row)
         enrich_cloud_bill_resource_fields(row)
         seed_cloud_bill_mapping(row, fields, rate_card)
+        remap_snapshot_storage(row)
         if cloud_row_has_signal(row):
             rows.append(row)
 
@@ -7272,12 +7491,69 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in ws_items)
                 ws_handled = True
 
+        # Azure 'Virtual Machines Licenses' rows are SQL Server / Windows licenses, not
+        # compute — price them as licensing so they don't match the generic Compute
+        # catalog item and get a bogus inferred-OCPU line.
+        azlic_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not ws_handled:
+            az_result = price_azure_vm_license_row(row)
+            if az_result is not None:
+                az_items, az_label, az_cat, az_sku, _az_carried = az_result
+                line_items.extend(az_items)
+                row["oci_product"] = az_label
+                row["oci_service_category"] = az_cat
+                _az_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": az_sku, "ociProduct": az_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_az_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (az_items[0].get("unit") if az_items else ""),
+                    "confidence": 0.9, "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _az_src
+                totals["mappedSourceMonthlyCost"] += _az_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in az_items)
+                azlic_handled = True
+
+        # Azure disk/blob operation (transaction) meters -> Block Volume I/O (free) or
+        # Object Requests, not block-volume GB.
+        azops_handled = False
+        if cloud_bill_mode and not row_free_on_oci and not ws_handled and not azlic_handled:
+            ops_result = price_azure_storage_ops_row(row)
+            if ops_result is not None:
+                ops_items, ops_label, ops_cat, ops_sku, _oc = ops_result
+                line_items.extend(ops_items)
+                row["oci_product"] = ops_label
+                row["oci_service_category"] = ops_cat
+                _ops_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": ops_sku, "ociProduct": ops_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_ops_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (ops_items[0].get("unit") if ops_items else ""),
+                    "confidence": 0.9, "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _ops_src
+                totals["mappedSourceMonthlyCost"] += _ops_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in ops_items)
+                azops_handled = True
+
         # Authoritative storage pricing: a storage service maps to ONE OCI storage
         # product at its real rate (S3->Object Storage, EFS/FSx->File Storage,
         # EBS->Block Volume), priced on the actual storage-capacity quantity from the
         # bill — not scattered across catalog items per line.
-        storage_handled = oic_handled or rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled or ws_handled
-        if cloud_bill_mode and not row_free_on_oci and not oic_handled and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled and not ws_handled:
+        storage_handled = oic_handled or rds_handled or networking_handled or redshift_handled or waf_handled or obs_handled or ws_handled or azlic_handled or azops_handled
+        if cloud_bill_mode and not row_free_on_oci and not oic_handled and not rds_handled and not networking_handled and not redshift_handled and not waf_handled and not obs_handled and not ws_handled and not azlic_handled and not azops_handled:
             ut2 = normalize(row.get("__usageType"))
             base = clean_text(row.get("oci_product")).split(" (approx")[0].strip()
             # EBS volumes/snapshots bill under EC2 — route them to Block Volume.
@@ -7294,7 +7570,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     or not ut2
                 )
                 if is_capacity:
-                    _perf = block_perf_units_per_gb(row.get("__usageType"), row.get("source_product"))
+                    _perf = block_perf_units_per_gb(row.get("__usageType"), row.get("source_product"), row.get("__meterName"))
                     line_items.extend(oci_service_usage_items(base, row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType"), _perf))
                 sc = to_number(row.get("source_monthly_cost"), 0)
                 # Label every line of this service with its single OCI product so the
