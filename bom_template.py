@@ -419,13 +419,16 @@ def _field_source_text(f):
 
 
 def _find_field(fields, *needle_sets):
-    """First field whose ORIGINAL header matches any needle set (all terms present)."""
+    """First field whose ORIGINAL header matches any needle set (all terms present as
+    WHOLE WORDS). Word-boundary matching, not substring, so e.g. the 'app' role can't
+    latch onto the 'Mapping confidence' column ('app' is a substring of 'mapping') and
+    name every segment after the mapping-confidence value ('Service guide')."""
     for needles in needle_sets:
         for f in fields or []:
             if not isinstance(f, dict):
                 continue
-            text = _field_source_text(f)
-            if all(n in text for n in needles):
+            tokens = set(_field_source_text(f).split())
+            if all(n in tokens for n in needles):
                 return f.get("key")
     return None
 
@@ -782,13 +785,32 @@ def embed_architecture(ws_po, png_path, anchor_spec=None):
     """
     if not png_path or not Path(png_path).exists() or not anchor_spec:
         return False
+    from openpyxl.utils import get_column_letter
+    from openpyxl.utils.units import pixels_to_EMU
 
     fr = anchor_spec["from"]
     m1 = AnchorMarker(col=fr["col"], colOff=fr["colOff"], row=fr["row"], rowOff=fr["rowOff"])
     new = XLImage(str(png_path))
-    if anchor_spec.get("type") == "TwoCellAnchor" and "to" in anchor_spec:
-        t = anchor_spec["to"]
-        m2 = AnchorMarker(col=t["col"], colOff=t["colOff"], row=t["row"], rowOff=t["rowOff"])
+    # Anchor aspect-preserving so the diagram isn't stretched/compressed. A TwoCellAnchor
+    # forces the image to fill the exact cell rectangle (whatever its shape), which squishes
+    # a tall/portrait diagram. Instead, fit the WIDTH to the anchor's column span and derive
+    # the HEIGHT from the image's own proportions via a OneCellAnchor.
+    img_w = float(getattr(new, "width", 0) or 0)
+    img_h = float(getattr(new, "height", 0) or 0)
+    to = anchor_spec.get("to")
+    box_w_px = 0
+    if to and img_w > 0:
+        for c in range(fr["col"], to["col"]):          # columns spanned (0-indexed)
+            cd = ws_po.column_dimensions.get(get_column_letter(c + 1))
+            w = cd.width if (cd and cd.width) else 8.43
+            box_w_px += int(round(w * 7 + 5))          # width chars -> pixels (default font)
+    if box_w_px > 0 and img_w > 0:
+        disp_w = box_w_px
+        disp_h = int(round(box_w_px * img_h / img_w))  # keep the native aspect ratio
+        new.anchor = OneCellAnchor(_from=m1, ext=XDRPositiveSize2D(
+            cx=pixels_to_EMU(disp_w), cy=pixels_to_EMU(disp_h)))
+    elif anchor_spec.get("type") == "TwoCellAnchor" and to:
+        m2 = AnchorMarker(col=to["col"], colOff=to["colOff"], row=to["row"], rowOff=to["rowOff"])
         new.anchor = TwoCellAnchor(_from=m1, to=m2)
     else:
         ext = anchor_spec.get("ext_emu")
@@ -1192,6 +1214,126 @@ def _repoint_ramp_refs(ws_po, months, include_windows=False):
     ws_po["E17"] = f"=IFERROR($B$20*SUM({rng}),0)"
 
 
+# A cross-sheet reference token (quoted or bare sheet name + '!' + a cell/range). These
+# are captured and stashed so the row-shift below never rewrites another sheet's rows
+# (Consumption Ramp F12:F23, Compute!$A$14:..., DR!$B$5, Annexure ...).
+_CROSS_SHEET_REF = re.compile(
+    r"(?:'[^']*'|[A-Za-z_][\w.]*)!\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?")
+# A bare (same-sheet) A1 reference: optional $ before column and row.
+_BARE_REF = re.compile(r"(\$?)([A-Z]{1,3})(\$?)(\d+)")
+
+
+def _shift_same_sheet_rows(ws, lo, hi, delta):
+    """Re-point every SAME-SHEET row reference in [lo, hi] by -delta across the whole
+    sheet, leaving cross-sheet references untouched. Cross-sheet tokens are stashed as
+    placeholders first, the remaining bare refs are shifted, then the tokens restored."""
+    def rewrite(formula):
+        holds = []
+
+        def stash(m):
+            holds.append(m.group(0))
+            return "\x01%d\x01" % (len(holds) - 1)
+
+        tmp = _CROSS_SHEET_REF.sub(stash, formula)
+
+        def shift(m):
+            col_abs, col, row_abs, row = m.group(1), m.group(2), m.group(3), int(m.group(4))
+            if lo <= row <= hi:
+                row -= delta
+            return f"{col_abs}{col}{row_abs}{row}"
+
+        tmp = _BARE_REF.sub(shift, tmp)
+        for i, tok in enumerate(holds):
+            tmp = tmp.replace("\x01%d\x01" % i, tok)
+        return tmp
+
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell.value, str) and cell.value.startswith("="):
+                cell.value = rewrite(cell.value)
+
+
+def _relayout_pricing_overview(ws, delta=4):
+    """Close the empty gap above the Pricing Baseline so the comparison blocks and the
+    architecture diagram can stack beneath it. The Baseline + OCI Cost Profile band
+    (rows 12-23) shifts UP by `delta` (-> rows 8-19: Total Monthly -> B18, Total Annual
+    -> B19). Same-sheet formula row refs in the band are re-pointed; cross-sheet refs
+    (Consumption Ramp, DR, Annexure, Compute) are preserved. The floating notes/title
+    that would otherwise collide with the comparison blocks are re-homed below the
+    diagram (which the caller repositions to ~row 52)."""
+    from copy import copy as _copy
+    top, bot = 12, 23                          # source band
+
+    # --- capture the floating notes/title BEFORE the shift, then clear them out of the
+    #     band/comparison zone so the shift lands on clean cells ---
+    invest_note = ws["D23"].value              # yellow "Oracle is willing to invest..." (D23:H25)
+    invest_style = _copy(ws["D23"]._style)
+    open_note = ws["B25"].value                # "Open cost items not included above..."
+    open_style = _copy(ws["B25"]._style)
+    title_note = ws["D27"].value               # "Notional Architecture" (D27:P27)
+    title_style = _copy(ws["D27"]._style)
+    existing = {str(m) for m in ws.merged_cells.ranges}
+    for rng in ("D23:H25", "D27:P27"):
+        if rng in existing:
+            ws.unmerge_cells(rng)
+    for coord in ("D23", "B25", "D27"):
+        ws[coord].value = None
+        ws[coord].style = "Normal"
+
+    # --- (a) shift the band up. Ascending order so each source row is relocated before a
+    #     lower source row overwrites it. Copy value + style + number format per cell. ---
+    ncols = ws.max_column
+    inside = [m for m in list(ws.merged_cells.ranges)
+              if m.min_row >= top and m.max_row <= bot]     # e.g. A12:B12 "Pricing Baseline"
+    for m in inside:
+        ws.unmerge_cells(str(m))
+    for r in range(top, bot + 1):
+        for c in range(1, ncols + 1):
+            src = ws.cell(r, c)
+            dst = ws.cell(r - delta, c)
+            dst.value = src.value
+            dst._style = _copy(src._style)
+            dst.number_format = src.number_format
+    for m in inside:
+        ws.merge_cells(start_row=m.min_row - delta, start_column=m.min_col,
+                       end_row=m.max_row - delta, end_column=m.max_col)
+    # null out the now-vacated tail of the old band (rows 20-23)
+    for r in range(bot - delta + 1, bot + 1):
+        for c in range(1, ncols + 1):
+            cell = ws.cell(r, c)
+            cell.value = None
+            cell.style = "Normal"
+    # carry row heights 12-23 -> 8-19, then clear the vacated 20-23
+    for r in range(top, bot + 1):
+        h = ws.row_dimensions[r].height
+        if h is not None:
+            ws.row_dimensions[r - delta].height = h
+    for r in range(bot - delta + 1, bot + 1):
+        ws.row_dimensions[r].height = None
+
+    # --- (b) re-point same-sheet row refs in [12,23] by -delta everywhere on the sheet ---
+    _shift_same_sheet_rows(ws, top, bot, delta)
+
+    # --- (c) re-home the floating notes/title below where the diagram will sit (~52-95) ---
+    if title_note:
+        tr = 51
+        ws[f"D{tr}"] = title_note
+        ws[f"D{tr}"]._style = title_style
+        ws.merge_cells(start_row=tr, start_column=4, end_row=tr, end_column=16)
+    if open_note:
+        orow = 97
+        ws[f"A{orow}"] = open_note
+        ws[f"A{orow}"]._style = open_style
+        ws[f"A{orow}"].alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=orow, start_column=1, end_row=orow, end_column=11)
+    if invest_note:
+        irow = 99
+        ws[f"A{irow}"] = invest_note
+        ws[f"A{irow}"]._style = invest_style
+        ws[f"A{irow}"].alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=irow, start_column=1, end_row=irow, end_column=11)
+
+
 def _zero_unmodeled_sheets(wb):
     """The app doesn't model Networking, Security/KMS, DR or Storage-Backups yet, so the
     reference deliverable's hardcoded numbers are cleared — otherwise they'd inject cost
@@ -1468,7 +1610,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
                          shape=None, hours=None, block_rate=None, vpu_rate=None,
                          default_vpus=None, file_rate=None, windows_rate=None,
                          windows_sku=None, optimization=0.0, include_diagram=True,
-                         extra_services=None, cloud_comparison=None):
+                         extra_services=None, cloud_comparison=None, diagram_options=None):
     """Build the 12-sheet Full BOM workbook populated from the app's priced inventory.
 
     The workbook is built to tie out to the app EXACTLY:
@@ -1611,10 +1753,11 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     _add_licensing_line(wb["Pricing Overview"], windows_monthly)
     # App-added OCI services roll into the matching Pricing Overview lines (which sit inside
     # the total) and are itemized on the Networking sheet.
+    _extra_priced = None
     if extra_services:
         import oci_catalog
-        priced, _ = oci_catalog.price_extras(extra_services, hours)
-        _add_extra_services(wb, priced)
+        _extra_priced, _ = oci_catalog.price_extras(extra_services, hours)
+        _add_extra_services(wb, _extra_priced)
     # Cloud-bill mode: roll the non-compute mapped services into the Pricing Overview lines
     # so the template total covers the whole bill, not just compute.
     if cloud_comparison:
@@ -1624,6 +1767,25 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         _add_product_group_topics(wb, cloud_comparison.get("pricing") or pricing)
     ramp_months = _populate_ramp(wb["Consumption Ramp"], ramp, include_windows=windows_monthly > 0)
     _repoint_ramp_refs(wb["Pricing Overview"], ramp_months, include_windows=windows_monthly > 0)
+
+    # Re-layout the Pricing Overview ONLY in cloud-bill mode, where the AWS-vs-OCI
+    # comparison blocks need to stack beneath the baseline. Shift the Baseline + OCI Cost
+    # Profile band up by 4 (rows 12-23 -> 8-19, closing the gap); Total Monthly -> B18,
+    # Total Annual -> B19. On-prem BOMs have no comparison blocks, so the template's
+    # original layout (baseline at 12-23, diagram at row 29) is left untouched.
+    if cloud_comparison:
+        _relayout_pricing_overview(wb["Pricing Overview"], delta=4)
+
+    # Cloud-bill: add the AWS-vs-OCI comparison blocks (5-year projection, savings,
+    # chart) directly below the baseline on the Pricing Overview, wired to its live
+    # B18/B19 totals (post-relayout).
+    if cloud_comparison:
+        import bom_export
+        _cc_pricing = cloud_comparison.get("pricing") or pricing
+        _aws_monthly = float((_cc_pricing.get("totals") or {}).get("sourceMonthlyCost") or 0)
+        bom_export.add_comparison_to_pricing_overview(
+            wb["Pricing Overview"], 22, "$B$18", "$B$19",
+            _aws_monthly, bom_export._util_by_year(cloud_comparison.get("ramp")))
 
     # Architecture diagram generated from THIS BOM (deterministic; no model call).
     # If the diagram toolchain isn't available the export still succeeds — the template's
@@ -1635,10 +1797,25 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             _, arch_png = bom_diagram.build_architecture(
                 pricing, rows, keys, bom_name,
                 (shape or {}).get("shortLabel") or (shape or {}).get("label") or "",
-                sites=_distinct_sites(fields or [], rows or []))
+                sites=_distinct_sites(fields or [], rows or []),
+                extra_priced=_extra_priced, diagram_options=diagram_options or {})
             if arch_png:
-                embed_architecture(wb["Pricing Overview"], arch_png,
-                                   spec.get("architecture_anchor"))
+                # Drop the diagram to the BOTTOM of the sheet, below the comparison blocks.
+                # The spec anchor sits at Excel rows 29-72; shift it down so it starts at
+                # ~row 52 (2 rows below the comparison area) and keeps its 43-row height.
+                import copy as _copy
+                arch_anchor = spec.get("architecture_anchor")
+                if arch_anchor and cloud_comparison:
+                    # Cloud-bill only: the baseline was shifted up and the comparison
+                    # blocks now occupy ~rows 22-50, so drop the diagram below them to
+                    # ~row 52 (keeping its 43-row height). On-prem keeps the spec anchor
+                    # (row 29) since nothing moved.
+                    arch_anchor = _copy.deepcopy(arch_anchor)
+                    off = 52 - 29
+                    arch_anchor["from"]["row"] += off
+                    if "to" in arch_anchor:
+                        arch_anchor["to"]["row"] += off
+                embed_architecture(wb["Pricing Overview"], arch_png, arch_anchor)
         except Exception:
             # Don't swallow the reason silently — a missing diagram was undebuggable.
             import traceback

@@ -110,24 +110,61 @@ _SERVICE_STENCILS = {
 }
 
 
-def collect_services(pricing, max_items=8):
-    """Which OCI service groups the priced BOM actually contains, biggest $ first, mapped to
-    a stencil. Compute is excluded (it's the VM boxes). Only real, present services — nothing
-    invented. Returns [(stencil, label, monthly), ...]."""
+def _cloud_group_of():
     try:
         import bom_export
-        group_of = bom_export._cloud_product_group
+        return bom_export._cloud_product_group
     except Exception:
-        group_of = None
+        return None
+
+
+def _row_group(r, group_of):
+    """Product group for a priced bill row OR a synthetic add-in row (which carries its
+    group directly in __addinGroup, bypassing the cloud-bill mapper)."""
+    g = r.get("__addinGroup")
+    if g:
+        return g
+    cat = _clean(r.get("ociServiceCategory"))
+    return group_of(cat, r.get("sourceService")) if group_of else (cat or "")
+
+
+# Add-in group -> diagram category vocabulary.
+_ADDIN_GRP = {"Observability": "Obs. & Management", "Integration": "Other Services"}
+
+
+def _addins_as_rows(extra_priced):
+    """Priced 'Add OCI services' items -> synthetic diagram rows, so the diagram reflects
+    EVERYTHING the app priced (bill + add-ins), not just the bill. The group comes straight
+    from the add-in; a SQL Server license add-in is treated as a database, and Windows
+    licensing is skipped (it's already drawn as the Windows OS icon)."""
+    rows = []
+    for s in (extra_priced or []):
+        g = s.get("group") or "Other Services"
+        name = s.get("name") or ""
+        if g == "Licensing":
+            if "sql" in name.lower():
+                g = "Database"
+            else:
+                continue
+        g = _ADDIN_GRP.get(g, g)
+        mo = float(s.get("monthly") or 0)
+        rows.append({"ociServiceCategory": g, "ociProduct": name, "__addinGroup": g,
+                     "sourceService": "Add-in OCI service", "monthly": mo,
+                     "lineItems": [{"monthly": mo}]})
+    return rows
+
+
+def collect_services(pricing, max_items=12):
+    """Which OCI service groups the priced BOM actually contains (bill + add-ins), biggest
+    $ first, mapped to a stencil. Compute is excluded (it's the VM boxes). Only real,
+    present services — nothing invented. Returns [(stencil, label, monthly), ...]."""
+    group_of = _cloud_group_of()
     totals = {}
     for r in (pricing or {}).get("rows", []):
         if (r.get("costAction") or "") == "remove":
             continue
-        cat = _clean(r.get("ociServiceCategory"))
-        grp = group_of(cat, r.get("sourceService")) if group_of else (cat or "")
-        if not grp or grp == "Compute":
-            continue
-        if grp not in _SERVICE_STENCILS:
+        grp = _row_group(r, group_of)
+        if not grp or grp == "Compute" or grp not in _SERVICE_STENCILS:
             continue
         totals[grp] = totals.get(grp, 0.0) + float(r.get("monthly") or 0)
     out = []
@@ -137,6 +174,84 @@ def collect_services(pricing, max_items=8):
         stencil, label = _SERVICE_STENCILS[grp]
         out.append((stencil, label, mo))
     return out[:max_items]
+
+
+# OCI database product -> (stencil, short label). Order matters: most specific first.
+_DB_TYPE_STENCILS = [
+    ("autonomous data warehouse", "Database - Autonomous Data Warehouse ADW", "Autonomous DW"),
+    ("autonomous transaction",    "Database - Autonomous Transaction Processing ATP", "Autonomous TP"),
+    ("autonomous",                "Database - ADB", "Autonomous DB"),
+    ("exadata",                   "Database - Exadata", "Exadata"),
+    ("exadb",                     "Database - Exadata", "Exadata"),
+    ("goldengate",                "Database - GoldenGate", "GoldenGate"),
+    ("nosql",                     "Database - NoSQL", "NoSQL"),
+    ("mysql",                     "Database - MySQL", "MySQL / HeatWave"),
+    ("postgres",                  "Database - Database System", "PostgreSQL"),
+    ("sql server",                "Database - Database System", "SQL Server (on VM)"),
+    ("base database",            "Database - Database System", "Base Database"),
+    ("base db",                   "Database - Database System", "Base Database"),
+]
+
+
+def _db_dr_mechanism(label):
+    """The correct DR / replication mechanism for a database type. Data Guard is
+    Oracle-only — SQL Server on a VM uses OCI Full Stack DR, and the managed non-Oracle
+    databases replicate cross-region their own way."""
+    l = (label or "").lower()
+    if "autonomous" in l:
+        return "Autonomous Data Guard"
+    if "goldengate" in l:
+        return "GoldenGate replication"
+    if "sql server" in l:
+        return "OCI Full Stack DR"
+    if "mysql" in l:
+        return "MySQL cross-region replica"
+    if "postgres" in l:
+        return "PostgreSQL cross-region replica"
+    if "nosql" in l:
+        return "NoSQL cross-region replica"
+    return "Data Guard"          # Oracle Base Database / Exadata
+
+
+def collect_databases(pricing, max_items=5):
+    """Split the priced Database spend by product TYPE -> [(stencil, label, monthly), ...]
+    biggest $ first, so the diagram can show each managed-database type where it lives
+    (Autonomous, Base DB, MySQL, Exadata, GoldenGate, SQL Server ...). Only present,
+    priced databases; nothing invented."""
+    group_of = _cloud_group_of()
+    totals = {}
+    for r in (pricing or {}).get("rows", []):
+        if (r.get("costAction") or "") == "remove":
+            continue
+        if _row_group(r, group_of) != "Database":
+            continue
+        prod = _norm(r.get("ociProduct"))
+        mo = sum(li.get("monthly", 0) for li in (r.get("lineItems") or [])) or float(r.get("monthly") or 0)
+        stencil, label = "Database", "Database"
+        for kw, st, lb in _DB_TYPE_STENCILS:
+            if kw in prod:
+                stencil, label = st, lb
+                break
+        key = (stencil, label)
+        totals[key] = totals.get(key, 0.0) + mo
+    out = [(st, lb, mo) for (st, lb), mo in sorted(totals.items(), key=lambda kv: -kv[1]) if mo > 0]
+    return out[:max_items]
+
+
+def service_group_totals(pricing):
+    """Full {product-group: monthly$} map (no cap, includes Compute) so the diagram can
+    decide which real services to place inside the architecture (databases in the data
+    tier, KMS/monitoring in shared services, etc.). Only present, priced services."""
+    group_of = _cloud_group_of()
+    totals = {}
+    for r in (pricing or {}).get("rows", []):
+        if (r.get("costAction") or "") == "remove":
+            continue
+        grp = _row_group(r, group_of)
+        if not grp:
+            continue
+        totals[grp] = totals.get(grp, 0.0) + float(r.get("monthly") or 0)
+    return {g: m for g, m in totals.items() if m > 0}
 
 
 # ---- layout grid (px) -------------------------------------------------------
@@ -151,7 +266,7 @@ DR_Y, DR_H = 1400, 700           # 1400 .. 2020
 
 
 def build_spec(pricing, segments, bom_name="", shape_label="", segment_source="",
-               sites=None, include_dr=True):
+               sites=None, include_dr=True, diagram_options=None):
     """Full landing-zone architecture: internet + on-prem edge, hub VCN with DMZ /
     inspection / shared-services subnets, one spoke VCN per workload segment with app and
     data subnets, object-storage backup, and (optionally) a DR region.
@@ -164,6 +279,32 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     totals = (pricing or {}).get("totals", {}) or {}
     cust = bom_name or "Customer"
     n = max(1, len(segments))
+    # Diagram options (region names + availability-domain split) from the app menu.
+    _opts = diagram_options or {}
+    primary_region = _region_label(_opts.get("primaryRegion"))
+    dr_region = _region_label(_opts.get("drRegion"))
+    # AD capability is authoritative from the region, not the client. A named region
+    # gets its real AD count; only an unnamed/"Auto" region falls back to the hint.
+    _region_key = _clean(_opts.get("primaryRegion"))
+    if _region_key:
+        region_ads = _region_ad_count(_region_key)
+    else:
+        region_ads = int(_opts.get("primaryAds") or 1)
+    ad_split = bool(_opts.get("splitADs")) and region_ads > 1
+    # Is a Full Stack DR add-in actually priced in this BOM?
+    dr_priced = any(
+        "full stack disaster recovery" in str(r.get("ociProduct", "")).lower()
+        or "full stack dr" in str(r.get("ociProduct", "")).lower()
+        for r in ((pricing or {}).get("rows") or [])
+    )
+    # DR is drawn only when the app's "Enable DR" toggle is on (falls back to include_dr
+    # for older callers/tests that don't pass the option). When on, only the resource
+    # types the user chose are replicated into the secondary region.
+    dr_enabled = bool(_opts.get("enableDr")) if ("enableDr" in _opts) else include_dr
+    _rep = _opts.get("drReplicate") or {}
+    rep_vms = bool(_rep.get("vms", True))
+    rep_dbs = bool(_rep.get("dbs", True))
+    rep_obj = bool(_rep.get("object", True))
 
     # Mapped OCI services present in the BOM -> a second row of icons under the governance
     # band. Only shown when there's a real spread of services (cloud-bill imports); a lone
@@ -172,12 +313,30 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     if len(services) < 2:
         services = []
     SVC_DY = 190 if services else 0
+    # Full presence map so real services can be placed WHERE they live in the topology:
+    # databases + data-platform services in the spoke data subnets, KMS/monitoring/WAF in
+    # the hub shared/edge tiers. Driven by the priced BOM (nothing invented).
+    svc_present = service_group_totals(pricing)
+    db_types = collect_databases(pricing)          # managed databases split by type
+    _has_db = bool(db_types)
+    _has_sec = svc_present.get("Security", 0) > 0
+    _has_obs = svc_present.get("Obs. & Management", 0) > 0
+    _has_ai = svc_present.get("AI & Machine Learning", 0) > 0
+    _waf_present = any(
+        "web application firewall" in _norm(r.get("ociProduct")) or "waf" in _norm(r.get("sourceService"))
+        for r in (pricing or {}).get("rows", []) if (r.get("costAction") or "") != "remove")
+    # FastConnect present anywhere in the priced BOM (bill line OR add-in) — the diagram
+    # (incl. DR) must reflect dedicated FastConnect connectivity when the user prices it.
+    _has_fc = any(
+        "fastconnect" in _norm(r.get("ociProduct")) or "fast connect" in _norm(r.get("ociProduct"))
+        or "fastconnect" in _norm(r.get("sourceService")) or "fast connect" in _norm(r.get("sourceService"))
+        for r in (pricing or {}).get("rows", []) if (r.get("costAction") or "") != "remove")
 
     spoke_x0 = HUB_X + HUB_W + GAP
     content_r = spoke_x0 + n * (SPOKE_W + GAP) - GAP
     region_w = content_r - REGION_X + 40
     tenancy_w = region_w + 64
-    bottom = (DR_Y + DR_H) if include_dr else (VCN_Y + VCN_H + 60)
+    bottom = (DR_Y + DR_H) if dr_enabled else (VCN_Y + VCN_H + 60)
     notes_y = bottom + 50                 # base position; the draw offset SVC_DY is added later
     page_h = notes_y + SVC_DY + 300
     page_w = REGION_X + region_w + 140
@@ -242,15 +401,16 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         link("sites", "cpe", "Site-to-Site VPN", "dashed")
     link("users", "igw", "HTTPS", "solid")
     link("onprem", "cpe", "WAN", "solid")
-    link("cpe", "drg", "FastConnect / IPSec VPN", "solid")
+    link("cpe", "drg", "FastConnect (priced)" if _has_fc else "FastConnect / IPSec VPN", "solid")
 
     # ---- region + hub -------------------------------------------------------
     box("region",
-        ("Primary OCI Region\n"
+        (f"Primary OCI Region{(' — ' + primary_region) if primary_region else ''}\n"
          f"{int(sum(s['vms'] for s in segments)):,} migrated VMs · "
          f"{totals.get('ocpus', 0):,.0f} OCPU · "
          f"{totals.get('memoryGb', 0):,.0f} GB RAM · "
-         f"{totals.get('blockStorageGb', 0):,.0f} GB block storage"),
+         f"{totals.get('blockStorageGb', 0):,.0f} GB block storage"
+         + (f"  ·  compute spread across {region_ads} availability domains" if ad_split else "")),
         REGION_X, 270, region_w, 1010, "region")
 
     box("hubvcn", "Hub VCN\n10.10.0.0/16 | DRG attachment", HUB_X, VCN_Y, HUB_W, VCN_H, "vcn")
@@ -270,6 +430,14 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     icon("pdns", "Networking - DNS", "Private DNS\nforwarding", sx + sw - 124, 922)
     icon("drg", "Networking - Dynamic Routing Gateway DRG", "Shared DRG\nhub-spoke transit",
          HUB_X + HUB_W // 2 - 44, 1092)
+    # Real edge/shared services placed where they belong, driven by the BOM.
+    if _waf_present:
+        icon("waf", "Identity and Security - WAF",
+             "Web Application\nFirewall (WAF)", sx + sw - 128, 484)
+        link("waf", "lb", "Filter ingress", "solid")
+    if _has_sec:
+        icon("vault", "Identity and Security - Vault", "Vault / KMS",
+             sx + sw // 2 - 44, 922)
 
     link("igw", "lb", "Ingress", "solid")
     link("lb", "fw", "Inspect", "solid")
@@ -290,42 +458,94 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         box(f"{sid}_data", f"{seg['name']} Private Data / Storage Subnet\n10.{third}.2.0/24",
             ax, 720, aw, 280, "subnet")
 
+        _ad_note = ""
+        if ad_split:
+            _per_ad = max(1, round(seg["vms"] / region_ads))
+            _ad_note = f"\nacross {region_ads} ADs (~{_per_ad}/AD)"
         icon(f"{sid}vm", "Compute - Virtual Machine VM",
              (f"{seg['vms']:,} {seg['name']} VMs\n"
               f"{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB RAM"
-              + (f"\n{shape_label} flex" if shape_label else "")),
+              + (f"\n{shape_label} flex" if shape_label else "")
+              + _ad_note),
              ax + 60, 500, 96)
         # Attached block volumes are part of the VM — not drawn as a separate icon.
         if seg["win"] > 0:
             icon(f"{sid}lic", "Governance and Administration - License Manager",
                  f"Windows OS licensing\n${seg['win']:,.0f}/mo (3rd-party)",
                  ax + aw - 156, 500, 96)
-        # Local backup bucket in the data/storage subnet.
-        icon(f"{sid}bkt", "Storage - Object Storage",
-             f"{seg['name']} backup bucket\nObject Storage", ax + 60, 800, 96)
+        # Data / storage tier: managed database (where the DBs live) + object-storage
+        # backup bucket. The DB icon is drawn as the target pattern in every spoke's data
+        # subnet when the BOM contains any managed-database spend (cost is summarized once
+        # in the services band, not multiplied per spoke).
+        if db_types:
+            # One icon per managed-database TYPE, evenly distributed (centered per cell) so
+            # 1 DB sits centered and 5 fill a 3-col grid without cramming; backup bucket in
+            # the right margin. $/mo is the BOM total for that type.
+            n = len(db_types)
+            per_row = min(3, n)
+            nrows = (n + per_row - 1) // per_row
+            avail = aw - 170                       # reserve right margin for the bucket
+            cellw = avail // per_row
+            dsz = 84 if n <= 3 else 68
+            y0 = 800 if nrows == 1 else 758
+            for k, (stencil, label, mo) in enumerate(db_types):
+                col, row = k % per_row, k // per_row
+                cx = ax + 20 + col * cellw + (cellw - dsz) // 2
+                nid = f"{sid}db{k}"
+                icon(nid, stencil, f"{label}\n${mo:,.0f}/mo", cx, y0 + row * 116, dsz)
+                if k == 0:
+                    link(f"{sid}vm", nid, "App -> DB", "solid")
+            # Backup bucket sits at the BOTTOM of the spoke VCN (below the data subnet),
+            # clear of the database icons/labels.
+            icon(f"{sid}bkt", "Storage - Object Storage",
+                 f"{seg['name']} backup bucket\nObject Storage",
+                 ax + aw // 2 - 44, VCN_Y + VCN_H - 130, 88)
+        else:
+            icon(f"{sid}bkt", "Storage - Object Storage",
+                 f"{seg['name']} backup bucket\nObject Storage",
+                 ax + aw // 2 - 44, VCN_Y + VCN_H - 130, 88)
 
         link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
         # The attached block volume needs no backup edge — backups live at the DR site.
 
-    # ---- DR region (target pattern; not priced in this BOM) ------------------
-    if include_dr:
+    # ---- DR region (only when the app's Enable DR toggle is on) --------------
+    if dr_enabled:
+        _rep_bits = []
+        if rep_vms: _rep_bits.append("compute standbys")
+        if rep_dbs: _rep_bits.append("database replicas")
+        if rep_obj: _rep_bits.append("object / block backups")
+        _rep_txt = ", ".join(_rep_bits) if _rep_bits else "region shell only"
+        _dr_head = f"Secondary OCI Region for DR{(' — ' + dr_region) if dr_region else ''}"
+        _dr_sub = (f"Replicating: {_rep_txt}"
+                   + ("  ·  Full Stack DR priced in this BOM"
+                      if dr_priced else
+                      "  ·  target pattern (add Full Stack DR to cost it)"))
         box("drregion",
-            "Secondary OCI Region for DR — target landing-zone pattern\n"
-            "NOT priced in this BOM (no DR requirement in the source inventory)",
+            f"{_dr_head}\n{_dr_sub}",
             REGION_X, DR_Y, region_w, DR_H, "region")
         box("drhub", "DR Landing Zone / Orchestration VCN\n10.110.0.0/16 | DRG + remote peering",
             HUB_X, DR_Y + 90, HUB_W, DR_H - 150, "vcn")
         box("drorch", "OCI Full Stack DR orchestration",
             HUB_X + 28, DR_Y + 150, HUB_W - 56, 190, "plain")
-        for j, t in enumerate([
-                "DR protection groups per workload spoke",
-                "Prechecks, drills and switchover / failover plans",
-                "Block Volume + Object Storage cross-region copy",
-                "Database replication where a database is in scope"]):
+        # Orchestration bullets reflect what's ACTUALLY priced/selected — so an added
+        # FastConnect port or a managed DB (bill or add-in) shows up here, not a fixed list.
+        _dr_bullets = ["DR protection groups per workload spoke",
+                       "Prechecks, drills and switchover / failover plans"]
+        if rep_obj:
+            _dr_bullets.append("Block Volume + Object Storage cross-region copy")
+        if rep_dbs and _has_db:
+            _dr_bullets.append("Managed-database replication (Data Guard / cross-region replicas)")
+        if _has_fc:
+            _dr_bullets.append("Dedicated FastConnect connectivity into the DR region")
+        for j, t in enumerate(_dr_bullets):
             text(f"dro{j}", "· " + t, HUB_X + 48, DR_Y + 196 + j * 30, HUB_W - 96, 24)
         icon("drdrg", "Networking - Remote Peering Gateway", "DR DRG\nremote peering",
              HUB_X + HUB_W // 2 - 44, DR_Y + 470)
         link("drg", "drdrg", "DRG remote peering / DR routing", "dashed")
+        # When FastConnect is priced, the customer edge reaches the DR region over
+        # FastConnect too — draw that so DR reflects the added connectivity.
+        if _has_fc:
+            link("cpe", "drdrg", "FastConnect to DR region", "solid")
 
         for i, seg in enumerate(segments):
             x = spoke_x0 + i * (SPOKE_W + GAP)
@@ -337,17 +557,43 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             box(f"{sid}dr_app", f"{seg['name']} DR App Subnet\n10.{third}.1.0/24",
                 ax, DR_Y + 150, aw, 200, "subnet")
             box(f"{sid}dr_data", f"{seg['name']} DR Data / Restore Subnet\n10.{third}.2.0/24",
-                ax, DR_Y + 380, aw, 200, "subnet")
-            icon(f"{sid}drvm", "Compute - Virtual Machine VM",
-                 f"{seg['vms']:,} {seg['name']}\nstandby VMs", ax + 56, DR_Y + 212, 88)
-            # The block-volume capacity is shown here as optional DR backups, not as a
-            # priced primary-region tier.
-            icon(f"{sid}drblk", "Storage - Block Storage",
-                 f"(Optional) Backups\n{seg['block']:,.0f} GB", ax + 56, DR_Y + 442, 88)
-            icon(f"{sid}drbkt", "Storage - Object Storage",
-                 f"{seg['name']} DR target\nbucket", ax + aw - 144, DR_Y + 442, 88)
-            link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
-            link("drdrg", f"{sid}drvm", "DR transit", "dashed")
+                ax, DR_Y + 380, aw, 250, "subnet")
+            # Only the resource types the user chose to replicate are drawn in the DR
+            # region. Compute standbys, managed-DB replicas, and object/block backups are
+            # each independently gated by the app's "Replicate to DR" selection.
+            if rep_vms:
+                icon(f"{sid}drvm", "Compute - Virtual Machine VM",
+                     f"{seg['vms']:,} {seg['name']}\nstandby VMs", ax + 56, DR_Y + 212, 88)
+                link("drdrg", f"{sid}drvm", "DR transit", "dashed")
+            # Optional Data Guard / Autonomous-DR standbys, one per primary DB type, evenly
+            # distributed to mirror the primary data tier. (Per-DB replication links are
+            # omitted — they'd cross the whole page; the DR orchestration note already states
+            # databases replicate cross-region.)
+            db_slots = db_types[:6] if (rep_dbs and db_types) else []
+            if db_slots:
+                nd = len(db_slots)
+                pr = min(3, nd)
+                avail = aw - (150 if rep_obj else 40)   # reserve right margin for backups
+                cw = avail // pr
+                for k, (stencil, label, mo) in enumerate(db_slots):
+                    col, row = k % pr, k // pr
+                    cx = ax + 14 + col * cw + (cw - 56) // 2
+                    icon(f"{sid}drdb{k}", stencil,
+                         f"(Opt.) {label}\n{_db_dr_mechanism(label)}",
+                         cx, DR_Y + 412 + row * 106, 56)
+            if rep_obj:
+                if db_slots:
+                    icon(f"{sid}drbkt", "Storage - Object Storage",
+                         "DR target\nbucket", ax + aw - 118, DR_Y + 412, 64)
+                    icon(f"{sid}drblk", "Storage - Block Storage",
+                         f"(Opt.) block\nbackups {seg['block']:,.0f} GB",
+                         ax + aw - 118, DR_Y + 520, 64)
+                else:
+                    icon(f"{sid}drblk", "Storage - Block Storage",
+                         f"(Optional) Backups\n{seg['block']:,.0f} GB", ax + 56, DR_Y + 442, 88)
+                    icon(f"{sid}drbkt", "Storage - Object Storage",
+                         f"{seg['name']} DR target\nbucket", ax + aw - 144, DR_Y + 442, 88)
+                link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
 
     # ---- notes --------------------------------------------------------------
     win_total = sum(s["win"] for s in segments)
@@ -415,19 +661,58 @@ def render(spec, out_dir, name="oci_architecture"):
     return drawio, (png if png and png.exists() else None)
 
 
+OCI_REGION_LABELS = {
+    "us-ashburn-1": "US East (Ashburn)", "us-phoenix-1": "US West (Phoenix)",
+    "us-chicago-1": "US Midwest (Chicago)", "us-sanjose-1": "US West (San Jose)",
+    "ca-toronto-1": "Canada Southeast (Toronto)", "ca-montreal-1": "Canada Southeast (Montreal)",
+    "sa-saopaulo-1": "Brazil East (São Paulo)", "eu-frankfurt-1": "Germany Central (Frankfurt)",
+    "uk-london-1": "UK South (London)", "eu-amsterdam-1": "Netherlands NW (Amsterdam)",
+    "eu-zurich-1": "Switzerland North (Zurich)", "eu-paris-1": "France Central (Paris)",
+    "eu-madrid-1": "Spain Central (Madrid)", "ap-tokyo-1": "Japan East (Tokyo)",
+    "ap-osaka-1": "Japan Central (Osaka)", "ap-seoul-1": "South Korea Central (Seoul)",
+    "ap-singapore-1": "Singapore", "ap-sydney-1": "Australia East (Sydney)",
+    "ap-mumbai-1": "India West (Mumbai)", "me-dubai-1": "UAE East (Dubai)",
+    "me-jeddah-1": "Saudi Arabia West (Jeddah)",
+}
+
+
+# Authoritative availability-domain count per commercial OCI region. Only these
+# multi-AD regions can spread compute across ADs; everything else is single-AD, so
+# an AD split is physically impossible there and must be refused server-side.
+OCI_REGION_ADS = {
+    "us-ashburn-1": 3, "us-phoenix-1": 3, "uk-london-1": 3, "eu-frankfurt-1": 3,
+}
+
+
+def _region_ad_count(key):
+    """AD count for a named region (defaults to 1 for single-AD/unknown regions)."""
+    return OCI_REGION_ADS.get(_clean(key), 1)
+
+
+def _region_label(key):
+    key = _clean(key)
+    return f"{OCI_REGION_LABELS.get(key, key)} ({key})" if key else ""
+
+
 def build_architecture(pricing, rows, fields_keys, bom_name="", shape_label="", out_dir=None,
-                       sites=None):
+                       sites=None, extra_priced=None, diagram_options=None):
     """Convenience: BOM -> segments -> spec -> (drawio, png). Returns (drawio, png).
 
     `sites` is the number of DISTINCT sites found in the inventory's site/location column,
     or None when the inventory has no such column — in which case the diagram says so
     rather than drawing sites that don't exist.
+    `extra_priced` is the priced 'Add OCI services' list (oci_catalog.price_extras output);
+    it's folded into the pricing the diagram reads so the picture matches the whole BOM.
     """
     segments = collect_segments(pricing, rows, fields_keys)
     if not segments:
         return None, None
+    if extra_priced:
+        pricing = dict(pricing or {})
+        pricing["rows"] = list(pricing.get("rows") or []) + _addins_as_rows(extra_priced)
     spec = build_spec(pricing, segments, bom_name, shape_label,
-                      segment_source=segment_source(rows, fields_keys), sites=sites)
+                      segment_source=segment_source(rows, fields_keys), sites=sites,
+                      diagram_options=diagram_options or {})
     out_dir = out_dir or tempfile.mkdtemp(prefix="ocidiag_")
     return render(spec, out_dir, name="oci_architecture")
 

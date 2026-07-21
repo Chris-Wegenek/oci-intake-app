@@ -29,6 +29,11 @@ const state = {
   // Services the user added from the "Add OCI services" panel. Each: {id, catalogId, name,
   // group, sku, unit, basis, values, monthly}. Included in totals and both BOM exports.
   extraServices: [],
+  // Diagram & DR options (region names + availability-domain split for the architecture diagram).
+  diagramOptions: {
+    primaryRegion: "", drRegion: "", splitADs: false, primaryAds: 1,
+    enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
+  },
   catalog: { groups: [], results: [], group: "", query: "", groupsOpen: {} },
   autoTier: "best",
   shapeOverrides: {},
@@ -295,9 +300,10 @@ const els = {
 // the nodes on every click, so it works regardless of load order or any later re-render
 // (a stale node reference or an init error further down can't break it).
 document.addEventListener("click", (event) => {
-  const toggle = event.target.closest("#addServicesToggle");
+  const toggle = event.target.closest("#addServicesToggle, #diagramOptionsToggle");
   if (!toggle) return;
-  const body = document.querySelector("#addServicesBody");
+  const bodyId = toggle.id === "diagramOptionsToggle" ? "#diagramOptionsBody" : "#addServicesBody";
+  const body = document.querySelector(bodyId);
   if (!body) return;
   const willOpen = body.hasAttribute("hidden");
   body.toggleAttribute("hidden", !willOpen);
@@ -305,11 +311,53 @@ document.addEventListener("click", (event) => {
   toggle.classList.toggle("is-open", willOpen);
   const icon = toggle.querySelector(".add-services-toggle-icon");
   if (icon) icon.textContent = willOpen ? "－" : "＋";  // − when open, ＋ when closed
-  if (willOpen && typeof fetchCatalog === "function"
+  if (toggle.id === "addServicesToggle" && willOpen && typeof fetchCatalog === "function"
       && !(state.catalog && state.catalog.groups && state.catalog.groups.length)) {
     fetchCatalog();
   }
 });
+
+// Diagram & DR options: region picks + AD split. The primary region's AD count enables
+// the "split across ADs" toggle; a 1-AD region can't split.
+const state_diagramOptions_default = {
+  primaryRegion: "", drRegion: "", splitADs: false, primaryAds: 1,
+  enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
+};
+function _syncAdSplitControl() {
+  const sel = document.querySelector("#primaryRegion");
+  const chk = document.querySelector("#splitAcrossADs");
+  const hint = document.querySelector("#adSplitHint");
+  if (!sel || !chk) return;
+  const ads = Number(sel.selectedOptions[0]?.dataset.ads || 1);
+  state.diagramOptions.primaryRegion = sel.value;
+  state.diagramOptions.primaryAds = ads;
+  chk.disabled = ads < 2;
+  if (ads < 2) { chk.checked = false; state.diagramOptions.splitADs = false; }
+  if (hint) hint.textContent = ads >= 2 ? `${ads} availability domains available` : "Pick a multi-AD region to enable";
+}
+document.querySelector("#primaryRegion")?.addEventListener("change", _syncAdSplitControl);
+document.querySelector("#splitAcrossADs")?.addEventListener("change", (e) => {
+  state.diagramOptions.splitADs = !!e.target.checked;
+});
+document.querySelector("#drRegion")?.addEventListener("change", (e) => {
+  state.diagramOptions.drRegion = e.target.value;
+});
+// Enable-DR toggle reveals the DR sub-options (region + which resources to replicate).
+document.querySelector("#enableDr")?.addEventListener("change", (e) => {
+  const on = !!e.target.checked;
+  state.diagramOptions.enableDr = on;
+  const sub = document.querySelector("#drSubOptions");
+  if (sub) sub.hidden = !on;
+});
+function _syncDrReplicate() {
+  state.diagramOptions.drReplicate = {
+    vms: !!document.querySelector("#drRepVms")?.checked,
+    dbs: !!document.querySelector("#drRepDbs")?.checked,
+    object: !!document.querySelector("#drRepObj")?.checked,
+  };
+}
+["#drRepVms", "#drRepDbs", "#drRepObj"].forEach((sel) =>
+  document.querySelector(sel)?.addEventListener("change", _syncDrReplicate));
 
 function rowSourceName(row) {
   return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
@@ -1736,6 +1784,8 @@ async function exportToExcel(template = "quick") {
         // Services added from the "Add OCI services" panel — priced server-side and folded
         // into the export totals and the matching Pricing Overview lines.
         extraServices: state.extraServices || [],
+        // Region / AD-split / DR-region choices for the architecture diagram.
+        diagramOptions: state.diagramOptions || {},
         template, // "quick" = compact BOM+Overview, "full" = 12-sheet deliverable
       }),
     });
@@ -2606,23 +2656,27 @@ function renderResults(pricing) {
   const discPct = state.ociDiscount || 0;
   const extrasList = extraServicesMonthly();          // list price (for the "before discount" figure)
   const extras = extraServicesEffective();            // after OCI discount (excl. 3rd-party licensing)
-  const ociEff = ociEffectiveMonthly(pricing) + extras;
+  // Windows (and other 3rd-party) licensing is a real OCI charge — include it in the
+  // headline so it matches the ramp ceiling, the Full BOM, and the actual OCI bill.
+  // It's never discounted (3rd-party), so it's added at list on top of discounted services.
+  const windowsLicensing = (pricing.rows || []).reduce(
+    (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
+  const ociEff = ociEffectiveMonthly(pricing) + extras + windowsLicensing;
   const ociEffAnnual = ociEff * 12;
-  const extrasMeta = extras
-    ? ` · incl. ${formatCompactCurrency(extras)} added services`
-    : "";
+  const extrasMeta = (extras ? ` · incl. ${formatCompactCurrency(extras)} added services` : "")
+    + (windowsLicensing ? ` · incl. ${formatCompactCurrency(windowsLicensing)} Windows licensing` : "");
   const pricingCards = `
     ${resultKpiCard({
       label: (cloudBill ? "OCI-equivalent monthly" : "Monthly run rate") + (discPct ? ` (after ${discPct}% discount)` : ""),
       value: formatCompactCurrency(ociEff),
       meta: (discPct
-        ? `${formatCompactCurrency(ociEffAnnual)} annualized · ${formatCompactCurrency(pricing.totals.monthly + extrasList)} list before discount`
+        ? `${formatCompactCurrency(ociEffAnnual)} annualized · ${formatCompactCurrency(pricing.totals.monthly + extrasList + windowsLicensing)} list before discount`
         : `${formatCompactCurrency(ociEffAnnual)} annualized`) + extrasMeta,
       accent: "#c74634",
       fill: monthlyScale,
       primary: true,
       title: discPct
-        ? `${formatCurrency(ociEff)} monthly after ${discPct}% OCI discount (list ${formatCurrency(pricing.totals.monthly + extrasList)}); 3rd-party licensing excluded from discount`
+        ? `${formatCurrency(ociEff)} monthly after ${discPct}% OCI discount (list ${formatCurrency(pricing.totals.monthly + extrasList + windowsLicensing)}); 3rd-party licensing excluded from discount`
         : `${formatCurrency(ociEff)} monthly; ${formatCurrency(ociEffAnnual)} annualized`,
     })}
     ${resultKpiCard({
@@ -4187,6 +4241,13 @@ function clientLineCost(entry, v) {
   if (cid === "block") {
     const gb = Number(v.gb || 0), vpus = Number(v.vpus || 10);
     return Math.round((gb * 0.0255 + gb * vpus * 0.0017) * 100) / 100;
+  }
+  if (cid === "fsdr") {
+    // Full Stack DR: member OCPUs (compute+DB, both regions) + DB ECPUs + OIC packs.
+    const ocpu = Number(v.p_compute || 0) + Number(v.p_db_ocpu || 0) + Number(v.s_compute || 0) + Number(v.s_db_ocpu || 0);
+    const ecpu = Number(v.p_db_ecpu || 0) + Number(v.s_db_ecpu || 0);
+    const oic = Number(v.p_oic || 0) + Number(v.s_oic || 0);
+    return Math.round((ocpu * 0.0128 + ecpu * 0.0032 + oic * 0.192) * hours * 100) / 100;
   }
   if (cid === "adb") {
     // Autonomous AI Database: ECPU + storage + backup (mirror of oci_catalog.line_cost).

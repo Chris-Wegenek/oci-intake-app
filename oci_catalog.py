@@ -77,6 +77,13 @@ KMS_VAULT_RATE = 3.724     # Virtual Private Vault per hour (B90328)
 KMS_EXTERNAL_RATE = 3.00   # External Key Management per key version-month (B98100)
 KMS_HSM_RATE = 1.75        # Dedicated Key Management HSM partition per hour (B99597, min 3)
 
+# OCI Full Stack Disaster Recovery, metered per member per hour, summed across the
+# primary AND standby protection groups. Compute + Database member OCPUs bill at the OCPU
+# rate; Database member ECPUs at the ECPU rate; OIC message packs at the 5K-msg rate.
+FSDR_OCPU_RATE = 0.0128     # OCPU per hour (B95485)
+FSDR_ECPU_RATE = 0.0032     # ECPU per hour (B110274)
+FSDR_OIC_RATE = 0.192       # 5K messages per hour, per OIC message pack (B112110)
+
 # Microsoft SQL Server license-included (OCI marketplace compute image), per OCPU-hour.
 SQL_ENT_RATE = 1.47        # SQL Server Enterprise (B91372)
 SQL_STD_RATE = 0.37        # SQL Server Standard (B91373)
@@ -315,6 +322,21 @@ def _curated():
         "(B98100) + Dedicated HSM partitions $1.75/hr (B99597, min 3). Software key versions "
         "are free (B92092).")
 
+    # ---- Disaster Recovery ----
+    add("fsdr", "Other Services", "Full Stack Disaster Recovery", "B95485", FSDR_OCPU_RATE,
+        "member-hours (both regions)", "hour",
+        [_sf("p_compute", "Primary: Compute Member OCPUs", "OCPU", 0, 1, 0),
+         _sf("p_db_ocpu", "Primary: Database Member OCPUs", "OCPU", 0, 1, 0),
+         _sf("p_db_ecpu", "Primary: Database Member ECPUs", "ECPU", 0, 1, 0),
+         _sf("p_oic", "Primary: OIC Message Packs", "pack", 0, 1, 0),
+         _sf("s_compute", "Standby: Compute Member OCPUs", "OCPU", 0, 1, 0),
+         _sf("s_db_ocpu", "Standby: Database Member OCPUs", "OCPU", 0, 1, 0),
+         _sf("s_db_ecpu", "Standby: Database Member ECPUs", "ECPU", 0, 1, 0),
+         _sf("s_oic", "Standby: OIC Message Packs", "pack", 0, 1, 0)],
+        "OCI Full Stack DR, metered per member-hour across BOTH protection groups: "
+        "Compute + DB member OCPUs at $0.0128/OCPU-hr (B95485), DB member ECPUs at "
+        "$0.0032/ECPU-hr (B110274), OIC message packs at $0.192/pack-hr (B112110).")
+
     # ---- Observability / Other ----
     add("logging", "Observability", "Logging (ingest)", "B92707",
         _svc_rate("OCI Logging", fallback=0.05), "GB / month", "month",
@@ -477,6 +499,13 @@ def line_cost(entry, values, hours=HOURS_PER_MONTH):
         rate = OIC_ENT_RATE if edition == "enterprise" else OIC_STD_RATE
         return round(oic_packs(values, hours) * rate * hours, 2)
 
+    # Full Stack DR: OCPU + ECPU + OIC-pack members, summed across both protection groups.
+    if entry["id"] == "fsdr":
+        ocpu = v.get("p_compute", 0) + v.get("p_db_ocpu", 0) + v.get("s_compute", 0) + v.get("s_db_ocpu", 0)
+        ecpu = v.get("p_db_ecpu", 0) + v.get("s_db_ecpu", 0)
+        oic = v.get("p_oic", 0) + v.get("s_oic", 0)
+        return round((ocpu * FSDR_OCPU_RATE + ecpu * FSDR_ECPU_RATE + oic * FSDR_OIC_RATE) * hours, 2)
+
     # Block volume: capacity + performance units, two SKUs.
     if entry["id"] == "block":
         gb, vpus = v.get("gb", 0), v.get("vpus", 10)
@@ -586,6 +615,13 @@ def line_breakdown(entry, values, hours=HOURS_PER_MONTH):
         edition = str(values.get("edition") or "standard").lower()
         rate = OIC_ENT_RATE if edition == "enterprise" else OIC_STD_RATE
         li("B89639", "Oracle Integration Cloud - " + ("Enterprise" if edition == "enterprise" else "Standard"), oic_packs(values, hours), rate, True)
+    elif cid == "fsdr":
+        ocpu = v.get("p_compute", 0) + v.get("p_db_ocpu", 0) + v.get("s_compute", 0) + v.get("s_db_ocpu", 0)
+        ecpu = v.get("p_db_ecpu", 0) + v.get("s_db_ecpu", 0)
+        oic = v.get("p_oic", 0) + v.get("s_oic", 0)
+        li("B95485", "Full Stack DR - Compute + DB Member OCPUs", ocpu, FSDR_OCPU_RATE, True)
+        li("B110274", "Full Stack DR - Database Member ECPUs", ecpu, FSDR_ECPU_RATE, True)
+        li("B112110", "Full Stack DR - OIC Message Packs", oic, FSDR_OIC_RATE, True)
     elif cid == "object":
         li("B91628", "Object Storage - Storage", max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB), OBJ_STORAGE_RATE)
         li("B91627", "Object Storage - Requests", max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS), OBJ_REQUEST_RATE)

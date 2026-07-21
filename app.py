@@ -8756,6 +8756,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
                     # quantities we export, so the template takes no extra OCPU discount.
                     optimization=0.0,
                     cloud_comparison=cloud_comparison,
+                    diagram_options=payload.get("diagramOptions") or {},
                 )
                 safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
                 download_name = f"{safe_name}_Full_BOM.xlsx" if safe_name else "OCI_Full_BOM.xlsx"

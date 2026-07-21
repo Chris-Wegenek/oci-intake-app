@@ -767,6 +767,168 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     dcell.font = Font(italic=True, size=9, color="FF808080")
 
 
+def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annual_ref,
+                                       aws_monthly, util_by_year,
+                                       aws_ramp=(0.5, 0.0, 0.0, 0.0, 0.0)):
+    """Render the Cloud Bill Overview's below-row-7 blocks (5-Year Cost Projection,
+    AWS-vs-OCI savings, Existing-spend ramp %, Chart Data + chart) onto the Pricing
+    Overview at `start_row`, wired to that sheet's live OCI total cells:
+      oci_monthly_ref / oci_annual_ref  e.g. "$B$22" / "$B$23"  (same-sheet refs)
+      aws_monthly  = current AWS spend, written as an editable input value
+      util_by_year = OCI 5-year utilization ramp (list of 5 fractions)
+      aws_ramp     = existing-AWS spend ramp per year (default 50% yr1, 0% after),
+                     kept as live editable % cells feeding the Combined / Savings math.
+    """
+    from openpyxl.chart import BarChart, LineChart, Reference
+    from openpyxl.chart.marker import DataPoint
+    from openpyxl.drawing.fill import PatternFillProperties, ColorChoice
+    from openpyxl.chart.shapes import GraphicalProperties
+    from openpyxl.formatting.rule import CellIsRule
+
+    s = start_row
+
+    def band(cell, text, size=13):
+        c = ws[cell]
+        c.value = text
+        c.fill = _fill(OV_NAVY)
+        c.font = Font(bold=True, color="FFFFFFFF", size=size)
+        c.alignment = CENTER
+
+    def colhead(cell, text):
+        c = ws[cell]
+        c.value = text
+        c.fill = _fill(OV_BLUE)
+        c.font = Font(bold=True, color="FFFFFFFF")
+        c.alignment = CENTER
+
+    # ---- 5-Year Cost Projection (OCI utilization ramp) ----
+    ws.merge_cells(f"A{s}:D{s}")
+    band(f"A{s}", "5-Year Cost Projection")
+    for col, text in (("A", "Year"), ("B", "Utilization %"), ("C", "OCI Annual Cost"), ("D", "Cumulative")):
+        colhead(f"{col}{s+1}", text)
+    for y in range(5):
+        r = s + 2 + y
+        ws[f"A{r}"] = y + 1
+        ws[f"A{r}"].alignment = CENTER
+        util = util_by_year[y] if y < len(util_by_year) else 1.0
+        b = ws[f"B{r}"]
+        b.value = round(util, 4); b.number_format = PCT0; b.alignment = CENTER; b.fill = _fill(OV_INPUT)
+        ws[f"C{r}"] = f"={oci_annual_ref}*B{r}"
+        ws[f"D{r}"] = (f"=C{r}" if y == 0 else f"=D{r-1}+C{r}")
+        ws[f"C{r}"].number_format = MONEY2
+        ws[f"D{r}"].number_format = MONEY2
+    tr = s + 7
+    ws.merge_cells(f"A{tr}:B{tr}")
+    ws[f"A{tr}"] = "5-Year Total"
+    ws[f"C{tr}"] = f"=SUM(C{s+2}:C{s+6})"
+    ws[f"D{tr}"] = f"=D{s+6}"
+    for col in "ABCD":
+        ws[f"{col}{tr}"].font = Font(bold=True)
+        ws[f"{col}{tr}"].fill = _fill(OV_LIGHT)
+    ws[f"C{tr}"].number_format = MONEY2
+    ws[f"D{tr}"].number_format = MONEY2
+    _box(ws, s+2, 2, s+6, 2, OV_INPUT_BORDER, "thin")
+    _box(ws, s+1, 1, tr, 4, OV_NAVY, "thin")
+
+    # ---- Existing-AWS spend ramp % (editable; default 50% yr1, 0% after) ----
+    ws.merge_cells(f"H{s}:J{s}")
+    band(f"H{s}", "Existing Spend — Ramp %", size=12)
+    for col, text in (("H", "Year"), ("I", "Existing (AWS) Cost"), ("J", "Existing Util %")):
+        colhead(f"{col}{s+1}", text)
+    aws_cell = f"$B${s+10}"  # the "Current AWS Spend (monthly)" input, defined below (row sv+1 = s+10)
+    for y in range(5):
+        r = s + 2 + y
+        ws[f"H{r}"] = f"Year {y+1}"; ws[f"H{r}"].alignment = CENTER
+        v = ws[f"J{r}"]
+        rv = aws_ramp[y] if y < len(aws_ramp) else 0.0
+        v.value = round(rv, 4); v.number_format = PCT0; v.alignment = CENTER; v.fill = _fill(OV_INPUT)
+        ws[f"I{r}"] = f"={aws_cell}*12*J{r}"
+        ws[f"I{r}"].number_format = MONEY2
+    _box(ws, s+2, 10, s+6, 10, OV_INPUT_BORDER, "thin")
+    _box(ws, s+1, 8, s+6, 10, OV_NAVY, "thin")
+
+    # ---- Current AWS Spend vs. OCI Estimate ----
+    sv = s + 9
+    ws.merge_cells(f"A{sv}:D{sv}")
+    band(f"A{sv}", "Current AWS Spend vs. OCI Estimate")
+    rows_spec = [
+        (f"A{sv+1}", "Current AWS Spend (monthly):", f"B{sv+1}", float(aws_monthly or 0), MONEY2),
+        (f"A{sv+2}", "OCI Estimated Monthly:", f"B{sv+2}", f"={oci_monthly_ref}", MONEY2),
+        (f"A{sv+3}", "Estimated Monthly Savings:", f"B{sv+3}", f"=B{sv+1}-B{sv+2}", MONEY2),
+        (f"A{sv+4}", "Estimated 5-Year Savings:", f"B{sv+4}", f"=F{s+23}", MONEY2),
+        (f"A{sv+5}", "Savings % vs. AWS:", f"B{sv+5}", f"=IF(B{sv+1}=0,0,(B{sv+1}-B{sv+2})/B{sv+1})", "0.0%"),
+    ]
+    for la, label, ba, val, fmt in rows_spec:
+        ws[la] = label; ws[la].font = Font(bold=True)
+        c = ws[ba]; c.value = val; c.number_format = fmt; c.alignment = CENTER
+    ws[f"B{sv+1}"].fill = _fill(OV_INPUT)
+    _box(ws, sv+1, 2, sv+1, 2, OV_INPUT_BORDER, "medium")
+    ws.conditional_formatting.add(
+        f"B{sv+3}:B{sv+5}",
+        CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="FF008000", bold=True)),
+    )
+
+    # ---- Chart Data — Comparison ----
+    cd = s + 16
+    ws.merge_cells(f"A{cd}:F{cd}")
+    band(f"A{cd}", "Chart Data — Comparison", size=12)
+    for col, text in (("A", "Year"), ("B", "OCI Estimate"), ("C", "Existing (AWS) Cost"),
+                      ("D", "Combined Cost"), ("E", "Current Spend"), ("F", "Total Savings")):
+        colhead(f"{col}{cd+1}", text)
+    ws[f"A{cd+2}"] = "Today"; ws[f"A{cd+2}"].alignment = CENTER
+    ws[f"C{cd+2}"] = f"={aws_cell}*12"
+    ws[f"E{cd+2}"] = f"={aws_cell}*12"
+    ws[f"F{cd+2}"] = f"=E{cd+2}-C{cd+2}"
+    for y in range(5):
+        r = cd + 3 + y
+        ws[f"A{r}"] = f"Year {y+1}"; ws[f"A{r}"].alignment = CENTER
+        ws[f"B{r}"] = f"=C{s+2+y}"          # OCI Estimate (annual, ramped by utilization)
+        ws[f"C{r}"] = f"=I{s+2+y}"          # Existing (AWS) still running — reflects the ramp
+        ws[f"D{r}"] = f"=B{r}+C{r}"         # Combined migration cost = OCI + remaining AWS
+        ws[f"E{r}"] = f"={aws_cell}*12"     # Current Spend = STATIC full annual AWS (do-nothing baseline)
+        # Total Savings is CUMULATIVE — each year adds that year's (Current Spend - Combined).
+        ws[f"F{r}"] = f"=F{r-1}+(E{r}-D{r})"
+    for r in range(cd+2, cd+8):
+        for col in "BCDEF":
+            ws[f"{col}{r}"].number_format = MONEY2
+    _box(ws, cd+1, 1, cd+7, 6, OV_NAVY, "thin")
+    ws.conditional_formatting.add(
+        f"F{cd+2}:F{cd+7}",
+        CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="FF008000", bold=True)))
+    ws.conditional_formatting.add(
+        f"F{cd+2}:F{cd+7}",
+        CellIsRule(operator="lessThan", formula=["0"], font=Font(color="FFC00000", bold=True)))
+
+    # ---- Comparison chart (stacked columns + Current Spend reference line) ----
+    chart = BarChart()
+    chart.type = "col"; chart.grouping = "stacked"; chart.overlap = 100; chart.varyColors = False
+    chart.title = "Current AWS Spend vs. OCI Estimate (Today + 5-Year)"
+    chart.height = 9; chart.width = 20
+    chart.legend.position = "b"; chart.legend.overlay = False
+    data = Reference(ws, min_col=2, max_col=3, min_row=cd+1, max_row=cd+7)
+    cats = Reference(ws, min_col=1, min_row=cd+2, max_row=cd+7)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    for idx, color in enumerate(["C00000", "808080"]):
+        if idx >= len(chart.series):
+            continue
+        ser = chart.series[idx]
+        ser.graphicalProperties = GraphicalProperties(solidFill=color)
+        ser.dPt = []
+        for pt in range(6):
+            dp = DataPoint(idx=pt)
+            dp.graphicalProperties = GraphicalProperties(solidFill=color)
+            ser.dPt.append(dp)
+    line = LineChart(); line.varyColors = False
+    ldata = Reference(ws, min_col=5, max_col=5, min_row=cd+1, max_row=cd+7)
+    line.add_data(ldata, titles_from_data=True)
+    if line.series:
+        lgp = GraphicalProperties(); lgp.line.solidFill = "E6A9A9"; lgp.line.width = 28000
+        line.series[0].graphicalProperties = lgp; line.series[0].smooth = False
+    chart += line
+    ws.add_chart(chart, f"H{sv}")
+
+
 _CLOUD_GROUP_MAP = {
     "compute": "Compute", "containers": "Compute",
     "containers and functions": "Compute",
