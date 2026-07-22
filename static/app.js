@@ -2297,14 +2297,19 @@ function navigateStep(step) {
 function aggregateSkuCosts(pricing) {
   const bySku = new Map();
   pricing.rows.forEach((row) => {
-    row.lineItems.forEach((item) => {
-      const current = bySku.get(item.sku) || {
-        sku: item.sku,
-        description: item.description,
-        monthly: 0,
-      };
+    (row.lineItems || []).forEach((item) => {
+      // Group by SKU. Line items with NO sku (SQL/ADW license-included, carried-over AWS
+      // cost, etc.) are grouped by their description instead of all being lumped under
+      // whichever empty-SKU line came first — otherwise SQL licenses + Autonomous DW get
+      // mislabeled as "Carried over from source AWS cost". Trailing size hints like
+      // "(4 OCPU)" / "(GB-mo)" are stripped so same-kind lines merge into one bucket.
+      const label = item.sku
+        ? item.description
+        : (item.description || "Unlabeled").replace(/\s*\([^)]*\)\s*$/, "");
+      const key = item.sku || label;
+      const current = bySku.get(key) || { sku: item.sku, description: label, monthly: 0 };
       current.monthly += item.monthly;
-      bySku.set(item.sku, current);
+      bySku.set(key, current);
     });
   });
   return [...bySku.values()].sort((a, b) => b.monthly - a.monthly);
@@ -2962,6 +2967,32 @@ function renderCostMix(skuCosts, total) {
       `;
     })
     .join("");
+
+  // Collapse the SKU list to the top few (keeps the panel even with the "Top source lines"
+  // box); the toggle expands to show every SKU. CSS hides rows 9+ when .is-collapsed.
+  const toggle = document.querySelector("#costMixToggle");
+  const legend = els.costLegend;
+  const COLLAPSE_AT = 8;
+  if (toggle && legend) {
+    const many = skuCosts.length > COLLAPSE_AT;
+    toggle.hidden = !many;
+    toggle.dataset.count = String(skuCosts.length);
+    if (many) {
+      legend.classList.add("is-collapsed");
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.textContent = `Show all ${skuCosts.length} SKUs`;
+    } else {
+      legend.classList.remove("is-collapsed");
+    }
+    if (!toggle.dataset.wired) {
+      toggle.dataset.wired = "1";
+      toggle.addEventListener("click", () => {
+        const collapsed = legend.classList.toggle("is-collapsed");
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+        toggle.textContent = collapsed ? `Show all ${toggle.dataset.count} SKUs` : "Show less";
+      });
+    }
+  }
 }
 
 function fallbackEntityName(row, noun = "Workload") {

@@ -2974,9 +2974,41 @@ td input[type="checkbox"] {
 .results-grid {
   display: grid;
   grid-template-columns: minmax(320px, 1.05fr) minmax(320px, 1fr);
-  align-items: start;
+  align-items: stretch;
   gap: 16px;
   margin-top: 16px;
+}
+
+/* Cost-mix panel is a column so its SKU list can fill/collapse to match the
+   neighbouring "Top source lines" box height. */
+.cost-mix-panel {
+  display: flex;
+  flex-direction: column;
+}
+.cost-mix-panel .cost-mix {
+  flex: 1 1 auto;
+  align-items: start;
+  min-height: 0;
+}
+/* Collapsed: show the top SKUs only; the rest fold away behind the toggle. */
+.cost-legend.is-collapsed .legend-row:nth-of-type(n + 9) {
+  display: none;
+}
+.cost-mix-toggle {
+  margin: 0 18px 16px auto;
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong, #c7bfb2);
+  border-radius: 999px;
+  background: var(--surface, #fff);
+  color: var(--redwood-dark, #7a3126);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.cost-mix-toggle:hover {
+  background: var(--surface-2, #f0eee8);
+  border-color: var(--redwood, #c74634);
 }
 
 .insight-panel {

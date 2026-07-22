@@ -4189,8 +4189,14 @@ def price_oic_row(row, oic_anchor_row_id=None, packs=None):
 
 
 # ---- Amazon Redshift -> Oracle Autonomous Data Warehouse (ADW) ----
-# Reference logic: Serverless RPU compute -> ADW ECPU = ROUNDUP(RPU-hours/744) x 2,
-# priced at $0.336/ECPU-hr x 744; Redshift Managed Storage -> $0.024/GB-month.
+# Sizing: Redshift Serverless is USAGE-based (1 RPU = 2 vCPU / 16 GB, billed per RPU-hour,
+# scales to zero when idle). ADW ECPU is always-on (4 ECPU = 1 OCPU = 1 core = 2 vCPU, so
+# 1 vCPU = 2 ECPU). To avoid pricing an always-on ADW against pay-per-use Serverless, we size
+# the ADW BASE to the amortized average capacity — avg RPU = total RPU-hours / 744 — as
+# ECPU = max(2, ROUNDUP(avg RPU)), and rely on ADW auto-scaling (up to 3x the base, billed
+# only when used) to absorb bursts, mirroring Serverless elasticity. Priced $0.336/ECPU-hr x
+# 744; Redshift Managed Storage -> $0.024/GB-month. (Was ROUNDUP(avg RPU) x 2, which sized an
+# always-on ADW at ~2x the actual Serverless spend.)
 OCI_ADW_PRODUCT = "Oracle Autonomous Data Warehouse"
 OCI_ADW_ECPU_RATE = 0.336
 OCI_ADW_STORAGE_RATE = 0.024
@@ -4207,10 +4213,10 @@ def _is_redshift_rpu_row(row):
 
 
 def collect_redshift_compute(rows):
-    """Aggregate Redshift Serverless RPU-hours across the bill into a single ADW
-    ECPU figure (ECPU = ROUNDUP(total RPU-hrs / 744) x 2), and pick the largest
-    RPU line to carry that whole compute cost (so per-line rounding doesn't inflate
-    it, matching the reference's single aggregated calc)."""
+    """Aggregate Redshift Serverless RPU-hours across the bill into a single ADW ECPU
+    figure: base ECPU = max(2, ROUNDUP(total RPU-hrs / 744)) — i.e. the amortized average
+    RPU rounded up (min 2 ECPU), with ADW auto-scaling covering peaks. Picks the largest RPU
+    line to carry the whole compute cost so per-line rounding doesn't inflate it."""
     total_rpu = 0.0
     best_id, best_qty = None, 0.0
     for r in rows or []:
@@ -4220,7 +4226,7 @@ def collect_redshift_compute(rows):
         total_rpu += q
         if q > best_qty:
             best_qty, best_id = q, r.get("__id")
-    ecpu = math.ceil(total_rpu / OCI_ADW_HOURS) * 2 if total_rpu > 0 else 0
+    ecpu = max(2, math.ceil(total_rpu / OCI_ADW_HOURS)) if total_rpu > 0 else 0
     return {"ecpu": ecpu, "total_rpu": total_rpu, "row_id": best_id}
 
 
@@ -4243,8 +4249,10 @@ def price_redshift_row(row, compute_ctx=None):
                 "sku": "", "description": f"Autonomous Data Warehouse ({ecpu} ECPU)",
                 "quantity": ecpu, "unit": "ECPU", "rate": OCI_ADW_ECPU_RATE,
                 "monthly": money(monthly),
-                "mapping": (f"Redshift Serverless {ctx.get('total_rpu', qty):,.0f} RPU-hr (total) -> ADW {ecpu} ECPU "
-                            f"(ROUNDUP(RPU-hr/744)x2) x ${OCI_ADW_ECPU_RATE}/ECPU-hr x {OCI_ADW_HOURS}."),
+                "mapping": (f"Redshift Serverless {ctx.get('total_rpu', qty):,.0f} RPU-hr (total; avg "
+                            f"{ctx.get('total_rpu', qty) / OCI_ADW_HOURS:,.1f} RPU) -> ADW base {ecpu} ECPU "
+                            f"(max(2, ROUNDUP(RPU-hr/744)); auto-scaling covers peaks) x "
+                            f"${OCI_ADW_ECPU_RATE}/ECPU-hr x {OCI_ADW_HOURS}."),
             }], OCI_ADW_PRODUCT, "Database", "", False)
         # Other RPU lines fold into the aggregated compute -> $0 here.
         return ([{"sku": "", "description": "Autonomous Data Warehouse (ECPU folded into aggregate)",
