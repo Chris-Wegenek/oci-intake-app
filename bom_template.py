@@ -1701,7 +1701,8 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
                          shape=None, hours=None, block_rate=None, vpu_rate=None,
                          default_vpus=None, file_rate=None, windows_rate=None,
                          windows_sku=None, optimization=0.0, include_diagram=True,
-                         extra_services=None, cloud_comparison=None, diagram_options=None):
+                         extra_services=None, cloud_comparison=None, diagram_options=None,
+                         workflow_json=None):
     """Build the 12-sheet Full BOM workbook populated from the app's priced inventory.
 
     The workbook is built to tie out to the app EXACTLY:
@@ -1970,6 +1971,16 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     # Hide any printout sheet that ended up with no data (empty Storage/Networking/DR/
     # Security KMS/Applications/Annexure), so the deliverable doesn't ship blank sections.
     _hide_empty_sheets(wb, apps, storage_rows)
+
+    # Embed the app workflow (hidden _workflow sheet) so this Full BOM can be re-imported
+    # via "Load previous BOM" — same as the Quick/comparison export.
+    if workflow_json:
+        try:
+            import bom_export
+            bom_export.embed_workflow_state(wb, workflow_json)
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tf:

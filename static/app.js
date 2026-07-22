@@ -974,6 +974,7 @@ function syncModeUi() {
 function setIntakeMode(mode) {
   state.intakeMode = mode === "cloud_bill" ? "cloud_bill" : "on_prem";
   state.providerHint = state.intakeMode === "cloud_bill" ? state.providerHint : "auto";
+  clearIntakeStatuses();   // switching intake path — drop stale load/convert banners
   syncModeUi();
   state.pricing = null;
   if (state.rows.length) {
@@ -1489,6 +1490,7 @@ function showSelectedDoc(name, sub) {
 
 async function uploadFile(file) {
   if (!file) return;
+  clearIntakeStatuses();   // starting a fresh upload — drop any load/convert banners
   state.lastUploadFile = file;
   showSelectedDoc(file.name, "Reading file…");
   setUploadLoading(true, file.name);
@@ -2115,6 +2117,13 @@ async function applyWorkflowState(wf) {
 }
 
 // Show the dropped/selected workflow file name + whether it was accepted.
+function clearIntakeStatuses() {
+  // Hide the "Load previous BOM" and "Convert an alternate BOM" result banners so a stale
+  // success/error doesn't linger when the user switches to a different intake path.
+  if (els.loadWorkflowStatus) els.loadWorkflowStatus.hidden = true;
+  if (els.convertBomStatus) els.convertBomStatus.hidden = true;
+}
+
 function setWorkflowStatus(name, message, state) {
   const el = els.loadWorkflowStatus;
   if (!el) return;
@@ -2128,6 +2137,7 @@ function setWorkflowStatus(name, message, state) {
 
 async function loadWorkflowFromFile(file) {
   if (!file) return;
+  clearIntakeStatuses();   // switching to load — clear the convert banner
   const nm = file.name || "file";
   const okExt = /\.(json|xlsx)$/i.test(nm);
   setWorkflowStatus(nm, okExt ? "loaded — checking…" : "not a .json or .xlsx file", okExt ? "loading" : "error");
@@ -4035,6 +4045,7 @@ function setConvertStatus(name, message, phase) {
 }
 async function convertBomFromFile(file) {
   if (!file) return;
+  clearIntakeStatuses();   // switching to convert — clear the load banner
   const nm = file.name || "bom";
   const okExt = /\.(xlsx|xls|csv|tsv)$/i.test(nm);
   setConvertStatus(nm, okExt ? "converting…" : "not an .xlsx / .csv file", okExt ? "loading" : "error");
@@ -4134,6 +4145,7 @@ function renderCrossCloud() {
   const basisLabel = (v) => {
     if (v.basis === "actual bill") return "your actual billed cost";
     if (v.basis === "what-if: bill re-shaped on newest-gen") return "what-if: your bill re-shaped on newest-gen";
+    if (v.basis && v.basis.startsWith("compute + services re-priced")) return v.basis;
     if (v.carriedRows) return `compute estimated · ${v.carriedRows} services at billed cost`;
     if (v.liveRows) return `live AWS Price List API (${v.liveRows} priced live)`;
     if (tier) return "newest-generation equivalent shape";

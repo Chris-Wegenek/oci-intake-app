@@ -3141,6 +3141,89 @@ def equivalent_instance(cloud, vendor, vcpus, mem, top_of_line=False):
     return min(pool, key=lambda r: abs(r["vcpu"] - vcpus) + abs(r["mem"] - mem) / 8.0)
 
 
+# Re-price OCI-mapped non-compute services on Azure from the SAME usage (map AWS -> OCI ->
+# equal Azure usage) instead of carrying the source bill 1:1. Keyed by the OCI line-item SKU:
+# (factor, azure_rate) so azure_cost = quantity * factor * azure_rate in that line's unit.
+# Azure list rates (US, pay-as-you-go): Blob Hot LRS $0.018/GB-mo, Files Standard $0.05/GB-mo,
+# Standard-SSD managed disk ~$0.075/GB-mo (disk IOPS are bundled, so OCI performance-units map
+# to $0), NVads A10 v5 ~$3.20/GPU-hr, D-series ~$0.048/vCPU-hr + ~$0.006/GB-hr RAM, PostgreSQL
+# Flexible General Purpose ~$0.101/vCore-hr + ~$0.115/GB-mo storage. 1 OCPU = 2 vCPU, so
+# OCPU-hour lines use factor 2.
+AZURE_RATE_BY_OCI_SKU = {
+    "B86080": (1.0, 0.018),       # OCI Object Storage GB-mo -> Azure Blob Hot LRS
+    "B89057": (1.0, 0.05),        # OCI File Storage GB-mo -> Azure Files Standard
+    "B91961": (1.0, 0.075),       # OCI Block Volume GB-mo -> Azure Standard SSD managed disk
+    "B91962": (0.0, 0.0),         # OCI Block performance-units -> bundled in Azure disk GB
+    "VM.GPU.A10.1": (1.0, 3.20),  # OCI A10 GPU-hr -> Azure NVads A10 v5 (per A10-hr)
+    "B111129": (2.0, 0.048),      # OCI E6 OCPU-hr -> Azure D-series vCPU-hr
+    "B111130": (1.0, 0.006),      # OCI compute memory GB-hr -> Azure memory GB-hr
+    "B99060": (2.0, 0.101),       # OCI PostgreSQL OCPU-hr -> Azure PG Flexible GP vCore-hr
+    "B99062": (1.0, 0.115),       # OCI PostgreSQL storage GB-mo -> Azure PG storage GB-mo
+}
+# Same idea in reverse (Azure-sourced bill -> AWS estimate). AWS list rates (US East, PAYG):
+# S3 Standard $0.023/GB-mo, EFS Standard $0.30/GB-mo, EBS gp3 $0.08/GB-mo (3,000 IOPS baseline
+# bundled so perf-units -> $0), g5 (A10G) ~$1.006/GPU-hr, EC2 ~$0.048/vCPU-hr + ~$0.006/GB-hr,
+# RDS PostgreSQL ~$0.12/vCore-hr + $0.115/GB-mo storage.
+AWS_RATE_BY_OCI_SKU = {
+    "B86080": (1.0, 0.023),       # -> S3 Standard
+    "B89057": (1.0, 0.30),        # -> EFS Standard
+    "B91961": (1.0, 0.08),        # -> EBS gp3
+    "B91962": (0.0, 0.0),         # -> bundled in EBS gp3 baseline IOPS
+    "VM.GPU.A10.1": (1.0, 1.006), # -> g5 (A10G) per GPU-hr
+    "B111129": (2.0, 0.048),      # -> EC2 vCPU-hr
+    "B111130": (1.0, 0.006),      # -> EC2 memory GB-hr
+    "B99060": (2.0, 0.12),        # -> RDS PostgreSQL vCore-hr
+    "B99062": (1.0, 0.115),       # -> RDS PostgreSQL gp storage GB-mo
+}
+_CLOUD_RATE_TABLE = {"azure": AZURE_RATE_BY_OCI_SKU, "aws": AWS_RATE_BY_OCI_SKU}
+
+# Networking is special: OCI's model is largely FREE (free VCN/DRG/gateways + 10 TB/mo egress),
+# so mapping AWS/Azure networking THROUGH OCI zeroes it out. But AWS and Azure both charge for
+# egress, NAT gateways, load balancers and endpoints at comparable rates, so the source bill's
+# networking spend is the honest cross-cloud estimate — not the near-zero OCI re-price.
+_NETWORKING_SOURCE_SVCS = {
+    "amazonvpc", "awsdatatransfer", "awselb", "elasticloadbalancing", "awsdirectconnect",
+    "amazonroute53", "amazoncloudfront", "awsglobalaccelerator", "awsamplify",
+    "microsoft.network", "azurefrontdoor", "azuredns",
+}
+
+
+def _is_networking_row(row):
+    if "networking" in str(row.get("ociServiceCategory") or "").lower():
+        return True
+    svc = re.sub(r"[^a-z0-9.]+", "", str(row.get("sourceService") or "").lower())
+    return svc in _NETWORKING_SOURCE_SVCS
+
+
+def _reprice_row(row, rate_table):
+    """Estimate a non-compute row on the TARGET cloud by re-pricing its OCI line items at that
+    cloud's list rates for the SAME usage. Line items whose OCI SKU is in `rate_table` use
+    quantity x factor x rate; the rest fall back to their OCI cost (still usage-based math, not
+    a carried source-cloud price). Compute-unit line items (OCPU/ECPU/GB-hour) are scaled back
+    to the INPUT footprint so OCI rightsizing never leaks in. Returns (monthly, priced_any)."""
+    specs = row.get("specs") or {}
+    orig, cur = row.get("originalOcpus"), specs.get("ocpus")
+    scale = 1.0
+    try:
+        if orig and cur and float(cur) > 0:
+            scale = float(orig) / float(cur)   # un-rightsize: back to the original OCPU count
+    except (TypeError, ValueError):
+        scale = 1.0
+    total = 0.0
+    priced_any = False
+    for li in (row.get("lineItems") or []):
+        unit = (li.get("unit") or "").lower()
+        s = scale if any(u in unit for u in ("ocpu", "ecpu", "gb-hour", "gb hour")) else 1.0
+        m = (rate_table or {}).get(li.get("sku") or "")
+        if m is not None:
+            factor, rate = m
+            total += to_number(li.get("quantity"), 0) * s * factor * rate
+            priced_any = True
+        else:
+            total += to_number(li.get("monthly"), 0) * s   # usage-based OCI proxy for the long tail
+    return money(total), priced_any
+
+
 def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mode=False, source_cloud=None):
     """Compute the AWS/Azure totals for one matching mode.
 
@@ -3171,8 +3254,17 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
             sce = row.get("sourceCloudEstimate") or {}
             vendor = (row.get("shapeUsed") or {}).get("vendor")
             specs = row.get("specs") or {}
-            vcpus = (specs.get("ocpus") or 0) * 2
-            mem = specs.get("memoryGb") or 0
+            # Size the cross-cloud estimate against the INPUT footprint — never OCI's
+            # rightsized (trimmed) OCPU/RAM. So the other clouds reflect the original bill's
+            # workload, not OCI's optimization. (OCI discount can't leak here — it's applied
+            # after pricing, not inside it.)
+            _ocpus_in = row.get("originalOcpus")
+            if _ocpus_in is None:
+                _ocpus_in = specs.get("ocpus") or 0
+            mem = row.get("originalMemoryGb")
+            if mem is None:
+                mem = specs.get("memoryGb") or 0
+            vcpus = (_ocpus_in or 0) * 2
             is_compute = vcpus > 0 or mem > 0
             src_cost = to_number(row.get("sourceMonthlyCost"), 0)
 
@@ -3186,11 +3278,23 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                     total += src_cost
                     actual_rows += 1
                     continue
-                # Non-compute services can't be cross-priced, so carry them at their
-                # actual billed cost in every estimated mode.
+                # Non-compute services: on the TARGET cloud re-price the mapped OCI services from
+                # the same usage at that cloud's list rates instead of carrying the source bill.
+                # Works both ways (AWS-sourced -> Azure estimate, Azure-sourced -> AWS estimate).
+                # The source cloud always stays at its actual billed cost.
                 if not is_compute:
-                    total += src_cost
-                    carried_rows += 1
+                    if not source_is_this and cloud in _CLOUD_RATE_TABLE:
+                        if _is_networking_row(row):
+                            # Networking tracks the source spend on AWS/Azure (both charge for
+                            # egress/NAT/LB), not OCI's near-free model.
+                            total += src_cost
+                        else:
+                            est, _priced = _reprice_row(row, _CLOUD_RATE_TABLE[cloud])
+                            total += est             # usage re-priced on target-cloud rates (OCI proxy for the tail)
+                        estimated_rows += 1
+                    else:
+                        total += src_cost
+                        carried_rows += 1
                     continue
                 # Compute line items fall through to be estimated below.
             else:
@@ -3199,7 +3303,14 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                     continue
 
             hours = row.get("hoursPerMonth") or HOURS_PER_MONTH
-            windows = 0 if hide_windows else (row.get("windowsLicenseMonthly") or 0)
+            # Windows licensing is per-OCPU, so scale it back to the INPUT OCPU count too —
+            # otherwise OCI rightsizing trims the license add-on into the cross-cloud estimate.
+            windows = 0
+            if not hide_windows:
+                windows = row.get("windowsLicenseMonthly") or 0
+                _cur = specs.get("ocpus")
+                if windows and _ocpus_in and _cur and float(_cur) > 0:
+                    windows = windows * (float(_ocpus_in) / float(_cur))
 
             # AWS: try the live Price List API for this workload's instance type
             # (its own source instance when marked AWS, otherwise the equivalent),
@@ -3236,6 +3347,8 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
             basis = "actual bill"
         elif cloud_bill_mode and source_cloud and cloud == source_cloud and top_of_line:
             basis = "what-if: bill re-shaped on newest-gen"
+        elif cloud_bill_mode and source_cloud and cloud != source_cloud:
+            basis = "compute + services re-priced on %s usage rates" % ("Azure" if cloud == "azure" else "AWS")
         elif cloud_bill_mode and carried_rows:
             basis = "compute estimated · other services at source cost"
         elif live_rows:
@@ -4821,6 +4934,78 @@ def price_workspaces_row(row, hours=None):
             "ociServiceUsage": True,
         })
     return (items, WS_PRODUCT, WS_CATEGORY, WS_DESKTOP_SKU, False)
+
+
+# ---- AWS AppStream 2.0 -> OCI Secure Desktops -------------------------------
+# AppStream is Windows app/desktop streaming — the same Secure Desktops target as
+# WorkSpaces. AWS bills it as fleet streaming hours + per-user RDS-CAL license +
+# image-builder hours + stopped-fleet hours. Map: user seats -> Secure Desktop fee,
+# running/streaming hours -> underlying E6 compute sized from the fleet instance type,
+# stopped hours -> $0 (no running compute on OCI).
+def _is_appstream_row(row):
+    blob = normalize(" ".join(clean_text(row.get(k)) for k in
+                              ["source_service", "source_product", "__usageType"]))
+    return "appstream" in blob
+
+
+def _appstream_specs(text):
+    """OCPU / memory (GB) for an AppStream fleet instance from its size keyword
+    (stream.standard/compute.small|medium|large|xlarge|2xlarge). Defaults to 2 OCPU / 8 GB."""
+    t = clean_text(text).lower()
+    if "2xlarge" in t or "2xl" in t:
+        v, m = 8, 32
+    elif "xlarge" in t or "xl" in t:
+        v, m = 4, 16
+    elif "large" in t:
+        v, m = 2, 8
+    else:                                    # small / medium / unknown
+        v, m = 2, 4
+    if "compute" in t or "memory" in t:      # compute/memory-optimized fleets carry more RAM
+        m = max(m, v * 4)
+    return max(1, math.ceil(v / 2)), float(m)
+
+
+def price_appstream_row(row, hours=None):
+    """Price an AWS AppStream 2.0 bill row on OCI Secure Desktops (same target as WorkSpaces).
+    Returns (line_items, label, category, sku, carried) or None."""
+    if not _is_appstream_row(row):
+        return None
+    prod = clean_text(row.get("source_product"))
+    qty = to_number(row.get("usage_quantity"), 0)
+    p = prod.lower()
+    # Per-user seat (RDS-CAL license / "per user per month") -> Secure Desktop fee.
+    if "per user" in p or "rds-cal" in p or "user per month" in p:
+        return ([{
+            "sku": WS_DESKTOP_SKU, "description": "OCI Secure Desktops — Secure Desktop (AppStream user)",
+            "quantity": round(qty, 4), "unit": "desktop per month", "rate": WS_DESKTOP_RATE,
+            "monthly": money(qty * WS_DESKTOP_RATE),
+            "mapping": f"AWS AppStream user seat -> OCI Secure Desktop at ${WS_DESKTOP_RATE}/desktop-mo (B95518).",
+            "ociServiceUsage": True,
+        }], WS_PRODUCT, WS_CATEGORY, WS_DESKTOP_SKU, False)
+    # Stopped fleet -> no running compute on OCI Secure Desktops.
+    if "stopped" in p:
+        return ([{
+            "sku": WS_OCPU_SKU, "description": "OCI Secure Desktops — stopped fleet (no running compute)",
+            "quantity": 0, "unit": "OCPU-hour", "rate": WS_OCPU_RATE, "monthly": 0.0,
+            "mapping": "AppStream stopped fleet: no running compute charge on OCI Secure Desktops.",
+            "ociServiceUsage": True,
+        }], WS_PRODUCT, WS_CATEGORY, WS_OCPU_SKU, False)
+    # Running fleet / image-builder streaming hours -> E6 compute at the fleet size x hours.
+    ocpu, mem = _appstream_specs(prod)
+    run = qty
+    return ([{
+        "sku": WS_OCPU_SKU, "description": f"OCI Secure Desktops — E6 Compute OCPU ({ocpu} OCPU, streaming hrs)",
+        "quantity": round(ocpu * run, 4), "unit": "OCPU-hour", "rate": WS_OCPU_RATE,
+        "monthly": money(ocpu * run * WS_OCPU_RATE),
+        "mapping": f"AWS AppStream fleet streaming: {ocpu} OCPU × {run:,.0f} hrs (from the bill).",
+        "ociServiceUsage": True,
+    }, {
+        "sku": WS_MEM_SKU, "description": f"OCI Secure Desktops — E6 Compute Memory ({mem:g} GB, streaming hrs)",
+        "quantity": round(mem * run, 4), "unit": "GB-hour", "rate": WS_MEM_RATE,
+        "monthly": money(mem * run * WS_MEM_RATE),
+        "mapping": f"AWS AppStream fleet streaming: {mem:g} GB × {run:,.0f} hrs (from the bill).",
+        "ociServiceUsage": True,
+    }], WS_PRODUCT, WS_CATEGORY, WS_OCPU_SKU, False)
 
 
 # ---- Azure usage-details resolvers -----------------------------------------
@@ -7499,6 +7684,36 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in ws_items)
                 ws_handled = True
 
+        # AWS AppStream 2.0 -> OCI Secure Desktops (same target as WorkSpaces): user seats ->
+        # Secure Desktop fee, streaming hours -> underlying E6 compute. Prices instead of
+        # carrying the AppStream lines at billed cost.
+        if cloud_bill_mode and not row_free_on_oci and not ws_handled:
+            as_result = price_appstream_row(row)
+            if as_result is not None:
+                as_items, as_label, as_cat, as_sku, _as_carried = as_result
+                line_items.extend(as_items)
+                row["oci_product"] = as_label
+                row["oci_service_category"] = as_cat
+                _as_src = to_number(row.get("source_monthly_cost"), 0)
+                full_service_mapping = {
+                    "sku": as_sku,
+                    "ociProduct": as_label,
+                    "sourceProvider": clean_text(row.get("source_provider")),
+                    "sourceService": clean_text(row.get("source_service")),
+                    "sourceProduct": clean_text(row.get("source_product")),
+                    "sourceMonthlyCost": money(_as_src),
+                    "sourceCurrency": clean_text(row.get("source_currency")) or "USD",
+                    "quantity": round(to_number(row.get("usage_quantity"), 0), 4),
+                    "unit": clean_text(row.get("usage_unit")) or (as_items[0].get("unit") if as_items else ""),
+                    "confidence": 0.85,
+                    "reviewRequired": False,
+                }
+                totals["sourceMonthlyCost"] += _as_src
+                totals["mappedSourceMonthlyCost"] += _as_src
+                totals["mappedServiceRows"] += 1
+                totals["fullServiceMonthly"] += sum(li.get("monthly", 0) for li in as_items)
+                ws_handled = True   # reuse the Secure-Desktops handled flag downstream
+
         # Azure 'Virtual Machines Licenses' rows are SQL Server / Windows licenses, not
         # compute — price them as licensing so they don't match the generic Compute
         # catalog item and get a bogus inferred-OCPU line.
@@ -8785,6 +9000,8 @@ class IntakeHandler(BaseHTTPRequestHandler):
                     optimization=0.0,
                     cloud_comparison=cloud_comparison,
                     diagram_options=payload.get("diagramOptions") or {},
+                    # Embed the app workflow so a Full BOM can be re-imported via "Load previous BOM".
+                    workflow_json=workflow_json,
                 )
                 safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", bom_name).strip("_") if bom_name else ""
                 download_name = f"{safe_name}_Full_BOM.xlsx" if safe_name else "OCI_Full_BOM.xlsx"
