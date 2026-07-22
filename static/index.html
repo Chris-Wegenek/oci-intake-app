@@ -64,6 +64,7 @@
           <div class="load-prev-bom">
             <button type="button" id="loadPrevBom" class="ghost-button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
             <span class="load-prev-hint">Restore a saved <strong>.json</strong> or exported <strong>.xlsx</strong> workflow — or drop one here</span>
+            <span class="load-prev-note">Note: edits you make directly in the exported Excel file won't carry back into the app — reloading restores the saved session, not your spreadsheet changes.</span>
           </div>
           <div class="load-prev-bom">
             <button type="button" id="convertBomBtn" class="ghost-button" title="Upload an OCI BOM from anywhere (Oracle's BOM tool, a partner, another estimate). The app recognizes every SKU/line item against its OCI catalog, re-prices and recovers sizing, then loads it live into your results.">Convert an alternate OCI BOM</button>
@@ -288,16 +289,16 @@
           <p id="resultsSubtitle">Pricing is ready for review.</p>
         </div>
         <div class="results-actions">
-          <button id="backToReview" class="ghost-button" type="button">Back to review</button>
-          <div class="export-stack">
-            <button id="exportExcel" class="ghost-button bom-btn bom-btn-quick" type="button" title="Quick BOM — the compact workbook: the BOM sheet plus the Overview/ramp sheet.">Quick BOM</button>
-            <button id="exportJson" class="export-json-btn" type="button">Export .json</button>
+          <div class="export-menu" id="exportMenu">
+            <button id="exportFullBom" class="primary-button export-menu-main" type="button" title="Full BOM — the 12-sheet customer deliverable: Table of Contents, Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR, Security KMS, Consumption Ramp, Annexure and Applications Migrated to OCI. Includes the OCI architecture diagram generated from this BOM. Takes a few seconds to build.">Full BOM</button>
+            <button id="exportMenuToggle" class="primary-button export-menu-caret" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More export options">▾</button>
+            <div id="exportMenuList" class="export-menu-list" role="menu" hidden>
+              <button id="exportExcel" class="export-menu-item" type="button" role="menuitem" title="Quick BOM — the compact workbook: the BOM sheet plus the Overview/ramp sheet.">Quick BOM</button>
+              <button id="exportJson" class="export-menu-item" type="button" role="menuitem">Export .json</button>
+              <button id="downloadDiagram" class="export-menu-item" type="button" role="menuitem" title="Download just the OCI architecture diagram generated from this BOM — the rendered PNG and the editable draw.io file, zipped together. No workbook.">Download diagram</button>
+            </div>
           </div>
-          <button id="exportFullBom" class="ghost-button bom-btn bom-btn-full" type="button" title="Full BOM — the 12-sheet customer deliverable: Table of Contents, Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR, Security KMS, Consumption Ramp, Annexure and Applications Migrated to OCI. Includes the OCI architecture diagram generated from this BOM. Takes a few seconds to build.">Full BOM</button>
-          <button id="downloadDiagram" class="ghost-button" type="button" title="Download just the OCI architecture diagram generated from this BOM — the rendered PNG and the editable draw.io file, zipped together. No workbook.">Download diagram</button>
-          <button id="loadWorkflow" class="ghost-button" type="button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
           <input id="loadWorkflowFile" type="file" accept=".json,.xlsx" hidden />
-          <button id="rerunPricing" class="primary-button" type="button">Reprice estimate</button>
         </div>
       </section>
 

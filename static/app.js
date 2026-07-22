@@ -1785,8 +1785,7 @@ async function priceRows({ keepView = false } = {}) {
   els.priceButton.textContent = "Pricing...";
   els.priceShapeButton.disabled = true;
   els.priceShapeButton.textContent = "Pricing...";
-  els.rerunPricing.disabled = true;
-  els.rerunPricing.textContent = "Pricing...";
+  if (els.rerunPricing) { els.rerunPricing.disabled = true; els.rerunPricing.textContent = "Pricing..."; }
   els.engineStatus.textContent = isCloudBillMode()
     ? `Mapping cloud bill lines to OCI equivalents for ${selectedShape().label}`
     : `Mapping SKUs for ${selectedShape().label}`;
@@ -1843,8 +1842,7 @@ async function priceRows({ keepView = false } = {}) {
     els.priceButton.textContent = "Continue to shape";
     els.priceShapeButton.disabled = false;
     els.priceShapeButton.textContent = pricingActionLabel("price");
-    els.rerunPricing.disabled = false;
-    els.rerunPricing.textContent = pricingActionLabel("rerun");
+    if (els.rerunPricing) { els.rerunPricing.disabled = false; els.rerunPricing.textContent = pricingActionLabel("rerun"); }
     if (els.priceSpinner) els.priceSpinner.hidden = true;
   }
 }
@@ -2041,6 +2039,11 @@ function collectWorkflowState() {
     selectedShape: state.selectedShape,
     existingInfraCost: state.existingInfraCost,
     crossCloudTopTier: state.crossCloudTopTier,
+    // Add-in OCI services ("Add OCI services" panel) and the full diagram layout selections
+    // (region, AD split + which resources, DR region + replication) so a reload restores the
+    // exact BOM and architecture the user built.
+    extraServices: state.extraServices || [],
+    diagramOptions: state.diagramOptions || {},
     fields: state.fields,
     rows: state.rows,
     shapeOverrides: state.shapeOverrides,
@@ -2096,7 +2099,8 @@ async function applyWorkflowState(wf) {
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
     "hideWindowsPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
     "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
-    "crossCloudTopTier", "fields", "rows", "shapeOverrides", "costOverrides",
+    "crossCloudTopTier", "extraServices", "diagramOptions", "fields", "rows",
+    "shapeOverrides", "costOverrides",
     "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs", "resultSort",
   ];
   assign.forEach((k) => { if (wf[k] !== undefined) state[k] = wf[k]; });
@@ -2110,6 +2114,30 @@ async function applyWorkflowState(wf) {
   if (els.bomName) els.bomName.value = state.bomName || "";
   if (els.ociDiscount) els.ociDiscount.value = state.ociDiscount || 0;
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
+  // Reflect restored diagram-layout selections into their controls (region combobox,
+  // AD-split toggle + chips, DR toggle + region + replication chips).
+  if (state.diagramOptions) {
+    const d = state.diagramOptions;
+    const chk = (id, v) => { const el = document.querySelector(id); if (el) el.checked = !!v; };
+    const sel = (id, v) => {
+      const s = document.querySelector(id);
+      if (!s) return;
+      if (v != null) s.value = v;
+      const input = s.closest(".diagram-combo")?.querySelector(".diagram-combo-input");
+      if (input) input.value = s.selectedOptions[0]?.textContent.trim() || "";
+    };
+    sel("#primaryRegion", d.primaryRegion);
+    sel("#drRegion", d.drRegion);
+    chk("#splitAcrossADs", d.splitADs);
+    chk("#adSplitVms", d.adSplitResources ? d.adSplitResources.vms : true);
+    chk("#adSplitDbs", d.adSplitResources ? d.adSplitResources.dbs : true);
+    chk("#enableDr", d.enableDr);
+    chk("#drRepVms", d.drReplicate ? d.drReplicate.vms : true);
+    chk("#drRepDbs", d.drReplicate ? d.drReplicate.dbs : true);
+    chk("#drRepObj", d.drReplicate ? d.drReplicate.object : true);
+    if (typeof _syncAdSplitControl === "function") _syncAdSplitControl();
+    const drSub = document.querySelector("#drSubOptions"); if (drSub) drSub.hidden = !d.enableDr;
+  }
   if (typeof renderTable === "function") renderTable();
   await priceRows();
   // Opening a previous BOM jumps straight to the results page (page 4).
@@ -3849,7 +3877,7 @@ function onPriceShapeClick() {
   priceRows();
 }
 els.priceShapeButton.addEventListener("click", onPriceShapeClick);
-els.rerunPricing.addEventListener("click", priceRows);
+els.rerunPricing?.addEventListener("click", priceRows);
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
 });
@@ -4027,6 +4055,25 @@ els.downloadDiagram?.addEventListener("click", downloadDiagram);
 els.exportJson?.addEventListener("click", exportWorkflowJson);
 els.loadWorkflow?.addEventListener("click", () => els.loadWorkflowFile?.click());
 els.loadPrevBom?.addEventListener("click", () => els.loadWorkflowFile?.click());
+
+// Export split-button: Full BOM is the primary action; the caret reveals Quick BOM / .json /
+// diagram. Clicking an item or outside, or pressing Escape, closes the menu.
+(function wireExportMenu() {
+  const menu = document.querySelector("#exportMenu");
+  const toggle = document.querySelector("#exportMenuToggle");
+  const list = document.querySelector("#exportMenuList");
+  if (!menu || !toggle || !list) return;
+  const close = () => { list.hidden = true; toggle.setAttribute("aria-expanded", "false"); };
+  toggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const opening = list.hidden;
+    list.hidden = !opening;
+    toggle.setAttribute("aria-expanded", String(opening));
+  });
+  list.addEventListener("click", () => close());
+  document.addEventListener("click", (e) => { if (!menu.contains(e.target)) close(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+})();
 els.loadWorkflowFile?.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];
   loadWorkflowFromFile(file);
@@ -4213,7 +4260,7 @@ els.crossCloudTile?.addEventListener("click", () => {
   els.crossCloudTile.setAttribute("aria-expanded", String(willShow));
   els.crossCloudTile.classList.toggle("is-open", willShow);
 });
-els.backToReview.addEventListener("click", showIntakePage);
+els.backToReview?.addEventListener("click", showIntakePage);
 els.backToReviewFromShape.addEventListener("click", showIntakePage);
 els.steps.forEach((step) => {
   step.addEventListener("click", () => navigateStep(step.dataset.step));

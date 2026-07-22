@@ -484,29 +484,23 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             if split_dbs and db_types:
                 sql_dbs = [d for d in db_types if "sql" in _norm(d[1])]
                 other_dbs = [d for d in db_types if "sql" not in _norm(d[1])]
+                # If the (unsplit) VMs occupy AD 1, keep DBs out of it — spread them across the
+                # remaining ADs so the main AD isn't overcrowded.
+                db_ads = list(range(1, n_ad)) if (not split_vms and n_ad > 1) else list(range(n_ad))
                 for idx, d in enumerate(other_dbs):
-                    ad_dbs[idx % n_ad].append(d)
+                    ad_dbs[db_ads[idx % len(db_ads)]].append(d)
                 if sql_dbs:
-                    ad_dbs[0] = sql_dbs + ad_dbs[0]          # group all SQL Server DBs in AD 1
-            # A resource type that ISN'T in the split is drawn once (shared), above the AD grid.
-            if not split_vms:
-                icon(f"{sid}vm", "Compute - Virtual Machine VM",
-                     f"{reg_vms:,} {seg['name']} VMs\n{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB",
-                     ax + (aw // 3 if win_vms else aw // 2) - 48, 425, 92)
-                link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
-                if win_vms > 0:
-                    icon(f"{sid}winvm", "Compute - Virtual Machine VM",
-                         f"{win_vms:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
-                         ax + 2 * aw // 3 - 48, 425, 92)
-                    link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
-                ad_top = 560
+                    ad_dbs[db_ads[0]] = sql_dbs + ad_dbs[db_ads[0]]   # group SQL Server DBs together
             shared_db = bool(db_types) and not split_dbs
             if shared_db:
                 ad_bottom = 880
             for j in range(n_ad):
                 adx = ax + j * adw
-                box(f"{sid}ad{j}",
-                    f"Availability Domain {j+1}\n{seg['ocpu']/n_ad:,.0f} OCPU · {seg['ram']/n_ad:,.0f} GB · fault-isolated",
+                # When VMs aren't split, the AD header only carries capacity for the split
+                # resources; the whole compute footprint lives in AD 1 (the main AD).
+                _cap = (f"{seg['ocpu']/n_ad:,.0f} OCPU · {seg['ram']/n_ad:,.0f} GB · fault-isolated"
+                        if split_vms else "fault-isolated")
+                box(f"{sid}ad{j}", f"Availability Domain {j+1}\n{_cap}",
                     adx + 3, ad_top, adw - 6, ad_bottom - ad_top, "ad")
                 yy = ad_top + 56
                 if split_vms:
@@ -518,6 +512,19 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                         icon(f"{sid}winvm{j}", "Compute - Virtual Machine VM",
                              f"{_even_share(win_vms, n_ad, j):,} Windows VMs\n${seg['win']/n_ad:,.0f}/mo",
                              adx + adw // 2 - 30, yy, 60)
+                        yy += 110
+                elif j == 0:
+                    # VMs NOT split -> the entire compute footprint sits in the main AD (AD 1).
+                    icon(f"{sid}vm", "Compute - Virtual Machine VM",
+                         f"{reg_vms:,} {seg['name']} VMs\n{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB",
+                         adx + adw // 2 - 30, yy, 60)
+                    link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
+                    yy += 104
+                    if win_vms > 0:
+                        icon(f"{sid}winvm", "Compute - Virtual Machine VM",
+                             f"{win_vms:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
+                             adx + adw // 2 - 30, yy, 60)
+                        link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
                         yy += 110
                 for di, (stencil, label, _mo) in enumerate(ad_dbs[j]):
                     icon(f"{sid}ad{j}db{di}", stencil, label, adx + adw // 2 - 26, yy, 52)

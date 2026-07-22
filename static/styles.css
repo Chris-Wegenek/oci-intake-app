@@ -1121,7 +1121,58 @@ td input[type="checkbox"] {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
-  margin-bottom: 34px; /* room for the .json button hanging under Export to Excel */
+  margin-bottom: 12px;
+}
+
+/* Export split-button: Full BOM (primary) + caret that opens the rest. */
+.export-menu {
+  position: relative;
+  display: inline-flex;
+}
+.export-menu-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.export-menu-caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  padding-left: 12px;
+  padding-right: 12px;
+  min-width: 0;
+  font-size: 12px;
+}
+.export-menu-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 190px;
+  background: #fff;
+  border: 1px solid #d8dce0;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  padding: 6px;
+}
+.export-menu-list[hidden] {
+  display: none;
+}
+.export-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  border-radius: 7px;
+  font-size: 14px;
+  color: #1f2933;
+  cursor: pointer;
+}
+.export-menu-item:hover,
+.export-menu-item:focus-visible {
+  background: #f1f4f7;
+  outline: none;
 }
 
 .bom-match-toggle {
@@ -1786,6 +1837,15 @@ td input[type="checkbox"] {
 .load-prev-hint {
   font-size: 12px;
   color: #6b7682;
+}
+
+.load-prev-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-style: italic;
+  color: #8a93a0;
+  max-width: 460px;
 }
 
 .load-prev-bom.is-dragging {

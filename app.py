@@ -3195,6 +3195,49 @@ def _is_networking_row(row):
     return svc in _NETWORKING_SOURCE_SVCS
 
 
+# Per-component networking list rates (US, PAYG) applied to the SOURCE usage quantity in its
+# native unit (GB for data, hours for hourly resources). AWS and Azure charge networking
+# comparably, so most components are close; the notable gaps are egress and load balancers.
+_NET_RATE = {
+    "azure": {"egress": 0.087, "lb_hr": 0.025, "vpn_hr": 0.05, "tgw_hr": 0.05,
+              "tgw_gb": 0.02, "nat_hr": 0.045, "nat_gb": 0.045},   # egress=Blob-out; lb=Standard LB
+    "aws":   {"egress": 0.09, "lb_hr": 0.0225, "vpn_hr": 0.05, "tgw_hr": 0.05,
+              "tgw_gb": 0.02, "nat_hr": 0.045, "nat_gb": 0.045},   # egress=DTO; lb=ALB
+}
+
+
+def _net_component(usage_type, product):
+    """Classify a networking line into a priceable component from its usage-type token."""
+    t = (str(usage_type or "") + " " + str(product or "")).lower()
+    if "datatransfer-out" in t or "-out-bytes" in t or "data transfer out" in t or "egress" in t:
+        return "egress"
+    if "natgateway-hours" in t or ("nat" in t and "hour" in t):
+        return "nat_hr"
+    if "natgateway-bytes" in t or ("nat" in t and "byte" in t):
+        return "nat_gb"
+    if "transitgateway-hours" in t or ("transitgateway" in t and "hour" in t):
+        return "tgw_hr"
+    if "transitgateway-bytes" in t or ("transitgateway" in t and "byte" in t):
+        return "tgw_gb"
+    if "loadbalancer" in t or "lcuusage" in t or "lcu-hours" in t:
+        return "lb_hr"
+    if "vpn-usage" in t or "vpn-connection" in t or ("vpn" in t and "hour" in t):
+        return "vpn_hr"
+    return None
+
+
+def _reprice_networking_row(row, cloud):
+    """Re-price a networking row on the TARGET cloud's specific rate per component (egress GB,
+    NAT/LB/VPN/transit-gateway hours...). Components with no clean cross-cloud match (Verified
+    Access, DirectConnect/ExpressRoute, VPC endpoints, etc.) carry the source spend, since AWS
+    and Azure charge them comparably."""
+    rates = _NET_RATE.get(cloud) or {}
+    comp = _net_component(row.get("sourceUsageType"), row.get("sourceProduct"))
+    if comp and comp in rates:
+        return money(to_number(row.get("sourceUsageQty"), 0) * rates[comp])
+    return money(to_number(row.get("sourceMonthlyCost"), 0))
+
+
 def _reprice_row(row, rate_table):
     """Estimate a non-compute row on the TARGET cloud by re-pricing its OCI line items at that
     cloud's list rates for the SAME usage. Line items whose OCI SKU is in `rate_table` use
@@ -3285,9 +3328,9 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                 if not is_compute:
                     if not source_is_this and cloud in _CLOUD_RATE_TABLE:
                         if _is_networking_row(row):
-                            # Networking tracks the source spend on AWS/Azure (both charge for
-                            # egress/NAT/LB), not OCI's near-free model.
-                            total += src_cost
+                            # Networking is re-priced per component on the target cloud's rates
+                            # (egress/NAT/LB/VPN/transit-gateway), not OCI's near-free model.
+                            total += _reprice_networking_row(row, cloud)
                         else:
                             est, _priced = _reprice_row(row, _CLOUD_RATE_TABLE[cloud])
                             total += est             # usage re-priced on target-cloud rates (OCI proxy for the tail)
@@ -3303,6 +3346,14 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                     continue
 
             hours = row.get("hoursPerMonth") or HOURS_PER_MONTH
+            # Cloud bills are often billed at daily/hourly granularity, so a single VM shows up
+            # as many line items that each cover only part of the month. Price the equivalent
+            # instance on the row's ACTUAL billed hours instead of a full 730-hour month, or
+            # every daily row would count as a whole month (a ~30x over-estimate). Falls back to
+            # hoursPerMonth when the meter isn't hour-based (computeUsageHours == 0).
+            usage_hours = to_number(row.get("computeUsageHours"), 0) if cloud_bill_mode else 0
+            if usage_hours > 0:
+                hours = usage_hours
             # Windows licensing is per-OCPU, so scale it back to the INPUT OCPU count too —
             # otherwise OCI rightsizing trims the license add-on into the cross-cloud estimate.
             windows = 0
@@ -3311,6 +3362,10 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                 _cur = specs.get("ocpus")
                 if windows and _ocpus_in and _cur and float(_cur) > 0:
                     windows = windows * (float(_ocpus_in) / float(_cur))
+                # windowsLicenseMonthly is a full-month (730h) figure; prorate it to the billed
+                # hours so a daily row doesn't add a whole month of Windows licensing.
+                if windows and usage_hours > 0:
+                    windows = windows * (usage_hours / HOURS_PER_MONTH)
 
             # AWS: try the live Price List API for this workload's instance type
             # (its own source instance when marked AWS, otherwise the equivalent),
@@ -8094,6 +8149,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "ociProduct": clean_text(row.get("oci_product")),
             "sourceService": clean_text(row.get("source_service")),
             "sourceMonthlyCost": money(_src_cost),
+            # Raw source usage kept for cross-cloud networking re-pricing (egress GB, NAT/LB/
+            # VPN/transit-gateway hours, etc. classified from the usage-type token).
+            "sourceUsageType": clean_text(row.get("__usageType")),
+            "sourceUsageQty": to_number(row.get("usage_quantity"), 0),
+            "sourceProduct": clean_text(row.get("source_product")),
             "windowsLicenseMonthly": windows_addon,
             "sqlLicenseMonthly": sql_license_monthly,
             "sourceCloudEstimate": source_cloud_estimate,
@@ -8101,6 +8161,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "originalMemoryGb": round(original_memory_gb, 4),
             "originalOcpus": round(original_ocpus, 4),
             "hoursPerMonth": row_hours,
+            # Actual billed hours for this line when the meter is hour-based (0 otherwise).
+            # Cloud bills are often daily/hourly line items, so a single VM appears as many
+            # rows that each cover only part of the month. The cross-cloud estimator uses this
+            # to price the equivalent instance on real usage, not a full 730-hour month per row.
+            "computeUsageHours": round(cloud_usage_hours(row, fields), 4) if cloud_bill_mode else 0,
             "shapeUsed": {
                 "key": row_shape.get("key"),
                 "label": row_shape.get("label"),

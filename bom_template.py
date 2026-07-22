@@ -1531,14 +1531,20 @@ RAMP_MAX_MONTHS = 60
 # The consumption ramp scales the OCI SERVICES only (B13:B20), matching the app's ramp,
 # whose ceiling is the OCI-services monthly total (pricing.totals.monthly) and excludes
 # Windows 3rd-party licensing. Windows (B21) is a separate flat license line, not ramped.
+# Each ramp component pulls its steady-state cost from the Pricing Overview baseline band.
+# Rows here are the ON-PREM layout positions. In cloud-bill mode the baseline band is shifted
+# UP by po_delta rows (see _relayout_pricing_overview), so every row is reduced by po_delta.
+# `rows` can list two cells (Networking + Security/KMS are one ramp line). `discountable` marks
+# the lines the OCI discount (Pricing Overview $B$7) applies to — everything except 3rd-party
+# licensing — so the grid ties to Total Monthly = SUM(discountable)*(1-discount) + licensing.
 _GRID_COMPONENTS = [
-    ("Compute (OCPUs)", "$B$13"),
-    ("RAM", "$B$14"),
-    ("VM Block Storage", "$B$15"),
-    ("Storage (Object/File)", "$B$16"),
-    ("Storage Backups", "$B$17"),
-    ("Networking + Security / KMS", "$B$18"),
-    ("Disaster Recovery", "$B$20"),
+    ("Compute (OCPUs)", [13], True),
+    ("RAM", [14], True),
+    ("VM Block Storage", [15], True),
+    ("Storage (Object/File)", [16], True),
+    ("Storage Backups", [17], True),
+    ("Networking + Security / KMS", [18, 19], True),
+    ("Disaster Recovery", [20], True),
 ]
 
 
@@ -1554,10 +1560,15 @@ def _ramp_percentages(ramp):
     return [max(0.0, min(1.0, m / ceiling)) for m in monthly[:RAMP_MAX_MONTHS]]
 
 
-def _populate_ramp(ws, ramp, include_windows=False):
+def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=None):
     """Rebuild the Consumption Ramp for EXACTLY the number of months the app's ramp
     toggle is set to, driven by the app's curve. When Windows 3rd-party licensing is
     present (include_windows), it's added as a ramped component so both ramps carry it.
+
+    Every number is derived from the Pricing Overview baseline so the ramp ties out to it:
+      - po_delta shifts the component refs to match the cloud-bill relayout (band moved up 4).
+      - discount_cell (Pricing Overview $B$7) is applied to the discountable lines so the grid
+        total equals Total Monthly = SUM(discountable)*(1-discount) + licensing.
 
     Returns the month count so the Pricing Overview's F-range refs can be re-pointed.
     """
@@ -1565,9 +1576,10 @@ def _populate_ramp(ws, ramp, include_windows=False):
     from openpyxl.utils import get_column_letter
 
     # Windows licensing is ramped as its own component only when it's actually in the BOM.
+    # (Not discountable — the OCI discount never applies to 3rd-party licensing.)
     components = list(_GRID_COMPONENTS)
     if include_windows:
-        components.append(("3rd Party Licensing", "$B$21"))
+        components.append(("3rd Party Licensing", [21], False))
 
     pcts = _ramp_percentages(ramp)
     n = len(pcts) if pcts else 12
@@ -1645,17 +1657,21 @@ def _populate_ramp(ws, ramp, include_windows=False):
     ws.cell(g_head, total_col)._style = copy(grid_sty[28][2])
 
     last_month_col = get_column_letter(1 + n)
-    for k, (label, po_ref) in enumerate(components):
+    disc = f"*(1-'Pricing Overview'!{discount_cell})" if discount_cell else ""
+    for k, (label, po_rows, discountable) in enumerate(components):
         r = g_first + k
         src = grid_sty[min(30 + k, 36)]
         ws.cell(r, 1).value = label
         ws.cell(r, 1)._style = copy(src[1])
+        # Steady-state cost for this line: one or more Pricing Overview baseline cells,
+        # shifted for the cloud-bill relayout, discounted only where the discount applies.
+        refs = [f"'Pricing Overview'!$B${rr - po_delta}" for rr in po_rows]
+        base = f"({'+'.join(refs)})" if len(refs) > 1 else refs[0]
+        factor = disc if discountable else ""
         for i in range(n):
             c = 2 + i
             cl = get_column_letter(c)
-            ws.cell(r, c).value = (
-                f"=('Pricing Overview'!$B$18+'Pricing Overview'!$B$19)*{cl}{g_pct}"
-                if po_ref == "$B$18" else f"='Pricing Overview'!{po_ref}*{cl}{g_pct}")
+            ws.cell(r, c).value = f"={base}{factor}*{cl}{g_pct}"
             ws.cell(r, c)._style = copy(src[2])
         ws.cell(r, total_col).value = f"=SUM(B{r}:{last_month_col}{r})"
         ws.cell(r, total_col)._style = copy(src[2])
@@ -1667,7 +1683,9 @@ def _populate_ramp(ws, ramp, include_windows=False):
         cl = get_column_letter(c)
         ws.cell(g_cum, c).value = f"=SUM($B${g_first}:{cl}{g_last})"
         ws.cell(g_cum, c)._style = copy(grid_sty[37][2])
-    ws.cell(g_cum, total_col).value = f"=SUM(B{g_cum}:{last_month_col}{g_cum})"
+    # "Total" for the cumulative row is the year-1 grand total = the last month's cumulative
+    # (NOT the sum of every month's running cumulative, which would multiply-count the ramp).
+    ws.cell(g_cum, total_col).value = f"={last_month_col}{g_cum}"
     ws.cell(g_cum, total_col)._style = copy(grid_sty[37][2])
 
     # wave sequencing reference table (static)
@@ -1690,7 +1708,11 @@ def _populate_ramp(ws, ramp, include_windows=False):
         ws.cell(r, 2)._style = copy(chart_sty[2])
 
     ws["A10"] = f"{n}-Month Consumption Ramp"
-    ws["B5"] = "='Pricing Overview'!$B$22"
+    # Steady-State Monthly / Annual come straight from the Pricing Overview Total Monthly (B22
+    # on-prem, B18 in the cloud-bill relayout) and Total Annual (B23 / B19) so the summary ties
+    # to the same total the grid ramps.
+    ws["B5"] = f"='Pricing Overview'!$B${22 - po_delta}"
+    ws["D5"] = f"='Pricing Overview'!$B${23 - po_delta}"
     return n
 
 
@@ -1857,7 +1879,13 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         # Summarize all 11 product-group topics on the Pricing Overview and add a detail
         # sheet for each group that has cost and lacks a dedicated sheet.
         _add_product_group_topics(wb, cloud_comparison.get("pricing") or pricing)
-    ramp_months = _populate_ramp(wb["Consumption Ramp"], ramp, include_windows=windows_monthly > 0)
+    # Cloud-bill mode shifts the Pricing Overview baseline up by 4 rows (relayout below) and
+    # exposes an editable OCI discount at $B$7; feed both to the ramp so its lines point at the
+    # right cells and tie to Total Monthly. On-prem keeps the template layout (no shift/discount).
+    _ramp_delta = 4 if cloud_comparison else 0
+    _ramp_discount = "$B$7" if cloud_comparison else None
+    ramp_months = _populate_ramp(wb["Consumption Ramp"], ramp, include_windows=windows_monthly > 0,
+                                 po_delta=_ramp_delta, discount_cell=_ramp_discount)
     _repoint_ramp_refs(wb["Pricing Overview"], ramp_months, include_windows=windows_monthly > 0)
 
     # Re-layout the Pricing Overview ONLY in cloud-bill mode, where the AWS-vs-OCI
