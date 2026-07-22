@@ -804,6 +804,7 @@ def embed_architecture(ws_po, png_path, anchor_spec=None):
             cd = ws_po.column_dimensions.get(get_column_letter(c + 1))
             w = cd.width if (cd and cd.width) else 8.43
             box_w_px += int(round(w * 7 + 5))          # width chars -> pixels (default font)
+    disp_h = 0
     if box_w_px > 0 and img_w > 0:
         disp_w = box_w_px
         disp_h = int(round(box_w_px * img_h / img_w))  # keep the native aspect ratio
@@ -817,7 +818,23 @@ def embed_architecture(ws_po, png_path, anchor_spec=None):
         new.anchor = OneCellAnchor(
             _from=m1, ext=XDRPositiveSize2D(cx=ext["cx"], cy=ext["cy"]) if ext else None)
     ws_po.add_image(new)
-    return True
+
+    # Row (1-indexed) just past the picture's bottom edge, so the caller can place footnotes
+    # below the diagram no matter how tall the DR section made it. Walk rows from the anchor
+    # top, summing their pixel heights until we've covered the image height.
+    start_row0 = fr["row"]                          # 0-indexed anchor top
+    if disp_h > 0:
+        acc = -(fr.get("rowOff", 0) / 9525.0)       # EMU -> px of the top offset
+        r0 = start_row0
+        while acc < disp_h and r0 < start_row0 + 400:
+            rd = ws_po.row_dimensions.get(r0 + 1)
+            h_pt = rd.height if (rd and rd.height) else 15.0
+            acc += h_pt * 96.0 / 72.0                # points -> pixels
+            r0 += 1
+        bottom_row = r0 + 1                          # 1-indexed, one row below the image
+    else:
+        bottom_row = start_row0 + 44                 # fallback: old ~43-row footprint
+    return bottom_row
 
 
 CUSTOMER_TOKEN = "{{CUSTOMER}}"
@@ -1314,24 +1331,34 @@ def _relayout_pricing_overview(ws, delta=4):
     # --- (b) re-point same-sheet row refs in [12,23] by -delta everywhere on the sheet ---
     _shift_same_sheet_rows(ws, top, bot, delta)
 
-    # --- (c) re-home the floating notes/title below where the diagram will sit (~52-95) ---
+    # --- (c) re-home the title above the diagram; the floating notes are returned to the
+    #     caller so they can be dropped BELOW the diagram once its true height is known (the
+    #     DR section makes the picture taller, so a fixed note row would collide with it). ---
     if title_note:
-        tr = 51
+        tr = 57                                    # just above the diagram (below the taller comparison block)
         ws[f"D{tr}"] = title_note
         ws[f"D{tr}"]._style = title_style
         ws.merge_cells(start_row=tr, start_column=4, end_row=tr, end_column=16)
-    if open_note:
-        orow = 97
-        ws[f"A{orow}"] = open_note
-        ws[f"A{orow}"]._style = open_style
-        ws[f"A{orow}"].alignment = Alignment(wrap_text=True, vertical="top")
-        ws.merge_cells(start_row=orow, start_column=1, end_row=orow, end_column=11)
-    if invest_note:
-        irow = 99
-        ws[f"A{irow}"] = invest_note
-        ws[f"A{irow}"]._style = invest_style
-        ws[f"A{irow}"].alignment = Alignment(wrap_text=True, vertical="top")
-        ws.merge_cells(start_row=irow, start_column=1, end_row=irow, end_column=11)
+    return {
+        "open": (open_note, open_style) if open_note else None,
+        "invest": (invest_note, invest_style) if invest_note else None,
+    }
+
+
+def _place_overview_notes(ws, start_row, notes):
+    """Drop the re-homed Pricing Overview footnotes (open cost items, invest note) at
+    `start_row`, each merged A:K and wrapped. Placed below the architecture diagram."""
+    r = start_row
+    for key in ("open", "invest"):
+        payload = (notes or {}).get(key)
+        if not payload:
+            continue
+        value, style = payload
+        ws[f"A{r}"] = value
+        ws[f"A{r}"]._style = style
+        ws[f"A{r}"].alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=11)
+        r += 2
 
 
 def _zero_unmodeled_sheets(wb):
@@ -1773,8 +1800,9 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     # Profile band up by 4 (rows 12-23 -> 8-19, closing the gap); Total Monthly -> B18,
     # Total Annual -> B19. On-prem BOMs have no comparison blocks, so the template's
     # original layout (baseline at 12-23, diagram at row 29) is left untouched.
+    _relayout_notes = None
     if cloud_comparison:
-        _relayout_pricing_overview(wb["Pricing Overview"], delta=4)
+        _relayout_notes = _relayout_pricing_overview(wb["Pricing Overview"], delta=4)
 
     # Cloud-bill: add the AWS-vs-OCI comparison blocks (5-year projection, savings,
     # chart) directly below the baseline on the Pricing Overview, wired to its live
@@ -1811,11 +1839,15 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
                     # ~row 52 (keeping its 43-row height). On-prem keeps the spec anchor
                     # (row 29) since nothing moved.
                     arch_anchor = _copy.deepcopy(arch_anchor)
-                    off = 52 - 29
+                    off = 58 - 29          # drop below the comparison block (now ends ~row 55)
                     arch_anchor["from"]["row"] += off
                     if "to" in arch_anchor:
                         arch_anchor["to"]["row"] += off
-                embed_architecture(wb["Pricing Overview"], arch_png, arch_anchor)
+                _diag_bottom = embed_architecture(wb["Pricing Overview"], arch_png, arch_anchor)
+                # Drop the re-homed footnotes just below the diagram (its height varies with
+                # the DR section, so this can't be a fixed row).
+                if cloud_comparison and _relayout_notes and _diag_bottom:
+                    _place_overview_notes(wb["Pricing Overview"], _diag_bottom + 1, _relayout_notes)
         except Exception:
             # Don't swallow the reason silently — a missing diagram was undebuggable.
             import traceback
@@ -1827,6 +1859,10 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         ws_po = wb["Pricing Overview"]
         if isinstance(ws_po["D27"].value, str):
             ws_po["D27"] = None
+        # No diagram to anchor to — still place the re-homed footnotes just below the
+        # comparison blocks so they aren't lost.
+        if cloud_comparison and _relayout_notes:
+            _place_overview_notes(ws_po, 52, _relayout_notes)
 
     # Cloud-bill mode: append the AWS->OCI bill sheets (Product Breakdown, Service Mapping,
     # Notes, Cloud Bill Overview) so every mapped service and its mapping is preserved

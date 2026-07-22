@@ -99,6 +99,7 @@ def _box(ws, r1, c1, r2, c2, color=BORDER, style="medium"):
 
 CENTER = Alignment(horizontal="center", vertical="center")
 LEFT = Alignment(horizontal="left")
+RIGHT = Alignment(horizontal="right", vertical="center")
 
 
 def _detect_os(server):
@@ -769,7 +770,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
 
 def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annual_ref,
                                        aws_monthly, util_by_year,
-                                       aws_ramp=(0.5, 0.0, 0.0, 0.0, 0.0)):
+                                       aws_ramp=(1.0, 0.0, 0.0, 0.0, 0.0)):
     """Render the Cloud Bill Overview's below-row-7 blocks (5-Year Cost Projection,
     AWS-vs-OCI savings, Existing-spend ramp %, Chart Data + chart) onto the Pricing
     Overview at `start_row`, wired to that sheet's live OCI total cells:
@@ -780,12 +781,19 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
                      kept as live editable % cells feeding the Combined / Savings math.
     """
     from openpyxl.chart import BarChart, LineChart, Reference
+    from openpyxl.chart.axis import ChartLines
     from openpyxl.chart.marker import DataPoint
     from openpyxl.drawing.fill import PatternFillProperties, ColorChoice
     from openpyxl.chart.shapes import GraphicalProperties
     from openpyxl.formatting.rule import CellIsRule
 
     s = start_row
+    # Block anchors: 5-Year Projection at s (rows s..s+7), Existing-spend Ramp at s in the
+    # right columns (K:M), Current-AWS-vs-OCI block lower at s+18, Chart Data at s+26, and the
+    # comparison chart floating in the middle band beside the projection.
+    sv = s + 18                       # "Current AWS Spend vs. OCI Estimate" band row
+    cd = s + 26                       # "Chart Data — Comparison" band row
+    aws_cell = f"$B${sv+1}"           # editable "Current AWS Spend (monthly)" input cell
 
     def band(cell, text, size=13):
         c = ws[cell]
@@ -800,6 +808,20 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         c.fill = _fill(OV_BLUE)
         c.font = Font(bold=True, color="FFFFFFFF")
         c.alignment = CENTER
+
+    # The comparison block reuses column C for annual $ values, but on the Pricing Overview
+    # column C is a narrow spacer between the left totals (A:B) and the right OCI Cost
+    # Profile (D:H). Widen C (and keep D/E/F roomy) so money renders instead of "###".
+    for _col, _w in (("C", 15), ("D", 15), ("E", 15), ("F", 15),
+                     ("M", 9), ("N", 17), ("O", 14)):
+        if (ws.column_dimensions[_col].width or 0) < _w:
+            ws.column_dimensions[_col].width = _w
+
+    # Clear any stale template merges inside the block region (rows s..cd+8) so writes don't
+    # hit read-only MergedCells. The comparison block re-creates every merge it needs below.
+    for _rng in list(ws.merged_cells.ranges):
+        if _rng.min_row <= cd + 8 and _rng.max_row >= s:
+            ws.unmerge_cells(str(_rng))
 
     # ---- 5-Year Cost Projection (OCI utilization ramp) ----
     ws.merge_cells(f"A{s}:D{s}")
@@ -817,6 +839,8 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         ws[f"D{r}"] = (f"=C{r}" if y == 0 else f"=D{r-1}+C{r}")
         ws[f"C{r}"].number_format = MONEY2
         ws[f"D{r}"].number_format = MONEY2
+        ws[f"C{r}"].alignment = RIGHT
+        ws[f"D{r}"].alignment = RIGHT
     tr = s + 7
     ws.merge_cells(f"A{tr}:B{tr}")
     ws[f"A{tr}"] = "5-Year Total"
@@ -827,36 +851,40 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         ws[f"{col}{tr}"].fill = _fill(OV_LIGHT)
     ws[f"C{tr}"].number_format = MONEY2
     ws[f"D{tr}"].number_format = MONEY2
+    ws[f"C{tr}"].alignment = RIGHT
+    ws[f"D{tr}"].alignment = RIGHT
     _box(ws, s+2, 2, s+6, 2, OV_INPUT_BORDER, "thin")
     _box(ws, s+1, 1, tr, 4, OV_NAVY, "thin")
 
-    # ---- Existing-AWS spend ramp % (editable; default 50% yr1, 0% after) ----
-    ws.merge_cells(f"H{s}:J{s}")
-    band(f"H{s}", "Existing Spend — Ramp %", size=12)
-    for col, text in (("H", "Year"), ("I", "Existing (AWS) Cost"), ("J", "Existing Util %")):
+    # ---- Existing-AWS spend ramp % (editable; default 100% yr1, 0% after) — right of the
+    #      comparison chart (M:O), one column clear of the chart's right edge at K ----
+    ws.merge_cells(f"M{s}:O{s}")
+    band(f"M{s}", "Existing Spend — Ramp %", size=12)
+    for col, text in (("M", "Year"), ("N", "Existing (AWS) Cost"), ("O", "Existing Util %")):
         colhead(f"{col}{s+1}", text)
-    aws_cell = f"$B${s+10}"  # the "Current AWS Spend (monthly)" input, defined below (row sv+1 = s+10)
     for y in range(5):
         r = s + 2 + y
-        ws[f"H{r}"] = f"Year {y+1}"; ws[f"H{r}"].alignment = CENTER
-        v = ws[f"J{r}"]
+        ws[f"M{r}"] = f"Year {y+1}"; ws[f"M{r}"].alignment = CENTER
+        v = ws[f"O{r}"]
         rv = aws_ramp[y] if y < len(aws_ramp) else 0.0
         v.value = round(rv, 4); v.number_format = PCT0; v.alignment = CENTER; v.fill = _fill(OV_INPUT)
-        ws[f"I{r}"] = f"={aws_cell}*12*J{r}"
-        ws[f"I{r}"].number_format = MONEY2
-    _box(ws, s+2, 10, s+6, 10, OV_INPUT_BORDER, "thin")
-    _box(ws, s+1, 8, s+6, 10, OV_NAVY, "thin")
+        ws[f"N{r}"] = f"={aws_cell}*12*O{r}"
+        ws[f"N{r}"].number_format = MONEY2
+        ws[f"N{r}"].alignment = RIGHT
+    _box(ws, s+2, 15, s+6, 15, OV_INPUT_BORDER, "thin")   # util % input column O
+    _box(ws, s+1, 13, s+6, 15, OV_NAVY, "thin")           # M:O box
 
     # ---- Current AWS Spend vs. OCI Estimate ----
-    sv = s + 9
     ws.merge_cells(f"A{sv}:D{sv}")
     band(f"A{sv}", "Current AWS Spend vs. OCI Estimate")
     rows_spec = [
         (f"A{sv+1}", "Current AWS Spend (monthly):", f"B{sv+1}", float(aws_monthly or 0), MONEY2),
         (f"A{sv+2}", "OCI Estimated Monthly:", f"B{sv+2}", f"={oci_monthly_ref}", MONEY2),
         (f"A{sv+3}", "Estimated Monthly Savings:", f"B{sv+3}", f"=B{sv+1}-B{sv+2}", MONEY2),
-        (f"A{sv+4}", "Estimated 5-Year Savings:", f"B{sv+4}", f"=F{s+23}", MONEY2),
-        (f"A{sv+5}", "Savings % vs. AWS:", f"B{sv+5}", f"=IF(B{sv+1}=0,0,(B{sv+1}-B{sv+2})/B{sv+1})", "0.0%"),
+        (f"A{sv+4}", "Savings % vs. AWS:", f"B{sv+4}", f"=IF(B{sv+1}=0,0,(B{sv+1}-B{sv+2})/B{sv+1})", "0.0%"),
+        # Net 5-year savings = sum of the per-year Total Savings (negative migration year 1 +
+        # positive post-migration years) from the Chart Data table below.
+        (f"A{sv+5}", "Estimated 5-Year Savings:", f"B{sv+5}", f"=SUM(F{cd+3}:F{cd+7})", MONEY2),
     ]
     for la, label, ba, val, fmt in rows_spec:
         ws[la] = label; ws[la].font = Font(bold=True)
@@ -869,7 +897,6 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
     )
 
     # ---- Chart Data — Comparison ----
-    cd = s + 16
     ws.merge_cells(f"A{cd}:F{cd}")
     band(f"A{cd}", "Chart Data — Comparison", size=12)
     for col, text in (("A", "Year"), ("B", "OCI Estimate"), ("C", "Existing (AWS) Cost"),
@@ -883,14 +910,16 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         r = cd + 3 + y
         ws[f"A{r}"] = f"Year {y+1}"; ws[f"A{r}"].alignment = CENTER
         ws[f"B{r}"] = f"=C{s+2+y}"          # OCI Estimate (annual, ramped by utilization)
-        ws[f"C{r}"] = f"=I{s+2+y}"          # Existing (AWS) still running — reflects the ramp
+        ws[f"C{r}"] = f"=N{s+2+y}"          # Existing (AWS) still running — reflects the ramp (M:O table)
         ws[f"D{r}"] = f"=B{r}+C{r}"         # Combined migration cost = OCI + remaining AWS
         ws[f"E{r}"] = f"={aws_cell}*12"     # Current Spend = STATIC full annual AWS (do-nothing baseline)
-        # Total Savings is CUMULATIVE — each year adds that year's (Current Spend - Combined).
-        ws[f"F{r}"] = f"=F{r-1}+(E{r}-D{r})"
+        # Total Savings is PER-YEAR: do-nothing spend minus the combined (OCI + still-running
+        # AWS) migration cost — negative during dual-running, matching the reference overview.
+        ws[f"F{r}"] = f"=E{r}-D{r}"
     for r in range(cd+2, cd+8):
         for col in "BCDEF":
             ws[f"{col}{r}"].number_format = MONEY2
+            ws[f"{col}{r}"].alignment = RIGHT   # override any stale template alignment
     _box(ws, cd+1, 1, cd+7, 6, OV_NAVY, "thin")
     ws.conditional_formatting.add(
         f"F{cd+2}:F{cd+7}",
@@ -900,33 +929,60 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         CellIsRule(operator="lessThan", formula=["0"], font=Font(color="FFC00000", bold=True)))
 
     # ---- Comparison chart (stacked columns + Current Spend reference line) ----
+    # Drop the "Today" category (cd+2): plot only Year 1..5 (rows cd+3..cd+7). Series titles
+    # come from the header row explicitly, since the data range no longer starts at it.
+    from openpyxl.chart.series import SeriesLabel
+    from openpyxl.chart.data_source import StrRef
+    from openpyxl.utils import get_column_letter as _gcl
+    sheet = ws.title
+    y0, y1 = cd + 3, cd + 7
     chart = BarChart()
     chart.type = "col"; chart.grouping = "stacked"; chart.overlap = 100; chart.varyColors = False
-    chart.title = "Current AWS Spend vs. OCI Estimate (Today + 5-Year)"
-    chart.height = 9; chart.width = 20
+    chart.title = "Current AWS Spend vs. OCI Estimate (5-Year)"
+    chart.height = 9; chart.width = 14
     chart.legend.position = "b"; chart.legend.overlay = False
-    data = Reference(ws, min_col=2, max_col=3, min_row=cd+1, max_row=cd+7)
-    cats = Reference(ws, min_col=1, min_row=cd+2, max_row=cd+7)
-    chart.add_data(data, titles_from_data=True)
+    data = Reference(ws, min_col=2, max_col=3, min_row=y0, max_row=y1)
+    cats = Reference(ws, min_col=1, min_row=y0, max_row=y1)
+    chart.add_data(data, titles_from_data=False)
     chart.set_categories(cats)
     for idx, color in enumerate(["C00000", "808080"]):
         if idx >= len(chart.series):
             continue
         ser = chart.series[idx]
+        ser.tx = SeriesLabel(strRef=StrRef(f"'{sheet}'!${_gcl(2+idx)}${cd+1}"))
         ser.graphicalProperties = GraphicalProperties(solidFill=color)
         ser.dPt = []
-        for pt in range(6):
+        for pt in range(5):
             dp = DataPoint(idx=pt)
             dp.graphicalProperties = GraphicalProperties(solidFill=color)
             ser.dPt.append(dp)
     line = LineChart(); line.varyColors = False
-    ldata = Reference(ws, min_col=5, max_col=5, min_row=cd+1, max_row=cd+7)
-    line.add_data(ldata, titles_from_data=True)
+    ldata = Reference(ws, min_col=5, max_col=5, min_row=y0, max_row=y1)
+    line.add_data(ldata, titles_from_data=False)
     if line.series:
+        line.series[0].tx = SeriesLabel(strRef=StrRef(f"'{sheet}'!$E${cd+1}"))
         lgp = GraphicalProperties(); lgp.line.solidFill = "E6A9A9"; lgp.line.width = 28000
         line.series[0].graphicalProperties = lgp; line.series[0].smooth = False
     chart += line
-    ws.add_chart(chart, f"H{sv}")
+    # Make the value (Y) axis actually show its dollar scale, and keep the category (X)
+    # axis labels — openpyxl leaves these blank by default on combined charts.
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.y_axis.numFmt = '"$"#,##0'
+    chart.y_axis.majorGridlines = ChartLines()
+    chart.x_axis.tickLblPos = "low"
+    # Pin the chart to span columns F..K exactly (two-cell anchor), rows s..s+16, so it fills
+    # the middle band beside the projection regardless of column widths.
+    from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
+    _cfrom = AnchorMarker(col=5, colOff=0, row=s - 1, rowOff=0)     # F, top aligned with row s
+    _cto = AnchorMarker(col=11, colOff=0, row=s + 16, rowOff=0)     # right edge = end of K
+    chart.anchor = TwoCellAnchor(editAs="twoCell", _from=_cfrom, to=_cto)
+    ws.add_chart(chart)
+
+    # Normalize row heights across the whole comparison block. The template left tall rows
+    # here (old diagram/notes area), which pushed the projection/ramp cells out of line.
+    for _r in range(s, cd + 9):
+        ws.row_dimensions[_r].height = 15
 
 
 _CLOUD_GROUP_MAP = {

@@ -359,6 +359,142 @@ function _syncDrReplicate() {
 ["#drRepVms", "#drRepDbs", "#drRepObj"].forEach((sel) =>
   document.querySelector(sel)?.addEventListener("change", _syncDrReplicate));
 
+// Turn a native region <select> into a searchable combobox. The hidden <select> stays the
+// source of truth (and keeps firing 'change'), so all the AD-split / DR wiring above is
+// untouched. Ordering: Auto pinned first, multi-AD regions next, then the rest A–Z.
+function enhanceSearchableSelect(select) {
+  if (!select || select.dataset.enhanced) return;
+  select.dataset.enhanced = "1";
+  const wrap = document.createElement("div");
+  wrap.className = "diagram-combo";
+  select.parentNode.insertBefore(wrap, select);
+  wrap.appendChild(select);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "diagram-combo-input";
+  input.setAttribute("role", "combobox");
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("aria-expanded", "false");
+  input.placeholder = "Search regions…";
+  const caret = document.createElement("span");
+  caret.className = "diagram-combo-caret";
+  caret.textContent = "▾";
+  const panel = document.createElement("div");
+  panel.className = "diagram-combo-panel";
+  panel.setAttribute("role", "listbox");
+  wrap.append(input, caret, panel);
+
+  const opts = Array.from(select.options).map((o) => ({
+    value: o.value,
+    label: o.textContent.trim(),
+    ads: Number(o.dataset.ads || 0),
+    pin: o.dataset.pin || "",
+  }));
+  const labelFor = (v) => (opts.find((o) => o.value === v) || opts[0] || { label: "" }).label;
+  const syncInputText = () => { input.value = labelFor(select.value); };
+
+  let rendered = [];
+  let activeIdx = -1;
+
+  function groups(filter) {
+    const f = filter.trim().toLowerCase();
+    const match = (o) => !f || o.label.toLowerCase().includes(f);
+    const auto = opts.filter((o) => o.pin === "auto" && match(o));
+    const body = opts.filter((o) => !o.pin && match(o));
+    const three = body.filter((o) => o.ads >= 3);   // keep launch order (Ashburn/Phoenix/London/Frankfurt)
+    const rest = body.filter((o) => o.ads < 3).sort((a, b) => a.label.localeCompare(b.label));
+    return { auto, three, rest, filtering: f.length > 0 };
+  }
+  function render(filter) {
+    const { auto, three, rest, filtering } = groups(filter);
+    panel.innerHTML = "";
+    rendered = [];
+    const addOpt = (o) => {
+      const el = document.createElement("div");
+      el.className = "diagram-combo-opt";
+      el.setAttribute("role", "option");
+      el.setAttribute("aria-selected", String(o.value === select.value));
+      const txt = document.createElement("span");
+      txt.textContent = o.label;
+      el.appendChild(txt);
+      if (o.ads >= 3) {
+        const b = document.createElement("span");
+        b.className = "diagram-combo-badge";
+        b.textContent = o.ads + " ADs";
+        el.appendChild(b);
+      }
+      const idx = rendered.length;
+      el.addEventListener("mousedown", (e) => { e.preventDefault(); choose(o.value); });
+      el.addEventListener("mousemove", () => { activeIdx = idx; paintActive(); });
+      panel.appendChild(el);
+      rendered.push({ el, value: o.value });
+    };
+    const addSep = (t) => {
+      const s = document.createElement("div");
+      s.className = "diagram-combo-sep";
+      s.textContent = t;
+      panel.appendChild(s);
+    };
+    auto.forEach(addOpt);
+    if (three.length && !filtering) addSep("Multi-AD regions");
+    three.forEach(addOpt);
+    if (rest.length && !filtering && three.length) addSep("Other regions (A–Z)");
+    rest.forEach(addOpt);
+    if (!rendered.length) {
+      const e = document.createElement("div");
+      e.className = "diagram-combo-empty";
+      e.textContent = "No matching region";
+      panel.appendChild(e);
+    }
+    activeIdx = rendered.findIndex((r) => r.value === select.value);
+    paintActive();
+  }
+  function paintActive() {
+    rendered.forEach((r, i) => r.el.classList.toggle("is-active", i === activeIdx));
+    if (activeIdx >= 0) rendered[activeIdx].el.scrollIntoView({ block: "nearest" });
+  }
+  function open() {
+    wrap.classList.add("is-open");
+    input.setAttribute("aria-expanded", "true");
+    render("");
+    input.select();
+  }
+  function close() {
+    wrap.classList.remove("is-open");
+    input.setAttribute("aria-expanded", "false");
+    syncInputText();
+  }
+  function choose(value) {
+    if (select.value !== value) {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    close();
+    input.blur();
+  }
+  input.addEventListener("focus", open);
+  input.addEventListener("click", () => { if (!wrap.classList.contains("is-open")) open(); });
+  input.addEventListener("input", () => { wrap.classList.add("is-open"); render(input.value); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!wrap.classList.contains("is-open")) return open();
+      activeIdx = Math.min(activeIdx + 1, rendered.length - 1); paintActive();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIdx = Math.max(activeIdx - 1, 0); paintActive();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIdx >= 0 && rendered[activeIdx]) choose(rendered[activeIdx].value);
+    } else if (e.key === "Escape") {
+      close(); input.blur();
+    }
+  });
+  input.addEventListener("blur", () => { setTimeout(close, 120); });
+  syncInputText();
+}
+document.querySelectorAll('select[data-searchable="region"]').forEach(enhanceSearchableSelect);
+
 function rowSourceName(row) {
   return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
 }

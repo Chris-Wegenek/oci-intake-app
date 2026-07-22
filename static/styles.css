@@ -3791,6 +3791,48 @@ td input[type="checkbox"] {
 }
 .diagram-select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(47,111,115,0.14); }
 
+/* Searchable region combobox (replaces the native select for region pickers) */
+.diagram-combo { position: relative; }
+.diagram-combo select { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.diagram-combo-input {
+  width: 100%; height: 40px; padding: 0 34px 0 12px;
+  border: 1px solid #d3cfca; border-radius: 9px; font-size: 14px; background: #fff;
+  color: var(--ink); cursor: pointer; text-align: left;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.diagram-combo-input::placeholder { color: var(--muted); }
+.diagram-combo-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(47,111,115,0.14); cursor: text; }
+.diagram-combo-caret {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font-size: 11px; color: var(--muted); pointer-events: none; transition: transform 0.18s;
+}
+.diagram-combo.is-open .diagram-combo-caret { transform: translateY(-50%) rotate(180deg); }
+.diagram-combo-panel {
+  position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; right: 0;
+  max-height: 288px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--line-strong, #c7bfb2); border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(58, 33, 29, 0.16); padding: 5px;
+}
+.diagram-combo:not(.is-open) .diagram-combo-panel { display: none; }
+.diagram-combo-opt {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px; border-radius: 7px; font-size: 13.5px; color: var(--ink); cursor: pointer;
+}
+.diagram-combo-opt:hover,
+.diagram-combo-opt.is-active { background: var(--teal-soft); }
+.diagram-combo-opt[aria-selected="true"] { font-weight: 600; }
+.diagram-combo-opt[aria-selected="true"]::after { content: "✓"; color: var(--teal); font-size: 12px; }
+.diagram-combo-badge {
+  flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--navy);
+  background: var(--teal-soft); border: 1px solid #cfe3e0; border-radius: 999px; padding: 1px 8px;
+}
+.diagram-combo-empty { padding: 12px; font-size: 13px; color: var(--muted); text-align: center; }
+.diagram-combo-sep {
+  margin: 5px 8px; padding-top: 5px; border-top: 1px solid var(--line, #e2ded9);
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted);
+}
+
 /* Toggle switch (AD split + Enable DR) */
 .diagram-switch {
   display: flex; align-items: flex-start; gap: 12px;
