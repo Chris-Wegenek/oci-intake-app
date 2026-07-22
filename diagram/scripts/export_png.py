@@ -28,6 +28,7 @@ CONTAINER = {   # style: (stroke, fill, dash, fontsize, bold, tint_label)
     'compartment': ('#BB501C', None,      (4, 3), 17, True,  True),
     'vcn':         ('#AE562C', None,      (6, 3), 16, True,  True),
     'subnet':      ('#AE562C', None,      (2, 2), 15, False, True),
+    'ad':          ('#5E7D82', '#E9F0F0', None,   15, True,  True),
     'plain':       ('#9E9892', '#FFFFFF', None,   16, False, False),
     'note':        ('#B5B0AA', '#FFFFFF', None,   15, False, False),
     'external':    ('#9E9892', '#FFFFFF', (5, 3), 16, False, False),

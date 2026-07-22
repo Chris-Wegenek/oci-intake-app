@@ -36,6 +36,15 @@ def _norm(v):
     return re.sub(r"[^a-z0-9]+", " ", _clean(v).lower()).strip()
 
 
+def _even_share(total, n, idx):
+    """Split `total` into `n` as-even-as-possible integer parts; part `idx` gets one of the
+    leftover units when it doesn't divide evenly (e.g. 149 over 3 -> 50, 50, 49)."""
+    total = int(round(float(total or 0)))
+    n = max(1, int(n))
+    base, rem = divmod(total, n)
+    return base + (1 if idx < rem else 0)
+
+
 def _segment_key(raw_row, keys):
     """Prefer a real Tier/Environment column; fall back to OS family; else one segment."""
     for role in ("tier", "env", "os_family", "app"):
@@ -71,21 +80,24 @@ def collect_segments(pricing, rows, keys):
             continue
         raw = raw_by_id.get(str(p.get("rowId"))) or {}
         name = _segment_key(raw, keys) or "Workloads"
-        s = segs.setdefault(name, {"name": name, "vms": 0, "ocpu": 0.0, "ram": 0.0,
-                                   "block": 0.0, "win": 0.0})
+        s = segs.setdefault(name, {"name": name, "vms": 0, "winvms": 0, "ocpu": 0.0,
+                                   "ram": 0.0, "block": 0.0, "win": 0.0})
         s["vms"] += 1
+        _win = float(p.get("windowsLicenseMonthly") or 0)
+        if _win > 0:
+            s["winvms"] += 1                        # this server carries Windows OS licensing
         s["ocpu"] += float(specs.get("ocpus") or 0)
         s["ram"] += float(specs.get("memoryGb") or 0)
         s["block"] += float(specs.get("blockStorageGb") or 0)
-        s["win"] += float(p.get("windowsLicenseMonthly") or 0)
+        s["win"] += _win
 
     out = sorted(segs.values(), key=lambda s: -s["vms"])
     if len(out) > MAX_SPOKES:                       # fold the tail into one "Other" spoke
         head, tail = out[:MAX_SPOKES - 1], out[MAX_SPOKES - 1:]
-        merged = {"name": "Other workloads", "vms": 0, "ocpu": 0.0, "ram": 0.0,
-                  "block": 0.0, "win": 0.0}
+        merged = {"name": "Other workloads", "vms": 0, "winvms": 0, "ocpu": 0.0,
+                  "ram": 0.0, "block": 0.0, "win": 0.0}
         for t in tail:
-            for k in ("vms", "ocpu", "ram", "block", "win"):
+            for k in ("vms", "winvms", "ocpu", "ram", "block", "win"):
                 merged[k] += t[k]
         out = head + [merged]
     return out
@@ -291,6 +303,11 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     else:
         region_ads = int(_opts.get("primaryAds") or 1)
     ad_split = bool(_opts.get("splitADs")) and region_ads > 1
+    # Which resource types to physically split across availability domains (from the app's
+    # AD-split chips). Default: both, so picking a multi-AD region + AD split just works.
+    _adres = _opts.get("adSplitResources") or {}
+    split_vms = ad_split and bool(_adres.get("vms", True))
+    split_dbs = ad_split and bool(_adres.get("dbs", True))
     # Is a Full Stack DR add-in actually priced in this BOM?
     dr_priced = any(
         "full stack disaster recovery" in str(r.get("ociProduct", "")).lower()
@@ -453,59 +470,105 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         box(f"{sid}vcn",
             f"{seg['name']} Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
             x, VCN_Y, SPOKE_W, VCN_H, "vcn")
-        box(f"{sid}_app", f"{seg['name']} Private App Subnet\n10.{third}.1.0/24",
-            ax, 420, aw, 280, "subnet")
-        box(f"{sid}_data", f"{seg['name']} Private Data / Storage Subnet\n10.{third}.2.0/24",
-            ax, 720, aw, 280, "subnet")
-
-        _ad_note = ""
-        if ad_split:
-            _per_ad = max(1, round(seg["vms"] / region_ads))
-            _ad_note = f"\nacross {region_ads} ADs (~{_per_ad}/AD)"
-        icon(f"{sid}vm", "Compute - Virtual Machine VM",
-             (f"{seg['vms']:,} {seg['name']} VMs\n"
-              f"{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB RAM"
-              + (f"\n{shape_label} flex" if shape_label else "")
-              + _ad_note),
-             ax + 60, 500, 96)
-        # Attached block volumes are part of the VM — not drawn as a separate icon.
-        if seg["win"] > 0:
-            icon(f"{sid}lic", "Governance and Administration - License Manager",
-                 f"Windows OS licensing\n${seg['win']:,.0f}/mo (3rd-party)",
-                 ax + aw - 156, 500, 96)
-        # Data / storage tier: managed database (where the DBs live) + object-storage
-        # backup bucket. The DB icon is drawn as the target pattern in every spoke's data
-        # subnet when the BOM contains any managed-database spend (cost is summarized once
-        # in the services band, not multiplied per spoke).
-        if db_types:
-            # One icon per managed-database TYPE, evenly distributed (centered per cell) so
-            # 1 DB sits centered and 5 fill a 3-col grid without cramming; backup bucket in
-            # the right margin. $/mo is the BOM total for that type.
-            n = len(db_types)
-            per_row = min(3, n)
-            nrows = (n + per_row - 1) // per_row
-            avail = aw - 170                       # reserve right margin for the bucket
-            cellw = avail // per_row
-            dsz = 84 if n <= 3 else 68
-            y0 = 800 if nrows == 1 else 758
-            for k, (stencil, label, mo) in enumerate(db_types):
-                col, row = k % per_row, k // per_row
-                cx = ax + 20 + col * cellw + (cellw - dsz) // 2
-                nid = f"{sid}db{k}"
-                icon(nid, stencil, f"{label}\n${mo:,.0f}/mo", cx, y0 + row * 116, dsz)
-                if k == 0:
-                    link(f"{sid}vm", nid, "App -> DB", "solid")
-            # Backup bucket sits at the BOTTOM of the spoke VCN (below the data subnet),
-            # clear of the database icons/labels.
+        if ad_split and (split_vms or split_dbs):
+            # ---- AD-split layout: draw the region's availability domains as fault-isolated
+            #      columns and distribute the chosen resource types evenly across them. ----
+            n_ad = region_ads
+            adw = aw // n_ad
+            ad_top, ad_bottom = 415, 1005
+            win_vms = int(seg.get("winvms", 0))
+            reg_vms = max(0, int(seg["vms"]) - win_vms)     # regular (non-Windows) VMs
+            # Per-AD database placement: SQL Server DBs are grouped together in one AD; every
+            # other DB type is distributed round-robin across the ADs.
+            ad_dbs = [[] for _ in range(n_ad)]
+            if split_dbs and db_types:
+                sql_dbs = [d for d in db_types if "sql" in _norm(d[1])]
+                other_dbs = [d for d in db_types if "sql" not in _norm(d[1])]
+                for idx, d in enumerate(other_dbs):
+                    ad_dbs[idx % n_ad].append(d)
+                if sql_dbs:
+                    ad_dbs[0] = sql_dbs + ad_dbs[0]          # group all SQL Server DBs in AD 1
+            # A resource type that ISN'T in the split is drawn once (shared), above the AD grid.
+            if not split_vms:
+                icon(f"{sid}vm", "Compute - Virtual Machine VM",
+                     f"{reg_vms:,} {seg['name']} VMs\n{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB",
+                     ax + (aw // 3 if win_vms else aw // 2) - 48, 425, 92)
+                link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
+                if win_vms > 0:
+                    icon(f"{sid}winvm", "Compute - Virtual Machine VM",
+                         f"{win_vms:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
+                         ax + 2 * aw // 3 - 48, 425, 92)
+                    link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
+                ad_top = 560
+            shared_db = bool(db_types) and not split_dbs
+            if shared_db:
+                ad_bottom = 880
+            for j in range(n_ad):
+                adx = ax + j * adw
+                box(f"{sid}ad{j}",
+                    f"Availability Domain {j+1}\n{seg['ocpu']/n_ad:,.0f} OCPU · {seg['ram']/n_ad:,.0f} GB · fault-isolated",
+                    adx + 3, ad_top, adw - 6, ad_bottom - ad_top, "ad")
+                yy = ad_top + 56
+                if split_vms:
+                    icon(f"{sid}vm{j}", "Compute - Virtual Machine VM",
+                         f"{_even_share(reg_vms, n_ad, j):,} VMs", adx + adw // 2 - 30, yy, 60)
+                    link("drg", f"{sid}vm{j}", "AD transit", "solid")
+                    yy += 104
+                    if win_vms > 0:
+                        icon(f"{sid}winvm{j}", "Compute - Virtual Machine VM",
+                             f"{_even_share(win_vms, n_ad, j):,} Windows VMs\n${seg['win']/n_ad:,.0f}/mo",
+                             adx + adw // 2 - 30, yy, 60)
+                        yy += 110
+                for di, (stencil, label, _mo) in enumerate(ad_dbs[j]):
+                    icon(f"{sid}ad{j}db{di}", stencil, label, adx + adw // 2 - 26, yy, 52)
+                    yy += 84
+            if shared_db:                                    # DBs not split: one shared row below
+                ndb = len(db_types)
+                cw = aw // ndb
+                for k, (stencil, label, mo) in enumerate(db_types):
+                    icon(f"{sid}db{k}", stencil, f"{label}\n${mo:,.0f}/mo",
+                         ax + k * cw + (cw - 64) // 2, ad_bottom + 22, 64)
             icon(f"{sid}bkt", "Storage - Object Storage",
                  f"{seg['name']} backup bucket\nObject Storage",
-                 ax + aw // 2 - 44, VCN_Y + VCN_H - 130, 88)
+                 ax + aw // 2 - 44, VCN_Y + VCN_H - 116, 84)
         else:
+            # ---- single layout (no AD split) ----
+            box(f"{sid}_app", f"{seg['name']} Private App Subnet\n10.{third}.1.0/24",
+                ax, 420, aw, 280, "subnet")
+            box(f"{sid}_data", f"{seg['name']} Private Data / Storage Subnet\n10.{third}.2.0/24",
+                ax, 720, aw, 280, "subnet")
+            _wv = int(seg.get("winvms", 0))
+            _rv = max(0, int(seg["vms"]) - _wv)     # regular (non-Windows) VMs
+            icon(f"{sid}vm", "Compute - Virtual Machine VM",
+                 (f"{_rv:,} {seg['name']} VMs\n"
+                  f"{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB RAM"
+                  + (f"\n{shape_label} flex" if shape_label else "")),
+                 ax + 60, 500, 96)
+            # Windows-licensed servers are their own VM image (not a standalone license icon).
+            if _wv > 0:
+                icon(f"{sid}winvm", "Compute - Virtual Machine VM",
+                     f"{_wv:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
+                     ax + aw - 156, 500, 96)
+                link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
+            if db_types:
+                n = len(db_types)
+                per_row = min(3, n)
+                nrows = (n + per_row - 1) // per_row
+                avail = aw - 170
+                cellw = avail // per_row
+                dsz = 84 if n <= 3 else 68
+                y0 = 800 if nrows == 1 else 758
+                for k, (stencil, label, mo) in enumerate(db_types):
+                    col, row = k % per_row, k // per_row
+                    cx = ax + 20 + col * cellw + (cellw - dsz) // 2
+                    nid = f"{sid}db{k}"
+                    icon(nid, stencil, f"{label}\n${mo:,.0f}/mo", cx, y0 + row * 116, dsz)
+                    if k == 0:
+                        link(f"{sid}vm", nid, "App -> DB", "solid")
             icon(f"{sid}bkt", "Storage - Object Storage",
                  f"{seg['name']} backup bucket\nObject Storage",
                  ax + aw // 2 - 44, VCN_Y + VCN_H - 130, 88)
-
-        link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
+            link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
         # The attached block volume needs no backup edge — backups live at the DR site.
 
     # ---- DR region (only when the app's Enable DR toggle is on) --------------

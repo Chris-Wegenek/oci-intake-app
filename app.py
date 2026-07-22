@@ -7839,6 +7839,25 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 "priceSource": "real" if src_rec.get("sourcePriceReal") else "estimate",
             }
 
+        # SQL Server 3rd-party licensing is bundled as line item(s) inside the OCI cost (unlike
+        # Windows, which is a separate add-on). The licensing toggle hides SQL Server licensing
+        # alongside Windows — both are BYOL-able 3rd-party licenses the customer may already own.
+        sql_license_monthly = 0.0
+        for _li in (line_items or []):
+            _d = normalize(_li.get("description", ""))
+            if "sql server" in _d and ("licens" in _d):
+                sql_license_monthly += float(_li.get("monthly") or 0)
+        sql_license_monthly = money(sql_license_monthly)
+        if hide_windows_pricing and sql_license_monthly:
+            for _li in line_items:
+                _d = normalize(_li.get("description", ""))
+                if "sql server" in _d and ("licens" in _d):
+                    _li["monthly"] = 0.0
+                    _li["mapping"] = (clean_text(_li.get("mapping", "")) + " SQL Server licensing hidden by the licensing toggle.").strip()
+            monthly = money(monthly - sql_license_monthly)
+            annual = money(monthly * 12)
+            sql_license_monthly = 0.0
+
         priced = {
             "rowId": row["__id"],
             "sourceRow": row.get("__sourceRow"),
@@ -7853,6 +7872,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "sourceService": clean_text(row.get("source_service")),
             "sourceMonthlyCost": money(_src_cost),
             "windowsLicenseMonthly": windows_addon,
+            "sqlLicenseMonthly": sql_license_monthly,
             "sourceCloudEstimate": source_cloud_estimate,
             "rightsized": bool(rightsize and ((original_memory_gb and memory_gb != original_memory_gb) or (original_ocpus and ocpus != original_ocpus))),
             "originalMemoryGb": round(original_memory_gb, 4),

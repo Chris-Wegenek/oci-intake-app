@@ -226,9 +226,9 @@
               <input id="hideGpuToggle" type="checkbox" />
               <span>Hide GPU pricing</span>
             </label>
-            <label class="opt-chip" title="Turn off Windows OS licensing (1 license per OCPU) in the OCI estimate, source-cloud estimate, and export.">
+            <label class="opt-chip" title="Turn off 3rd-party licensing — Windows OS (1 license per OCPU) and SQL Server licensing — in the OCI estimate, source-cloud estimate, cross-cloud comparison, and export.">
               <input id="hideWindowsToggle" type="checkbox" />
-              <span>Hide Windows pricing</span>
+              <span>Hide Windows &amp; SQL licensing</span>
             </label>
           </div>
           <div class="shape-action-buttons">
@@ -497,6 +497,21 @@
                 <small id="adSplitHint">Pick a multi-AD region to enable</small>
               </span>
             </label>
+            <div id="adSplitResources" class="diagram-sub" hidden>
+              <div class="diagram-field">
+                <span class="diagram-field-label">Split which resources across ADs</span>
+                <div class="diagram-chips" id="adSplitChips">
+                  <label class="diagram-chip">
+                    <input type="checkbox" id="adSplitVms" value="vms" checked />
+                    <span>Compute VMs</span>
+                  </label>
+                  <label class="diagram-chip">
+                    <input type="checkbox" id="adSplitDbs" value="dbs" checked />
+                    <span>Databases</span>
+                  </label>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="diagram-card">

@@ -1270,6 +1270,70 @@ def _shift_same_sheet_rows(ws, lo, hi, delta):
                 cell.value = rewrite(cell.value)
 
 
+def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
+    """Add an editable OCI-discount input at A7/B7 (post-relayout layout) and rewire the
+    Total Monthly Cost (B18) + OCI Cost Profile to apply it live: discountable OCI services
+    x (1 - B7), while 3rd-party licensing is NEVER discounted. Microsoft SQL Server licensing
+    is bundled inside the service categories (Compute-grouped rows land in B11, Database-grouped
+    rows in B12); it's moved into the 3rd-party licensing line (B17, relabeled Windows + SQL) so
+    every formula references cells only. Total Annual (B19 = B18*12) and the comparison blocks
+    reference B18/B19, so editing B7 (or any input cell) re-flows the whole sheet."""
+    from openpyxl.styles import Font as _F, PatternFill as _PF, Border as _Bd, Side as _Sd, Alignment as _Al
+    ws["A7"] = "OCI Discount:"
+    ws["A7"].font = _F(bold=True)
+    ws["A7"].alignment = _Al(horizontal="right", vertical="center")
+    b7 = ws["B7"]
+    b7.value = round(max(0.0, min(1.0, float(discount or 0))), 4)
+    b7.number_format = "0.0%"
+    b7.alignment = _Al(horizontal="center", vertical="center")
+    b7.font = _F(bold=True)
+    b7.fill = _PF("solid", fgColor="FFF2CC")
+    _thin = _Sd(style="thin", color="BF8F00")
+    b7.border = _Bd(left=_thin, right=_thin, top=_thin, bottom=_thin)
+
+    sqlc = round(float(sql_compute or 0), 2)     # SQL license bundled in Compute -> B11
+    sqld = round(float(sql_database or 0), 2)     # SQL license bundled in Database -> B12
+
+    # Give SQL Server licensing a real home instead of a magic number: move it OUT of the
+    # discountable service cells (Compute SQL from B11, Database SQL from B12) and fold it into
+    # the 3rd-party licensing line (B17), relabeled "Windows + SQL". Every discount formula can
+    # then reference cells only — no embedded constants — and B17 (Windows + SQL) is never
+    # discounted. Only what's actually removed is folded in, so nothing is double-counted.
+    moved = 0.0
+    for ref, amt in (("B11", sqlc), ("B12", sqld)):
+        cur = ws[ref].value
+        if amt and isinstance(cur, (int, float)):
+            ws[ref] = round(float(cur) - amt, 2)
+            moved = round(moved + amt, 2)
+    if moved:
+        cur17 = ws["B17"].value
+        ws["B17"] = round((float(cur17) if isinstance(cur17, (int, float)) else 0.0) + moved, 2)
+        ws["A17"] = "3rd Party Licensing (Windows + SQL):"
+
+    # Total Monthly: discountable services (SQL now excluded, living in B17) x (1-B7) + B17.
+    ws["B18"] = "=SUM(B9:B16)*(1-$B$7)+B17"
+    ws["B19"] = "=B18*12"
+
+    # OCI Cost Profile (D:H, rows 10-13): mirror the same math — discount the service refs,
+    # leave the licensing ref ($B$17) at list. Cell references only. String substitution keeps
+    # each formula's Consumption-Ramp range intact.
+    subs = [
+        ("SUM($B$9:$B$11,$B$17)", "(SUM($B$9:$B$11)*(1-$B$7)+$B$17)"),  # Core infra (B17 = Windows+SQL, at list)
+        ("SUM($B$14:$B$15)", "(SUM($B$14:$B$15)*(1-$B$7))"),           # Network, security & KMS
+        ("$B$12", "($B$12*(1-$B$7))"),                                  # Object/file storage
+        ("$B$16", "($B$16*(1-$B$7))"),                                  # Disaster recovery
+    ]
+    for r in range(10, 14):
+        for c in range(5, 8):                 # E, F, G
+            cell = ws.cell(r, c)
+            v = cell.value
+            if isinstance(v, str) and v.startswith("="):
+                for old, new in subs:
+                    if old in v:
+                        cell.value = v.replace(old, new)
+                        break                  # one discountable ref type per cell
+
+
 def _relayout_pricing_overview(ws, delta=4):
     """Close the empty gap above the Pricing Baseline so the comparison blocks and the
     architecture diagram can stack beneath it. The Baseline + OCI Cost Profile band
@@ -1803,6 +1867,27 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     _relayout_notes = None
     if cloud_comparison:
         _relayout_notes = _relayout_pricing_overview(wb["Pricing Overview"], delta=4)
+        # OCI discount input (A7 label / B7 editable %). The Total Monthly applies it LIVE to
+        # the discountable OCI services and leaves 3rd-party licensing (Windows + SQL Server) at
+        # list — matching the app's headline math. Everything downstream (Total Annual, the
+        # comparison blocks, chart) references B18/B19, so editing B7 re-flows the whole sheet.
+        # SQL licensing is bundled in service categories, so split it by group (Compute -> B11,
+        # Database/other -> B12) so the discount can exclude it exactly.
+        import bom_export as _bx_disc
+        _sql_compute = _sql_database = 0.0
+        for _r in ((cloud_comparison.get("pricing") or pricing).get("rows") or []):
+            if (_r.get("costAction") or "") == "remove":
+                continue
+            _s = float(_r.get("sqlLicenseMonthly") or 0)
+            if not _s:
+                continue
+            _g = _bx_disc._cloud_product_group(_r.get("ociServiceCategory"), _r.get("sourceService"))
+            if _g == "Compute":
+                _sql_compute += _s
+            else:
+                _sql_database += _s
+        _apply_overview_discount(wb["Pricing Overview"], float(cloud_comparison.get("ociDiscount") or 0),
+                                 _sql_compute, _sql_database)
 
     # Cloud-bill: add the AWS-vs-OCI comparison blocks (5-year projection, savings,
     # chart) directly below the baseline on the Pricing Overview, wired to its live

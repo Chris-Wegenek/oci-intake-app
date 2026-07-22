@@ -32,6 +32,7 @@ const state = {
   // Diagram & DR options (region names + availability-domain split for the architecture diagram).
   diagramOptions: {
     primaryRegion: "", drRegion: "", splitADs: false, primaryAds: 1,
+    adSplitResources: { vms: true, dbs: true },
     enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
   },
   catalog: { groups: [], results: [], group: "", query: "", groupsOpen: {} },
@@ -321,8 +322,16 @@ document.addEventListener("click", (event) => {
 // the "split across ADs" toggle; a 1-AD region can't split.
 const state_diagramOptions_default = {
   primaryRegion: "", drRegion: "", splitADs: false, primaryAds: 1,
+  adSplitResources: { vms: true, dbs: true },
   enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
 };
+function _syncAdSplitResources() {
+  // Show the "which resources to split" chips only when AD split is on.
+  const on = !!document.querySelector("#splitAcrossADs")?.checked
+             && !document.querySelector("#splitAcrossADs")?.disabled;
+  const sub = document.querySelector("#adSplitResources");
+  if (sub) sub.hidden = !on;
+}
 function _syncAdSplitControl() {
   const sel = document.querySelector("#primaryRegion");
   const chk = document.querySelector("#splitAcrossADs");
@@ -334,11 +343,21 @@ function _syncAdSplitControl() {
   chk.disabled = ads < 2;
   if (ads < 2) { chk.checked = false; state.diagramOptions.splitADs = false; }
   if (hint) hint.textContent = ads >= 2 ? `${ads} availability domains available` : "Pick a multi-AD region to enable";
+  _syncAdSplitResources();
 }
 document.querySelector("#primaryRegion")?.addEventListener("change", _syncAdSplitControl);
 document.querySelector("#splitAcrossADs")?.addEventListener("change", (e) => {
   state.diagramOptions.splitADs = !!e.target.checked;
+  _syncAdSplitResources();
 });
+function _syncAdSplitResourceState() {
+  state.diagramOptions.adSplitResources = {
+    vms: !!document.querySelector("#adSplitVms")?.checked,
+    dbs: !!document.querySelector("#adSplitDbs")?.checked,
+  };
+}
+["#adSplitVms", "#adSplitDbs"].forEach((s) =>
+  document.querySelector(s)?.addEventListener("change", _syncAdSplitResourceState));
 document.querySelector("#drRegion")?.addEventListener("change", (e) => {
   state.diagramOptions.drRegion = e.target.value;
 });
@@ -4046,7 +4065,13 @@ function renderCrossCloud() {
   const wrap = els.crossCloudResults;
   if (!wrap) return;
   const raw = state.pricing?.crossCloud;
-  const ociMonthly = Number(state.pricing?.totals?.monthly || 0);
+  // Full OCI total — the SAME figure as the "OCI-equivalent monthly" headline: discounted
+  // compute + storage + mapped services, PLUS add-in services and Windows 3rd-party
+  // licensing. The other clouds' bills include their licensing too, so leaving it out here
+  // understated OCI and made the comparison unfair.
+  const _ccWindows = (state.pricing?.rows || []).reduce(
+    (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
+  const ociMonthly = ociEffectiveMonthly(state.pricing) + extraServicesEffective() + _ccWindows;
   if (!raw) {
     wrap.innerHTML = `<p class="cross-cloud-empty">Run a pricing estimate first to compare other clouds.</p>`;
     return;
