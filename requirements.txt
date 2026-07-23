@@ -9,7 +9,7 @@ legacy-cgi; python_version >= "3.13"
 # on every sheet, so it fails long before the architecture diagram. Also used to render
 # the diagram PNG itself.
 pillow
-# pycairo renders the architecture-diagram PNG (needs system cairo: `brew install cairo`
-# on macOS, or libcairo2 on Linux). Without it the .drawio still builds but the embedded
-# PNG is skipped. openpyxl embedding itself no longer needs Pillow — see bom_template.
-pycairo
+# pycairo renders the optional architecture-diagram PNG locally, but it needs
+# native cairo headers that Vercel's Python build image does not provide. The
+# app already skips PNG rendering when cairo is unavailable; .drawio export
+# still builds.
