@@ -1927,7 +1927,9 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         _aws_monthly = float((_cc_pricing.get("totals") or {}).get("sourceMonthlyCost") or 0)
         bom_export.add_comparison_to_pricing_overview(
             wb["Pricing Overview"], 22, "$B$18", "$B$19",
-            _aws_monthly, bom_export._util_by_year(cloud_comparison.get("ramp")))
+            _aws_monthly, bom_export._util_by_year(cloud_comparison.get("ramp")),
+            source_cloud=_cc_pricing.get("sourceCloud") or "aws",
+            estimated=bool(_cc_pricing.get("sourceCostEstimated")))
 
     # Architecture diagram generated from THIS BOM (deterministic; no model call).
     # If the diagram toolchain isn't available the export still succeeds — the template's

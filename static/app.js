@@ -747,6 +747,23 @@ function providerLabel(value = state.providerHint) {
   return labels[value] || "Auto-detect";
 }
 
+// Display name for the bill's source cloud ("AWS"/"Azure"/"GCP", else "Source").
+function cloudDisplayName(key = state.pricing?.sourceCloud) {
+  const k = String(key || "").toLowerCase();
+  return k === "aws" ? "AWS" : k === "azure" ? "Azure" : k === "gcp" ? "GCP" : "Source";
+}
+
+// True when the current pricing filled the source cost from usage (bill had no pricing).
+function sourceCostIsEstimated() {
+  return Boolean(state.pricing?.sourceCostEstimated);
+}
+
+// Label for any "<cloud> cost" / "current cost" spot: append "(App Estimate)" when the figure
+// was reconstructed by the app because the uploaded bill carried no pricing.
+function sourceCostLabel(base = "Source cost") {
+  return sourceCostIsEstimated() ? `${cloudDisplayName()} cost (App Estimate)` : base;
+}
+
 function pricingActionLabel(action = "price") {
   if (action === "rerun") {
     return state.openaiApiConnected ? "Reprice on OCI" : "Reprice estimate";
@@ -3509,7 +3526,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       },
       {
         key: "sourceCost",
-        label: "Source cost",
+        label: sourceCostLabel(),
         sortValue: (row) => Number(row.fullServiceMapping?.sourceMonthlyCost || 0),
         render: (row) => formatCurrency(row.fullServiceMapping?.sourceMonthlyCost || 0),
       },
@@ -4190,7 +4207,7 @@ function renderCrossCloud() {
   `);
   const tier = state.crossCloudTopTier;
   const basisLabel = (v) => {
-    if (v.basis === "actual bill") return "your actual billed cost";
+    if (v.basis === "actual bill") return sourceCostIsEstimated() ? "App Estimate — from usage (bill had no pricing)" : "your actual billed cost";
     if (v.basis === "what-if: bill re-shaped on newest-gen") return "what-if: your bill re-shaped on newest-gen";
     if (v.basis && v.basis.startsWith("compute + services re-priced")) return v.basis;
     if (v.carriedRows) return `compute estimated · ${v.carriedRows} services at billed cost`;
@@ -4210,9 +4227,11 @@ function renderCrossCloud() {
       : "";
     // Reversed: other cloud cheaper than OCI (negative) = red; pricier = green.
     const deltaClass = delta >= 0 ? "cross-cloud-down" : "cross-cloud-up";
+    // The source cloud's card is an App Estimate when the bill had no pricing — flag it.
+    const nameSuffix = (sourceCostIsEstimated() && key === raw.sourceCloud) ? " (App Estimate)" : "";
     cards.push(`
       <div class="cross-cloud-card">
-        <span class="cross-cloud-card-name">${escapeHtml(v.label || key.toUpperCase())}</span>
+        <span class="cross-cloud-card-name">${escapeHtml((v.label || key.toUpperCase()) + nameSuffix)}</span>
         <span class="cross-cloud-card-monthly">${formatCurrency(monthly)}<small>/mo</small></span>
         <span class="cross-cloud-card-annual">${formatCurrency(Number(v.annualTotal || monthly * 12))}/yr</span>
         ${deltaLabel ? `<span class="cross-cloud-delta ${deltaClass}">${deltaLabel}</span>` : ""}
@@ -4238,10 +4257,13 @@ function renderCrossCloud() {
     : tier
     ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote."
     : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote.";
+  const estNote = sourceCostIsEstimated()
+    ? ` Your ${srcName} bill contained usage/SKUs but no pricing, so the ${srcName} total shown is an App Estimate reconstructed from usage — not a billed figure.`
+    : "";
   wrap.innerHTML = `
     ${toggle ? `<div class="cross-cloud-toolbar">${toggle}</div>` : ""}
     <div class="cross-cloud-grid">${cards.join("")}</div>
-    <p class="cross-cloud-note">${note}</p>
+    <p class="cross-cloud-note">${note}${estNote}</p>
   `;
   wrap.querySelectorAll("[data-cc-tier]").forEach((btn) => {
     btn.addEventListener("click", () => {

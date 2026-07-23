@@ -528,8 +528,9 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
 
 
 def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
-                               existing_label="Current AWS Spend (monthly):", oci_discount=0.0):
-    """Render the 'Overview' sheet for the AWS->OCI bill comparison.
+                               existing_label=None, oci_discount=0.0,
+                               source_cloud="aws", estimated=False):
+    """Render the 'Overview' sheet for the source-cloud->OCI bill comparison.
 
     Mirrors the on-prem `build_overview_sheet` layout, red theme, and stacked
     column + Current Spend line chart exactly, but feeds the figures straight
@@ -544,6 +545,10 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     existing_monthly = float(existing_monthly or 0)
     oci_annual = oci_monthly * 12.0
     existing_annual = existing_monthly * 12.0
+    _cloudnm = {"aws": "AWS", "azure": "Azure", "gcp": "GCP"}.get(str(source_cloud or "aws").lower(), "AWS")
+    _est = " (App Estimate)" if estimated else ""
+    if existing_label is None:
+        existing_label = f"Current {_cloudnm} Spend (monthly){_est}:"
 
     ws.column_dimensions["A"].width = 28
     for col in "BCDEFG":
@@ -566,7 +571,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     # Title banner
     ws.merge_cells("A1:H2")
     t = ws["A1"]
-    t.value = "AWS Bill to OCI Cost Overview"
+    t.value = f"{_cloudnm} Bill to OCI Cost Overview"
     t.fill = _fill(OV_NAVY)
     t.font = Font(bold=True, color="FFFFFFFF", size=26, name="Calibri")
     t.alignment = CENTER
@@ -663,7 +668,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     # Chart data — comparison table (annual figures, ramped over 5 years)
     ws.merge_cells("A23:F23")
     band("A23", "Chart Data — Comparison", size=12)
-    for cell, text in (("A24", "Year"), ("B24", "OCI Estimate"), ("C24", "Existing (AWS) Cost"),
+    for cell, text in (("A24", "Year"), ("B24", "OCI Estimate"), ("C24", f"Existing ({_cloudnm}) Cost{_est}"),
                        ("D24", "Combined Cost"), ("E24", "Current Spend"), ("F24", "Total Savings")):
         colhead(cell, text)
     # Annualize the monthly AWS spend so the comparison table is apples-to-apples
@@ -702,7 +707,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
         ws.column_dimensions[col].width = 18
     ws.merge_cells("T8:V8")
     band("T8", "Existing Spend — Ramp %", size=12)
-    for cell, text in (("T9", "Year"), ("U9", "Existing (AWS) Cost"), ("V9", "Existing Util %")):
+    for cell, text in (("T9", "Year"), ("U9", f"Existing ({_cloudnm}) Cost{_est}"), ("V9", "Existing Util %")):
         colhead(cell, text)
     for y in range(5):
         r = 10 + y
@@ -770,16 +775,22 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
 
 def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annual_ref,
                                        aws_monthly, util_by_year,
-                                       aws_ramp=(1.0, 0.0, 0.0, 0.0, 0.0)):
+                                       aws_ramp=(1.0, 0.0, 0.0, 0.0, 0.0),
+                                       source_cloud="aws", estimated=False):
     """Render the Cloud Bill Overview's below-row-7 blocks (5-Year Cost Projection,
-    AWS-vs-OCI savings, Existing-spend ramp %, Chart Data + chart) onto the Pricing
+    source-vs-OCI savings, Existing-spend ramp %, Chart Data + chart) onto the Pricing
     Overview at `start_row`, wired to that sheet's live OCI total cells:
       oci_monthly_ref / oci_annual_ref  e.g. "$B$22" / "$B$23"  (same-sheet refs)
-      aws_monthly  = current AWS spend, written as an editable input value
+      aws_monthly  = current source-cloud spend, written as an editable input value
       util_by_year = OCI 5-year utilization ramp (list of 5 fractions)
-      aws_ramp     = existing-AWS spend ramp per year (default 50% yr1, 0% after),
+      aws_ramp     = existing-spend ramp per year (default 50% yr1, 0% after),
                      kept as live editable % cells feeding the Combined / Savings math.
+      source_cloud = "aws"/"azure"/"gcp" — names the existing-spend labels.
+      estimated    = True when the bill had no pricing and aws_monthly is an App Estimate;
+                     appends " (App Estimate)" to the existing-cost labels.
     """
+    _cloudnm = {"aws": "AWS", "azure": "Azure", "gcp": "GCP"}.get(str(source_cloud or "aws").lower(), "AWS")
+    _est = " (App Estimate)" if estimated else ""
     from openpyxl.chart import BarChart, LineChart, Reference
     from openpyxl.chart.axis import ChartLines
     from openpyxl.chart.marker import DataPoint
@@ -860,7 +871,7 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
     #      comparison chart (M:O), one column clear of the chart's right edge at K ----
     ws.merge_cells(f"M{s}:O{s}")
     band(f"M{s}", "Existing Spend — Ramp %", size=12)
-    for col, text in (("M", "Year"), ("N", "Existing (AWS) Cost"), ("O", "Existing Util %")):
+    for col, text in (("M", "Year"), ("N", f"Existing ({_cloudnm}) Cost{_est}"), ("O", "Existing Util %")):
         colhead(f"{col}{s+1}", text)
     for y in range(5):
         r = s + 2 + y
@@ -876,12 +887,12 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
 
     # ---- Current AWS Spend vs. OCI Estimate ----
     ws.merge_cells(f"A{sv}:D{sv}")
-    band(f"A{sv}", "Current AWS Spend vs. OCI Estimate")
+    band(f"A{sv}", f"Current {_cloudnm} Spend vs. OCI Estimate")
     rows_spec = [
-        (f"A{sv+1}", "Current AWS Spend (monthly):", f"B{sv+1}", float(aws_monthly or 0), MONEY2),
+        (f"A{sv+1}", f"Current {_cloudnm} Spend (monthly){_est}:", f"B{sv+1}", float(aws_monthly or 0), MONEY2),
         (f"A{sv+2}", "OCI Estimated Monthly:", f"B{sv+2}", f"={oci_monthly_ref}", MONEY2),
         (f"A{sv+3}", "Estimated Monthly Savings:", f"B{sv+3}", f"=B{sv+1}-B{sv+2}", MONEY2),
-        (f"A{sv+4}", "Savings % vs. AWS:", f"B{sv+4}", f"=IF(B{sv+1}=0,0,(B{sv+1}-B{sv+2})/B{sv+1})", "0.0%"),
+        (f"A{sv+4}", f"Savings % vs. {_cloudnm}:", f"B{sv+4}", f"=IF(B{sv+1}=0,0,(B{sv+1}-B{sv+2})/B{sv+1})", "0.0%"),
         # Net 5-year savings = sum of the per-year Total Savings (negative migration year 1 +
         # positive post-migration years) from the Chart Data table below.
         (f"A{sv+5}", "Estimated 5-Year Savings:", f"B{sv+5}", f"=SUM(F{cd+3}:F{cd+7})", MONEY2),
@@ -899,7 +910,7 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
     # ---- Chart Data — Comparison ----
     ws.merge_cells(f"A{cd}:F{cd}")
     band(f"A{cd}", "Chart Data — Comparison", size=12)
-    for col, text in (("A", "Year"), ("B", "OCI Estimate"), ("C", "Existing (AWS) Cost"),
+    for col, text in (("A", "Year"), ("B", "OCI Estimate"), ("C", f"Existing ({_cloudnm}) Cost{_est}"),
                       ("D", "Combined Cost"), ("E", "Current Spend"), ("F", "Total Savings")):
         colhead(f"{col}{cd+1}", text)
     ws[f"A{cd+2}"] = "Today"; ws[f"A{cd+2}"].alignment = CENTER
@@ -1262,13 +1273,17 @@ def add_cloud_comparison_sheets(wb, pricing, ramp=None, bom_name="", oci_discoun
 
     existing_monthly = float(totals.get("sourceMonthlyCost") or 0)
 
+    _src_cloud = pricing.get("sourceCloud") or "aws"
+    _src_estimated = bool(pricing.get("sourceCostEstimated"))
     pb = wb.active if use_active else wb.create_sheet("Product Breakdown ")
-    _cloud_product_breakdown(pb, ordered, present_groups, bom_name, oci_discount)
+    _cloud_product_breakdown(pb, ordered, present_groups, bom_name, oci_discount,
+                             source_cloud=_src_cloud, estimated=_src_estimated)
     _cloud_service_mapping_sheet(wb.create_sheet("Service Mapping"), rows, oci_discount)
     _cloud_notes_sheet(wb.create_sheet("Notes + Assumptions"))
     build_cloud_overview_sheet(
         wb.create_sheet("Overview" if use_active else "Cloud Bill Overview"),
         _util_by_year(ramp), oci_monthly, existing_monthly, oci_discount=oci_discount,
+        source_cloud=_src_cloud, estimated=_src_estimated,
     )
     return pb
 
@@ -1292,8 +1307,11 @@ def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0
     return buf.getvalue()
 
 
-def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount=0.0):
+def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount=0.0,
+                             source_cloud="aws", estimated=False):
     ws.title = "Product Breakdown "  # trailing space is intentional
+    _cloudnm = {"aws": "AWS", "azure": "Azure", "gcp": "GCP"}.get(str(source_cloud or "aws").lower(), "AWS")
+    _est = " (App Estimate)" if estimated else ""
 
     # ---- sheet view / page setup ----
     ws.sheet_view.showGridLines = True
@@ -1367,8 +1385,8 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
     banner("J2", "USD ", _C_GOLD, wrap=True)
 
     # ---- data header (row 3) ----
-    hdrs = {"B3": "Product Group", "C3": "AWS Service", "D3": "List Costs",
-            "E3": "Discounts", "F3": "Invoice Costs", "G3": "% of Total",
+    hdrs = {"B3": "Product Group", "C3": f"{_cloudnm} Service", "D3": "List Costs",
+            "E3": "Discounts", "F3": f"Invoice Costs{_est}", "G3": "% of Total",
             "I3": "Offer Name", "J3": "Total - List",
             "K3": "Total - Discounted", "L3": "Total Savings"}
     for coord, text in hdrs.items():
@@ -1490,7 +1508,7 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
         c.font = Font(name="Calibri", size=14, bold=True)
         return c
 
-    cc = cell(f"I{box1_hdr}", "AWS Invoice Price vs OCI Discount Price ")
+    cc = cell(f"I{box1_hdr}", f"{_cloudnm} Invoice Price vs OCI Discount Price {_est}")
     cc.font = Font(name="Calibri", size=14, bold=True)
     bh = cell(f"J{box1_hdr}", "Monthly"); bh.fill = green; bh.font = Font(name="Calibri", size=14, bold=True); bh.alignment = _CTR
     bh = cell(f"K{box1_hdr}", "Annual"); bh.fill = green; bh.font = Font(name="Calibri", size=14, bold=True); bh.alignment = _CTR
@@ -1513,7 +1531,8 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
     c = cell(f"J{box2_pct}", f"=IFERROR(J{box2_save}/D{tr},0)"); c.fill = gold; c.number_format = _PCT
 
     # ---- product-group summary (below the main table) ----
-    _cloud_legend(ws, present_groups, first, last if N else first, total_row, summary_start)
+    _cloud_legend(ws, present_groups, first, last if N else first, total_row, summary_start,
+                  source_cloud=source_cloud, estimated=estimated)
 
     # ---- conditional formatting ----
     if N:
@@ -1535,11 +1554,14 @@ def _cloud_product_breakdown(ws, ordered, present_groups, bom_name, oci_discount
                      formula=[f'"{grp}"'], dxf=dxf))
 
 
-def _cloud_legend(ws, present_groups, first, last, total_row, start_row):
+def _cloud_legend(ws, present_groups, first, last, total_row, start_row,
+                  source_cloud="aws", estimated=False):
     """Monthly + annual "Cloud Service Product Group" summary tables, placed BELOW the
     main Product Breakdown table (columns B:H) rather than off to the right."""
     base = Font(name="Calibri", size=14)
     n = len(present_groups)
+    _cloudnm = {"aws": "AWS", "azure": "Azure", "gcp": "GCP"}.get(str(source_cloud or "aws").lower(), "AWS")
+    _est = " (App Estimate)" if estimated else ""
 
     # ---- disclaimer banner (B:G) ----
     ws.merge_cells(f"B{start_row}:G{start_row + 1}")
@@ -1578,7 +1600,7 @@ def _cloud_legend(ws, present_groups, first, last, total_row, start_row):
         tot = hi + 1
         head("B", hdr_row, "Cloud Service Product Group", _C_HDR, "FFFFFF")
         head("C", hdr_row, "% of Bill", _C_GREEN_HDR)
-        head("D", hdr_row, "AWS Cost", _C_BLUE, "FFFFFF")
+        head("D", hdr_row, f"{_cloudnm} Cost{_est}", _C_BLUE, "FFFFFF")
         head("E", hdr_row, "OCI Cost", _C_RED2, "FFFFFF")
         head("F", hdr_row, "Savings in $", _C_GREEN_HDR)
         head("G", hdr_row, "% Savings", _C_GREEN_HDR)
