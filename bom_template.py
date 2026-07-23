@@ -1980,18 +1980,26 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         if cloud_comparison and _relayout_notes:
             _place_overview_notes(ws_po, 52, _relayout_notes)
 
-    # Cloud-bill mode: append the AWS->OCI bill sheets (Product Breakdown, Service Mapping,
-    # Notes, Cloud Bill Overview) so every mapped service and its mapping is preserved
-    # alongside the 12-sheet deliverable — nothing from the bill printout is lost.
+    # Cloud-bill mode: append the Service Mapping (per-line breakdown) + Notes sheets alongside
+    # the 12-sheet deliverable. The Pricing Overview then PULLS its comparison source/OCI/savings
+    # straight from the Service Mapping total row, so the two always tie out.
     if cloud_comparison:
         try:
             import bom_export
-            bom_export.add_cloud_comparison_sheets(
+            _cc = bom_export.add_cloud_comparison_sheets(
                 wb, cloud_comparison.get("pricing") or {"rows": rows, "totals": {}},
                 cloud_comparison.get("ramp"), bom_name,
                 cloud_comparison.get("ociDiscount") or 0.0,
                 cloud_comparison.get("extraServices"),
                 cloud_comparison.get("hours") or hours, use_active=False)
+            # Point the Pricing Overview comparison at the Service Mapping totals (single source
+            # of truth). sv = comparison start(22)+18 -> B41 = source spend, B42 = OCI.
+            _smrow = (_cc or {}).get("serviceMappingTotalRow")
+            if _smrow:
+                _po = wb["Pricing Overview"]
+                _po["B41"] = f"='Service Mapping'!$F${_smrow}"   # Current source spend
+                _po["B42"] = f"='Service Mapping'!$H${_smrow}"   # OCI (net, incl. Windows licensing)
+                # B43 savings already = B41-B42, so it follows automatically.
         except Exception:
             import traceback
             traceback.print_exc()

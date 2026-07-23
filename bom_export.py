@@ -1243,9 +1243,11 @@ def add_cloud_comparison_sheets(wb, pricing, ramp=None, bom_name="", oci_discoun
     if not rows:
         oci_monthly = float(totals.get("monthly") or 0)
 
+    priced_extras = []
     if extra_services:
         import oci_catalog
         priced, _ = oci_catalog.price_extras(extra_services, hours)
+        priced_extras = priced
         for s in priced:
             grp = "Added OCI Services"
             if grp not in present_groups:
@@ -1275,17 +1277,51 @@ def add_cloud_comparison_sheets(wb, pricing, ramp=None, bom_name="", oci_discoun
 
     _src_cloud = pricing.get("sourceCloud") or "aws"
     _src_estimated = bool(pricing.get("sourceCostEstimated"))
-    pb = wb.active if use_active else wb.create_sheet("Product Breakdown ")
-    _cloud_product_breakdown(pb, ordered, present_groups, bom_name, oci_discount,
-                             source_cloud=_src_cloud, estimated=_src_estimated)
-    _cloud_service_mapping_sheet(wb.create_sheet("Service Mapping"), rows, oci_discount)
+    # Added OCI services (from the app's "Add services" panel) become synthetic Service Mapping
+    # lines so the sheet's OCI total covers them too (3rd-party items aren't discounted).
+    sm_extra_rows = []
+    for s in (priced_extras or []):
+        m = float(s.get("monthly") or 0)
+        third = bool(s.get("thirdParty"))
+        sm_extra_rows.append({
+            "__group": "Added OCI Services",
+            "sourceService": "Added OCI Service", "ociServiceCategory": "Added OCI Services",
+            "ociProduct": s.get("name"), "monthly": m, "sourceMonthlyCost": 0.0,
+            "windowsLicenseMonthly": 0.0, "sqlLicenseMonthly": (m if third else 0.0),
+            "costAction": "", "fullServiceMapping": {"sourceProduct": s.get("sizing") or "Added in app",
+                                                     "ociProduct": s.get("name")},
+        })
+    # Windows OS licensing shown as its OWN explicit Service Mapping line (source bundles it into
+    # the instance rate, so Source Cost = 0). monthly == sqlLicenseMonthly so it's never discounted.
+    if windows_total > 0:
+        sm_extra_rows.append({
+            "__group": "3rd-Party Licensing",
+            "sourceService": "Windows OS licensing", "ociServiceCategory": "3rd-Party Licensing",
+            "ociProduct": "OCI Windows OS License — B88318 (per OCPU-hr)",
+            "monthly": windows_total, "sourceMonthlyCost": 0.0,
+            "windowsLicenseMonthly": 0.0, "sqlLicenseMonthly": windows_total, "costAction": "",
+            "fullServiceMapping": {"sourceProduct": "Windows OS (bundled into source instance rate)",
+                                   "ociProduct": "OCI Windows OS License (per OCPU-hr)"},
+        })
+
+    # Standalone comparison workbook (use_active) keeps Product Breakdown + Cloud Bill Overview.
+    # The Full BOM append (use_active=False) omits both — the Pricing Overview + Service Mapping
+    # already carry the comparison and the per-line breakdown, so those two are redundant there.
+    pb = None
+    if use_active:
+        pb = wb.active
+        _cloud_product_breakdown(pb, ordered, present_groups, bom_name, oci_discount,
+                                 source_cloud=_src_cloud, estimated=_src_estimated)
+    sm_total_row = _cloud_service_mapping_sheet(
+        wb.create_sheet("Service Mapping"), rows, oci_discount, extra_rows=sm_extra_rows)
     _cloud_notes_sheet(wb.create_sheet("Notes + Assumptions"))
-    build_cloud_overview_sheet(
-        wb.create_sheet("Overview" if use_active else "Cloud Bill Overview"),
-        _util_by_year(ramp), oci_monthly, existing_monthly, oci_discount=oci_discount,
-        source_cloud=_src_cloud, estimated=_src_estimated,
-    )
-    return pb
+    if use_active:
+        build_cloud_overview_sheet(
+            wb.create_sheet("Overview"),
+            _util_by_year(ramp), oci_monthly, existing_monthly, oci_discount=oci_discount,
+            source_cloud=_src_cloud, estimated=_src_estimated,
+        )
+    return {"productBreakdown": pb, "serviceMappingTotalRow": sm_total_row, "serviceMappingSheet": "Service Mapping"}
 
 
 def build_cloud_comparison_bytes(pricing, ramp=None, bom_name="", oci_discount=0.0, workflow_json=None, extra_services=None, hours=HOURS):
@@ -1681,9 +1717,16 @@ _CLOUD_NOTES = [
 ]
 
 
-def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
+def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0, extra_rows=None):
     """Per-line AWS -> OCI mapping detail (one row per priced bill line), so the
-    workbook shows exactly how each source service was mapped and priced."""
+    workbook shows exactly how each source service was mapped and priced.
+
+    The OCI Cost column is the NET OCI a customer pays: the discount applied to services
+    (3rd-party Windows/SQL licensing excluded), PLUS the OCI Windows license add-on folded
+    into each Windows row. So the sheet's grand total = the Pricing Overview Total Monthly,
+    which is why the Overview pulls its comparison figures straight from this sheet.
+    Returns the total-row number so the caller can point cross-sheet references at it."""
+    rows = list(rows) + list(extra_rows or [])
     ws.sheet_view.showGridLines = True
     widths = {"A": 3.0, "B": 24.0, "C": 34.0, "D": 46.0, "E": 16.0, "F": 16.0,
               "G": 40.0, "H": 16.0, "I": 16.0, "J": 22.0}
@@ -1705,7 +1748,27 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
     ws.sheet_properties.outlinePr = Outline(summaryBelow=False, summaryRight=False,
                                             showOutlineSymbols=True)
 
+    EGG = "F0EAD6"  # eggshell white for the Savings column + total row
+    disc = max(0.0, min(1.0, float(oci_discount or 0)))
+
+    def _net_oci(row):
+        # Net OCI = discounted services + SQL licensing at list. Windows OS licensing is shown
+        # as its OWN explicit line (the synthetic 3rd-Party Licensing row), not folded in here.
+        m = float(row.get("monthly") or 0)
+        if (row.get("costAction") or "") == "carry" or m == 0:
+            return m
+        sql = float(row.get("sqlLicenseMonthly") or 0)   # licensing is never discounted
+        return (m - sql) * (1.0 - disc) + sql
+
+    def _style_savings(cell, val, bold=False):
+        cell.fill = _fill(EGG)
+        cell.number_format = MONEY2
+        cell.font = Font(name="Calibri", size=(12 if bold else 11), bold=bold,
+                         color=("FF008000" if (val or 0) >= 0 else "FFC00000"))
+
     def grp(r):
+        if r.get("__group"):          # synthetic lines (Windows licensing, added services)
+            return r["__group"]
         return _cloud_product_group(r.get("ociServiceCategory"), r.get("sourceService"),
                                     r.get("ociProduct"))
 
@@ -1722,7 +1785,7 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
         fsm = row.get("fullServiceMapping") or {}
         action = (row.get("costAction") or "")
         src = float(row.get("sourceMonthlyCost") or 0)
-        oci = float(row.get("monthly") or 0)
+        oci = _net_oci(row)
         if action == "remove":
             status = "REMOVED"
         elif action == "carry":
@@ -1743,6 +1806,8 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
             c.border = _THIN_BORDER
             if i in (6, 8, 9):
                 c.number_format = MONEY2
+        # Savings (col 9): eggshell fill, green when positive / red when negative.
+        _style_savings(ws.cell(row=r, column=9), round(src - oci, 2))
         if oci_prod == "Needs review":
             ws.cell(row=r, column=7).font = Font(name="Calibri", size=11, color="FFC00000", bold=True)
         # Level-1 detail row -> collapses under its group header. Hidden by default so the
@@ -1757,8 +1822,7 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
     for g in ordered_groups:
         grows = buckets[g]
         g_src = sum(float(x.get("sourceMonthlyCost") or 0) for x in grows)
-        g_oci = sum(float(x.get("monthly") or 0) for x in grows
-                    if (x.get("costAction") or "") != "remove")
+        g_oci = sum(_net_oci(x) for x in grows if (x.get("costAction") or "") != "remove")
         # ---- group header row (level 0; carries the collapse button) ----
         color = _CLOUD_GROUP_COLORS.get(g, _C_HDR)
         hdr_fill = _fill(color)
@@ -1772,7 +1836,8 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
                 c.font = Font(name="Calibri", size=12, bold=True)
         ws.cell(row=r, column=6, value=round(g_src, 2)).number_format = MONEY2
         ws.cell(row=r, column=8, value=round(g_oci, 2)).number_format = MONEY2
-        ws.cell(row=r, column=9, value=round(g_src - g_oci, 2)).number_format = MONEY2
+        ws.cell(row=r, column=9, value=round(g_src - g_oci, 2))
+        _style_savings(ws.cell(row=r, column=9), round(g_src - g_oci, 2), bold=True)  # eggshell, green/red
         # Header carries the collapse button (summaryBelow=False); mark it collapsed so the
         # sheet opens with the group folded away.
         ws.row_dimensions[r].collapsed = True
@@ -1794,23 +1859,21 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0):
                 oci_total += o
             r += 1
 
-    # Totals row
-    tot = ws.cell(row=r, column=2, value="Total (excl. removed)")
-    tot.font = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
-    tot.fill = _fill(_C_TOTAL)
-    for i in range(3, 11):
+    # Totals row — eggshell background, dark bold text (Savings stays green/red).
+    total_row = r
+    egg_dark = Font(name="Calibri", size=12, bold=True, color="FF2E2A27")
+    for i in range(2, 11):
         c = ws.cell(row=r, column=i)
-        c.fill = _fill(_C_TOTAL)
-        c.font = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
+        c.fill = _fill(EGG)
+        c.font = egg_dark
         c.border = _THIN_BORDER
+    ws.cell(row=r, column=2, value="Total (excl. removed)")
     ws.cell(row=r, column=6, value=round(src_total, 2)).number_format = MONEY2
     ws.cell(row=r, column=8, value=round(oci_total, 2)).number_format = MONEY2
-    ws.cell(row=r, column=9, value=round(src_total - oci_total, 2)).number_format = MONEY2
-    for i in (6, 8, 9):
-        c = ws.cell(row=r, column=i)
-        c.fill = _fill(_C_TOTAL)
-        c.font = Font(name="Calibri", size=12, bold=True, color="FFFFFFFF")
+    ws.cell(row=r, column=9, value=round(src_total - oci_total, 2))
+    _style_savings(ws.cell(row=r, column=9), round(src_total - oci_total, 2), bold=True)
     ws.freeze_panes = "B3"
+    return total_row
 
 
 def _cloud_notes_sheet(ws):

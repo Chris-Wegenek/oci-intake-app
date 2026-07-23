@@ -7307,9 +7307,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "Database Details",
         )
         or find_key_any(fields, [["database memory"], ["db memory"], ["database ram"], ["db ram"]]),
-        "db_total_allocated": find_key(fields, ["total allocated storage"], "Database Details"),
-        "db_total_storage": find_key(fields, ["total storage"], "Database Details"),
-        "db_size": find_key(fields, ["database size"], "Database Details"),
+        # Section-scoped first, then a section-less fallback on the field's own declared aliases
+        # (database/db storage, size) so a plainly-named "Database Storage (GB)" column prices
+        # too — mirroring how the application-storage keys resolve.
+        "db_total_allocated": find_key(fields, ["total allocated storage"], "Database Details")
+        or find_key_any(fields, [["database total allocated storage"], ["db total allocated storage"], ["database storage"], ["db storage"]]),
+        "db_total_storage": find_key(fields, ["total storage"], "Database Details")
+        or find_key_any(fields, [["database total storage"], ["db total storage"]]),
+        "db_size": find_key(fields, ["database size"], "Database Details")
+        or find_key_any(fields, [["database size"], ["db size"]]),
         "hours": find_key_any(
             fields,
             [["hours per month"], ["hours/month"], ["hours month"], ["monthly hours"], ["hours running"], ["running hours"], ["usage hours"], ["uptime hours"], ["hours"]],
