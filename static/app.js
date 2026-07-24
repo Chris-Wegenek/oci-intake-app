@@ -16,6 +16,7 @@ const state = {
   fullServiceBeta: false,
   hideGpuPricing: false,
   hideWindowsPricing: false,
+  hideSqlPricing: false,
   rightsize: false,
   auto: false,
   cpuUnit: "auto",
@@ -204,6 +205,7 @@ const els = {
   priceShapeButton: document.querySelector("#priceShapeButton"),
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
   hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
+  hideSqlToggle: document.querySelector("#hideSqlToggle"),
   rightsizeSwitches: document.querySelectorAll(".rightsize-switch"),
   cpuUnitSwitches: document.querySelectorAll(".cpuunit-switch"),
   cpuUnitDetected: document.getElementById("cpuUnitDetected"),
@@ -1822,6 +1824,7 @@ async function priceRows({ keepView = false } = {}) {
           fullServiceBeta: state.fullServiceBeta,
           hideGpuPricing: state.hideGpuPricing,
           hideWindowsPricing: state.hideWindowsPricing,
+        hideSqlPricing: state.hideSqlPricing,
           rightsize: state.rightsize,
           cpuUnit: state.cpuUnit,
           auto: state.auto,
@@ -1933,6 +1936,7 @@ async function exportToExcel(template = "quick") {
         fullServiceBeta: state.fullServiceBeta,
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
+        hideSqlPricing: state.hideSqlPricing,
         rightsize: state.rightsize,
         cpuUnit: state.cpuUnit,
         auto: state.auto,
@@ -2114,7 +2118,7 @@ async function applyWorkflowState(wf) {
   if (!wf || !wf.rows) throw new Error("That file has no saved workflow data.");
   const assign = [
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
-    "hideWindowsPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
+    "hideWindowsPricing", "hideSqlPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
     "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
     "crossCloudTopTier", "extraServices", "diagramOptions", "fields", "rows",
     "shapeOverrides", "costOverrides",
@@ -2131,6 +2135,10 @@ async function applyWorkflowState(wf) {
   if (els.bomName) els.bomName.value = state.bomName || "";
   if (els.ociDiscount) els.ociDiscount.value = state.ociDiscount || 0;
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
+  // Reflect the restored licensing/GPU toggles into their checkboxes.
+  if (els.hideGpuToggle) els.hideGpuToggle.checked = !!state.hideGpuPricing;
+  if (els.hideWindowsToggle) els.hideWindowsToggle.checked = !!state.hideWindowsPricing;
+  if (els.hideSqlToggle) els.hideSqlToggle.checked = !!state.hideSqlPricing;
   // Reflect restored diagram-layout selections into their controls (region combobox,
   // AD-split toggle + chips, DR toggle + region + replication chips).
   if (state.diagramOptions) {
@@ -3903,6 +3911,9 @@ els.rerunPricing?.addEventListener("click", priceRows);
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
 });
+els.hideSqlToggle?.addEventListener("change", (event) => {
+  state.hideSqlPricing = event.target.checked;
+});
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
 });
@@ -4039,6 +4050,7 @@ async function downloadDiagram() {
         fullServiceBeta: state.fullServiceBeta,
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
+        hideSqlPricing: state.hideSqlPricing,
         rightsize: state.rightsize,
         cpuUnit: state.cpuUnit,
         auto: state.auto,

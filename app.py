@@ -7225,7 +7225,7 @@ def detect_cpu_unit(fields):
     return "vcpu"
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto", hours_override=False, oic_message_packs=None):
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto", hours_override=False, oic_message_packs=None, hide_sql_pricing=False):
     # cpu_unit override (on-prem uploads): the parser normalizes the source CPU column
     # to OCPUs assuming it holds vCPUs (2 vCPU = 1 OCPU). 'auto' (default) detects the
     # unit from the column header and falls back to vCPU; 'ocpu' uses the source count
@@ -8202,15 +8202,16 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             }
 
         # SQL Server 3rd-party licensing is bundled as line item(s) inside the OCI cost (unlike
-        # Windows, which is a separate add-on). The licensing toggle hides SQL Server licensing
-        # alongside Windows — both are BYOL-able 3rd-party licenses the customer may already own.
+        # Windows, which is a separate add-on). SQL Server licensing has its OWN toggle
+        # (hide_sql_pricing) so it can be removed independently of Windows — both are
+        # BYOL-able 3rd-party licenses the customer may already own.
         sql_license_monthly = 0.0
         for _li in (line_items or []):
             _d = normalize(_li.get("description", ""))
             if "sql server" in _d and ("licens" in _d):
                 sql_license_monthly += float(_li.get("monthly") or 0)
         sql_license_monthly = money(sql_license_monthly)
-        if hide_windows_pricing and sql_license_monthly:
+        if hide_sql_pricing and sql_license_monthly:
             for _li in line_items:
                 _d = normalize(_li.get("description", ""))
                 if "sql server" in _d and ("licens" in _d):
@@ -8973,6 +8974,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             bom_match = bool(payload.get("bomMatch"))
             hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
+            hide_sql_pricing = bool(payload.get("hideSqlPricing"))
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
             auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
@@ -8989,10 +8991,11 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None, hide_sql_pricing=hide_sql_pricing)
             pricing["bomMatch"] = bom_match
             pricing["hideGpuPricing"] = hide_gpu_pricing
             pricing["hideWindowsPricing"] = hide_windows_pricing
+            pricing["hideSqlPricing"] = hide_sql_pricing
             pricing["rightsize"] = rightsize
             pricing["auto"] = auto
             pricing["cpuUnit"] = cpu_unit  # requested (may be "auto")
@@ -9080,6 +9083,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             bom_match = bool(payload.get("bomMatch"))
             hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
+            hide_sql_pricing = bool(payload.get("hideSqlPricing"))
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
             hours_per_month = to_number(payload.get("hoursPerMonth"), 0) or None
@@ -9125,7 +9129,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Export requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None, hide_sql_pricing=hide_sql_pricing)
 
             # "Full BOM": the 12-sheet customer-facing deliverable (Table of Contents,
             # Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR,
