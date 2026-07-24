@@ -1108,6 +1108,8 @@ _CLOUD_GROUP_COLORS = {
     "Other Services": "FFF2CC",
     "Support": "D9D9D9",
     "Marketplace": "B493E1",
+    "Added OCI Services": "BDD7EE",   # light steel blue (the lighter one)
+    "3rd-Party Licensing": "D9C2A6",  # warm tan/khaki (a different hue)
 }
 
 # Number formats (match the reference exactly).
@@ -1748,8 +1750,20 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0, extra_rows=None):
     ws.sheet_properties.outlinePr = Outline(summaryBelow=False, summaryRight=False,
                                             showOutlineSymbols=True)
 
-    EGG = "F0EAD6"  # eggshell white for the Savings column + total row
+    EGG = "EAF1F8"  # pale blue off-white for the Savings column + total row
     disc = max(0.0, min(1.0, float(oci_discount or 0)))
+
+    # Shared style objects — reused across every one of the (up to ~7,500) detail rows.
+    # Allocating a fresh Font/Fill per cell here is what made large bills slow to export.
+    _EGG_FILL = _fill(EGG)
+    _BASE_FONT = Font(name="Calibri", size=11)
+    _REVIEW_FONT = Font(name="Calibri", size=11, color="FFC00000", bold=True)
+    _SAV_FONT = {
+        (False, True): Font(name="Calibri", size=11, color="FF008000"),
+        (False, False): Font(name="Calibri", size=11, color="FFC00000"),
+        (True, True): Font(name="Calibri", size=12, bold=True, color="FF008000"),
+        (True, False): Font(name="Calibri", size=12, bold=True, color="FFC00000"),
+    }
 
     def _net_oci(row):
         # Net OCI = discounted services + SQL licensing at list. Windows OS licensing is shown
@@ -1761,10 +1775,9 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0, extra_rows=None):
         return (m - sql) * (1.0 - disc) + sql
 
     def _style_savings(cell, val, bold=False):
-        cell.fill = _fill(EGG)
+        cell.fill = _EGG_FILL
         cell.number_format = MONEY2
-        cell.font = Font(name="Calibri", size=(12 if bold else 11), bold=bold,
-                         color=("FF008000" if (val or 0) >= 0 else "FFC00000"))
+        cell.font = _SAV_FONT[(bold, (val or 0) >= 0)]
 
     def grp(r):
         if r.get("__group"):          # synthetic lines (Windows licensing, added services)
@@ -1802,14 +1815,14 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0, extra_rows=None):
                 usage, round(src, 2), oci_prod, round(oci, 2), round(src - oci, 2), status]
         for i, v in enumerate(vals, start=2):
             c = ws.cell(row=r, column=i, value=v)
-            c.font = Font(name="Calibri", size=11)
+            c.font = _BASE_FONT
             c.border = _THIN_BORDER
             if i in (6, 8, 9):
                 c.number_format = MONEY2
         # Savings (col 9): eggshell fill, green when positive / red when negative.
         _style_savings(ws.cell(row=r, column=9), round(src - oci, 2))
         if oci_prod == "Needs review":
-            ws.cell(row=r, column=7).font = Font(name="Calibri", size=11, color="FFC00000", bold=True)
+            ws.cell(row=r, column=7).font = _REVIEW_FONT
         # Level-1 detail row -> collapses under its group header. Hidden by default so the
         # sheet opens with every group collapsed (expand the ones you care about).
         rd = ws.row_dimensions[r]

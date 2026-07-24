@@ -2157,6 +2157,11 @@ async function applyWorkflowState(wf) {
   }
   if (typeof renderTable === "function") renderTable();
   await priceRows();
+  // priceRows() doesn't touch the "Add OCI services" panel, so re-render the cart and fold the
+  // restored add-in services back into the results totals — otherwise a reloaded BOM shows an
+  // empty cart and drops the extras the user selected last time.
+  if (typeof renderServiceCart === "function") renderServiceCart();
+  if (typeof refreshResultsTotals === "function") refreshResultsTotals();
   // Opening a previous BOM jumps straight to the results page (page 4).
   if (state.pricing) showResultsPage();
 }
@@ -4157,14 +4162,28 @@ els.convertBomFile?.addEventListener("change", (event) => {
 els.bomName?.addEventListener("input", (event) => {
   state.bomName = event.target.value;
 });
+let _discountRenderTimer = null;
+function _applyDiscountRender() {
+  clearTimeout(_discountRenderTimer);
+  _discountRenderTimer = null;
+  if (state.pricing) renderResults(state.pricing);
+}
 els.ociDiscount?.addEventListener("input", (event) => {
   let v = Number(event.target.value);
   if (!(v >= 0)) v = 0;
   if (v > 100) v = 100;
   state.ociDiscount = v;
-  // Reflect the discount immediately in the OCI total + ramp so the app matches
-  // the printout (which applies the same discount).
-  if (state.pricing) renderResults(state.pricing);
+  // Store the value immediately, but DEBOUNCE the heavy results re-render so the view
+  // isn't refreshing on every keystroke (which made the field impossible to type in).
+  // The OCI total + ramp update ~700ms after you stop typing.
+  clearTimeout(_discountRenderTimer);
+  _discountRenderTimer = setTimeout(_applyDiscountRender, 700);
+});
+// Also apply right away when the field loses focus (blur) or Enter is pressed, so the
+// update isn't left waiting on the debounce timer if you move on quickly.
+els.ociDiscount?.addEventListener("change", _applyDiscountRender);
+els.ociDiscount?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.target.blur(); _applyDiscountRender(); }
 });
 
 function renderCrossCloud() {
