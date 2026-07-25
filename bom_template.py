@@ -496,9 +496,15 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     # Block-VPU seed (column M) references the Rate Card default-VPUs cell.
     protos["M"] = (f"=IF($A{R}<>\"\",'Rate Card'!$C${vpus_ref},\"\")" if vpus_ref else '=""')
 
-    # Column S states the OCI shape each server is mapped to.
-    ws.cell(13, 19).value = "OCI Shape (Mapped)"
-    ws.cell(13, 19)._style = ws.cell(13, 1)._style
+    # Columns S/T show the shape mapping: what each server maps FROM (source) and TO (OCI).
+    from copy import copy as _copy_style
+    _hdr_style = ws.cell(13, 1)._style
+    ws.cell(13, 19).value = "Source Shape (Mapped From)"
+    ws.cell(13, 19)._style = _copy_style(_hdr_style)
+    ws.cell(13, 20).value = "OCI Shape (Mapped To)"
+    ws.cell(13, 20)._style = _copy_style(_hdr_style)
+    ws.column_dimensions["S"].width = 24
+    ws.column_dimensions["T"].width = 22
     # The O/P/R headers hard-coded "E6"; restate them for whatever shape is used.
     if shape_label:
         ws["O13"] = f"{shape_label} RAM Monthly"
@@ -525,7 +531,10 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
         ws[f"L{r}"] = s.get("storage_gb") or None
         # Per-row hours from the data source (falls back to the global hours).
         ws[f"N{r}"] = s.get("hours") or hours
-        ws[f"S{r}"] = s.get("shape") or shape_label or None
+        ws[f"S{r}"] = s.get("source_shape") or None          # Mapped From (source)
+        ws[f"T{r}"] = s.get("shape") or shape_label or None   # Mapped To (OCI)
+        ws[f"S{r}"]._style = _copy_style(proto_styles["A"])
+        ws[f"T{r}"]._style = _copy_style(proto_styles["A"])
         for c in COMPUTE_FORMULA_COLS:
             proto = protos.get(c)
             if proto:
@@ -770,6 +779,10 @@ def _write_rate_card(ws, entries):
             ws.cell(r, 3).number_format = "#,##0" if float(cval).is_integer() else "0.0000"
         if e.get("key"):
             refs[e["key"]] = r
+    # Hide the Value column from the deliverable. It stays in the workbook because every
+    # pricing formula (Compute/Storage/etc.) references 'Rate Card'!$C$<row>; deleting it
+    # would break the math, so it's hidden rather than removed.
+    ws.column_dimensions["C"].hidden = True
     return refs
 
 
@@ -873,6 +886,77 @@ def _set_toc(ws, bom_name):
     ws["B8"] = datetime.date.today().isoformat()
 
 
+# One-line purpose / primary-use blurbs for the Table of Contents, keyed by sheet name.
+_TOC_DESC = {
+    "Assumptions": ("Workbook methodology and scope assumptions.",
+                    "Audit how the BOM was assembled and priced."),
+    "Rate Card": ("SKU unit rates used throughout the workbook.",
+                  "Review compute, storage, networking, and service rates."),
+    "Pricing Overview": ("Cost baseline, OCI discount, and the source-vs-OCI comparison.",
+                         "Start here for total monthly cost and savings."),
+    "Service Mapping": ("Per-line source-to-OCI mapping, grouped by product, with the net OCI total.",
+                        "See how each source service maps and prices; the total ties to the Pricing Overview."),
+    "Compute": ("VM inventory with source-to-OCI shape mapping and compute pricing.",
+                "Review each server's shape mapping and adjust monthly hours."),
+    "Storage": ("Storage BOM candidates and storage estate inputs.",
+                "Review object, file, block, and backup storage."),
+    "Networking": ("FastConnect, load balancing, VPN, DNS, and egress planning.",
+                   "Review private connectivity and included network costs."),
+    "DR": ("Disaster-recovery pattern, tier fit, and cost-range planning.",
+           "Compare backup/restore, pilot-light, warm, and hot standby options."),
+    "Security KMS": ("OCI key-management options for external HSM / PKI needs.",
+                     "Review the key-management model and included KMS pricing."),
+    "Consumption Ramp": ("Month-by-month consumption ramp and 5-year projection.",
+                         "See the migration-wave ramp and cumulative cost."),
+    "Annexure Addendum to Storage": ("Detailed storage scenarios and backup sizing.",
+                                     "Optional storage detail."),
+    "Applications Migrated to OCI": ("Application-level migration summary.",
+                                     "Filter by application for VM counts, tier mix, and cost."),
+    "Database": ("Database service mapping and pricing detail.",
+                 "Review DB shapes, editions, and storage."),
+    "Notes + Assumptions": ("Per-service mapping notes and assumptions.",
+                            "Reference for how each source service was mapped."),
+}
+
+
+def _rebuild_toc(wb, bom_name=""):
+    """Rewrite the Table of Contents table (rows 16+) to list EVERY visible sheet in the
+    workbook, each hyperlinked to its tab. The template shipped a stale, misaligned list;
+    this regenerates it after all sheets are added/removed/hidden."""
+    from copy import copy
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    if "Table of Contents" not in wb.sheetnames:
+        return
+    ws = wb["Table of Contents"]
+    FIRST = 16
+    sa, sb, sc = (copy(ws.cell(FIRST, c)._style) for c in (1, 2, 3))
+    link_font = copy(ws.cell(FIRST, 1).font)   # blue underlined hyperlink style
+    # Clear the old (stale) table body.
+    for r in range(FIRST, FIRST + 60):
+        for c in (1, 2, 3):
+            cell = ws.cell(r, c)
+            cell.value = None
+            cell.hyperlink = None
+    skip = {"Table of Contents", "_workflow"}
+    r = FIRST
+    for name in wb.sheetnames:
+        if name in skip:
+            continue
+        if getattr(wb[name], "sheet_state", "visible") != "visible":
+            continue
+        purpose, use = _TOC_DESC.get(
+            name, (f"{name} product-group detail.", f"Line-item detail for the {name} group."))
+        a = ws.cell(r, 1, name)
+        a._style = copy(sa)
+        a.font = copy(link_font)
+        a.hyperlink = Hyperlink(ref=a.coordinate, location=f"'{name}'!A1", display=name)
+        b = ws.cell(r, 2, purpose); b._style = copy(sb)
+        c = ws.cell(r, 3, use); c._style = copy(sc)
+        r += 1
+    # Blank any trailing template rows below the new list (already cleared above).
+    return r
+
+
 def _clear_cell_note(ws, coord):
     """Strip the hidden tooltip on a cell: a hover comment/note AND any data-validation
     input prompt (Excel shows a DV prompt as a note when the cell is selected). B9 shipped
@@ -906,6 +990,22 @@ _CLOUD_GROUP_TO_OVERVIEW_ROW = {
     "Database": 16, "Obs. & Management": 16, "Other Services": 16,
     "AI & Machine Learning": 16, "DevOps": 16, "Marketplace": 16, "Support": 16,
 }
+
+
+def _source_shape_label(pr):
+    """The source instance/shape a compute row was mapped FROM (e.g. AWS m6a.4xlarge,
+    Azure E8s v5). Prefers the detected source instance, then the AWS usage-type suffix
+    (BoxUsage:<type>), then a clean source product family."""
+    sce = pr.get("sourceCloudEstimate") or {}
+    if sce.get("instance"):
+        return str(sce["instance"])
+    ut = str(pr.get("sourceUsageType") or "")
+    if ":" in ut:
+        cand = ut.split(":")[-1].strip()
+        if cand and not cand.replace(".", "").replace(",", "").isdigit():
+            return cand
+    sp = str(pr.get("sourceProduct") or "").strip()
+    return sp if (sp and "$" not in sp and "per " not in sp.lower()) else ""
 
 
 def _cloud_effective_hours(pr):
@@ -1808,6 +1908,8 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             # The OCI shape this server maps to (shown on the Compute sheet). shapeUsed can
             # be a dict (on-prem shape payload) or a string (cloud-bill shape name).
             "shape": _shape_used_label(pr.get("shapeUsed")),
+            # The source instance/shape this row maps FROM (shown next to the OCI shape).
+            "source_shape": _source_shape_label(pr) if is_cloud_bill else "",
             # Per-row monthly hours from the data source (the app already priced each row at
             # its own hours). Falls back to the global hours only when the row has none.
             # Cloud-bill: use the EFFECTIVE hours implied by the bill's metered usage
@@ -1927,7 +2029,9 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         _aws_monthly = float((_cc_pricing.get("totals") or {}).get("sourceMonthlyCost") or 0)
         bom_export.add_comparison_to_pricing_overview(
             wb["Pricing Overview"], 22, "$B$18", "$B$19",
-            _aws_monthly, bom_export._util_by_year(cloud_comparison.get("ramp")))
+            _aws_monthly, bom_export._util_by_year(cloud_comparison.get("ramp")),
+            source_cloud=_cc_pricing.get("sourceCloud") or "aws",
+            estimated=bool(_cc_pricing.get("sourceCostEstimated")))
 
     # Architecture diagram generated from THIS BOM (deterministic; no model call).
     # If the diagram toolchain isn't available the export still succeeds — the template's
@@ -1978,18 +2082,26 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         if cloud_comparison and _relayout_notes:
             _place_overview_notes(ws_po, 52, _relayout_notes)
 
-    # Cloud-bill mode: append the AWS->OCI bill sheets (Product Breakdown, Service Mapping,
-    # Notes, Cloud Bill Overview) so every mapped service and its mapping is preserved
-    # alongside the 12-sheet deliverable — nothing from the bill printout is lost.
+    # Cloud-bill mode: append the Service Mapping (per-line breakdown) + Notes sheets alongside
+    # the 12-sheet deliverable. The Pricing Overview then PULLS its comparison source/OCI/savings
+    # straight from the Service Mapping total row, so the two always tie out.
     if cloud_comparison:
         try:
             import bom_export
-            bom_export.add_cloud_comparison_sheets(
+            _cc = bom_export.add_cloud_comparison_sheets(
                 wb, cloud_comparison.get("pricing") or {"rows": rows, "totals": {}},
                 cloud_comparison.get("ramp"), bom_name,
                 cloud_comparison.get("ociDiscount") or 0.0,
                 cloud_comparison.get("extraServices"),
                 cloud_comparison.get("hours") or hours, use_active=False)
+            # Point the Pricing Overview comparison at the Service Mapping totals (single source
+            # of truth). sv = comparison start(22)+18 -> B41 = source spend, B42 = OCI.
+            _smrow = (_cc or {}).get("serviceMappingTotalRow")
+            if _smrow:
+                _po = wb["Pricing Overview"]
+                _po["B41"] = f"='Service Mapping'!$F${_smrow}"   # Current source spend
+                _po["B42"] = f"='Service Mapping'!$H${_smrow}"   # OCI (net, incl. Windows licensing)
+                # B43 savings already = B41-B42, so it follows automatically.
         except Exception:
             import traceback
             traceback.print_exc()
@@ -1999,6 +2111,14 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     # Hide any printout sheet that ended up with no data (empty Storage/Networking/DR/
     # Security KMS/Applications/Annexure), so the deliverable doesn't ship blank sections.
     _hide_empty_sheets(wb, apps, storage_rows)
+
+    # Rebuild the Table of Contents to list exactly the sheets this workbook ended up with
+    # (the template shipped a stale, misaligned list). Runs after hides so it skips blanks.
+    try:
+        _rebuild_toc(wb, bom_name)
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
     # Embed the app workflow (hidden _workflow sheet) so this Full BOM can be re-imported
     # via "Load previous BOM" — same as the Quick/comparison export.

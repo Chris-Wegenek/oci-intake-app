@@ -470,37 +470,41 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         box(f"{sid}vcn",
             f"{seg['name']} Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
             x, VCN_Y, SPOKE_W, VCN_H, "vcn")
-        if ad_split and (split_vms or split_dbs):
-            # ---- AD-split layout: draw the region's availability domains as fault-isolated
-            #      columns and distribute the chosen resource types evenly across them. ----
-            n_ad = region_ads
+        if ad_split:
+            # ---- AD layout: EVERY compute/DB object lives inside an Availability Domain box.
+            #      Multiple ADs when a resource type is split across them; otherwise ONE big AD.
+            #      Databases are never left floating outside an AD. ----
+            multi = split_vms or split_dbs
+            n_ad = region_ads if multi else 1
             adw = aw // n_ad
             ad_top, ad_bottom = 415, 1005
             win_vms = int(seg.get("winvms", 0))
             reg_vms = max(0, int(seg["vms"]) - win_vms)     # regular (non-Windows) VMs
-            # Per-AD database placement: SQL Server DBs are grouped together in one AD; every
-            # other DB type is distributed round-robin across the ADs.
+            # Distribute the databases across the AD(s). SQL Server DBs are grouped together;
+            # every other DB type is spread round-robin. Even when DBs aren't "split" they still
+            # sit INSIDE an AD (one big AD, or spread across the VM ADs).
             ad_dbs = [[] for _ in range(n_ad)]
-            if split_dbs and db_types:
+            if db_types:
                 sql_dbs = [d for d in db_types if "sql" in _norm(d[1])]
                 other_dbs = [d for d in db_types if "sql" not in _norm(d[1])]
-                # If the (unsplit) VMs occupy AD 1, keep DBs out of it — spread them across the
-                # remaining ADs so the main AD isn't overcrowded.
-                db_ads = list(range(1, n_ad)) if (not split_vms and n_ad > 1) else list(range(n_ad))
+                if n_ad == 1:
+                    db_ads = [0]
+                elif split_dbs and not split_vms:
+                    db_ads = list(range(1, n_ad))            # keep DBs out of the VM-only AD 1
+                else:
+                    db_ads = list(range(n_ad))
                 for idx, d in enumerate(other_dbs):
                     ad_dbs[db_ads[idx % len(db_ads)]].append(d)
                 if sql_dbs:
-                    ad_dbs[db_ads[0]] = sql_dbs + ad_dbs[db_ads[0]]   # group SQL Server DBs together
-            shared_db = bool(db_types) and not split_dbs
-            if shared_db:
-                ad_bottom = 880
+                    ad_dbs[db_ads[0]] = sql_dbs + ad_dbs[db_ads[0]]
             for j in range(n_ad):
                 adx = ax + j * adw
                 # When VMs aren't split, the AD header only carries capacity for the split
                 # resources; the whole compute footprint lives in AD 1 (the main AD).
                 _cap = (f"{seg['ocpu']/n_ad:,.0f} OCPU · {seg['ram']/n_ad:,.0f} GB · fault-isolated"
                         if split_vms else "fault-isolated")
-                box(f"{sid}ad{j}", f"Availability Domain {j+1}\n{_cap}",
+                _adname = f"Availability Domain {j+1}" if multi else "Availability Domain"
+                box(f"{sid}ad{j}", f"{_adname}\n{_cap}",
                     adx + 3, ad_top, adw - 6, ad_bottom - ad_top, "ad")
                 yy = ad_top + 56
                 if split_vms:
@@ -526,15 +530,19 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                              adx + adw // 2 - 30, yy, 60)
                         link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
                         yy += 110
-                for di, (stencil, label, _mo) in enumerate(ad_dbs[j]):
-                    icon(f"{sid}ad{j}db{di}", stencil, label, adx + adw // 2 - 26, yy, 52)
-                    yy += 84
-            if shared_db:                                    # DBs not split: one shared row below
-                ndb = len(db_types)
-                cw = aw // ndb
-                for k, (stencil, label, mo) in enumerate(db_types):
-                    icon(f"{sid}db{k}", stencil, f"{label}\n${mo:,.0f}/mo",
-                         ax + k * cw + (cw - 64) // 2, ad_bottom + 22, 64)
+                # Databases INSIDE the AD: one big AD lays them in a row (uses the full width);
+                # narrow split ADs stack them below the VMs.
+                dbs = ad_dbs[j]
+                if n_ad == 1 and dbs:
+                    dcw = adw // len(dbs)
+                    for di, (stencil, label, mo) in enumerate(dbs):
+                        icon(f"{sid}ad{j}db{di}", stencil, f"{label}\n${mo:,.0f}/mo",
+                             adx + di * dcw + (dcw - 60) // 2, yy, 60)
+                else:
+                    for di, (stencil, label, mo) in enumerate(dbs):
+                        icon(f"{sid}ad{j}db{di}", stencil, f"{label}\n${mo:,.0f}/mo",
+                             adx + adw // 2 - 30, yy, 60)
+                        yy += 96
             icon(f"{sid}bkt", "Storage - Object Storage",
                  f"{seg['name']} backup bucket\nObject Storage",
                  ax + aw // 2 - 44, VCN_Y + VCN_H - 116, 84)
@@ -624,46 +632,75 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             ax, aw = x + 24, SPOKE_W - 48
             box(f"{sid}drvcn", f"{seg['name']} DR Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
                 x, DR_Y + 90, SPOKE_W, DR_H - 150, "vcn")
-            box(f"{sid}dr_app", f"{seg['name']} DR App Subnet\n10.{third}.1.0/24",
-                ax, DR_Y + 150, aw, 200, "subnet")
-            box(f"{sid}dr_data", f"{seg['name']} DR Data / Restore Subnet\n10.{third}.2.0/24",
-                ax, DR_Y + 380, aw, 250, "subnet")
             # Only the resource types the user chose to replicate are drawn in the DR
             # region. Compute standbys, managed-DB replicas, and object/block backups are
             # each independently gated by the app's "Replicate to DR" selection.
-            if rep_vms:
-                icon(f"{sid}drvm", "Compute - Virtual Machine VM",
-                     f"{seg['vms']:,} {seg['name']}\nstandby VMs", ax + 56, DR_Y + 212, 88)
-                link("drdrg", f"{sid}drvm", "DR transit", "dashed")
-            # Optional Data Guard / Autonomous-DR standbys, one per primary DB type, evenly
-            # distributed to mirror the primary data tier. (Per-DB replication links are
-            # omitted — they'd cross the whole page; the DR orchestration note already states
-            # databases replicate cross-region.)
             db_slots = db_types[:6] if (rep_dbs and db_types) else []
-            if db_slots:
-                nd = len(db_slots)
-                pr = min(3, nd)
-                avail = aw - (150 if rep_obj else 40)   # reserve right margin for backups
-                cw = avail // pr
-                for k, (stencil, label, mo) in enumerate(db_slots):
-                    col, row = k % pr, k // pr
-                    cx = ax + 14 + col * cw + (cw - 56) // 2
-                    icon(f"{sid}drdb{k}", stencil,
-                         f"(Opt.) {label}\n{_db_dr_mechanism(label)}",
-                         cx, DR_Y + 412 + row * 106, 56)
-            if rep_obj:
+            if ad_split and (rep_vms or db_slots):
+                # ---- DR standby objects live inside an Availability Domain too (one big AD).
+                #      Regional object/block backups stay OUTSIDE the AD (they aren't AD-bound). ----
+                ad_x, ad_y, ad_w, ad_h = ax, DR_Y + 150, aw, 360
+                box(f"{sid}drad", "Availability Domain 1\nDR standby · fault-isolated",
+                    ad_x, ad_y, ad_w, ad_h, "ad")
+                yy = ad_y + 60
+                _dbx0 = ad_x + 20
+                _dbcols = 3
+                if rep_vms:
+                    icon(f"{sid}drvm", "Compute - Virtual Machine VM",
+                         f"{seg['vms']:,} {seg['name']}\nstandby VMs", ad_x + 40, yy, 88)
+                    link("drdrg", f"{sid}drvm", "DR transit", "dashed")
+                    _dbx0 = ad_x + 210      # DB replicas sit to the right of the standby VMs
+                    _dbcols = 2             # fewer, wider columns so the long DR labels fit
                 if db_slots:
+                    percol = min(_dbcols, len(db_slots))
+                    avail = (ad_x + ad_w - 20) - _dbx0
+                    cw = max(120, avail // percol)
+                    for k, (stencil, label, mo) in enumerate(db_slots):
+                        col, row = k % percol, k // percol
+                        cx = _dbx0 + col * cw + (cw - 56) // 2
+                        icon(f"{sid}drdb{k}", stencil,
+                             f"(Opt.) {label}\n{_db_dr_mechanism(label)}",
+                             cx, yy + row * 106, 56)
+                if rep_obj:
                     icon(f"{sid}drbkt", "Storage - Object Storage",
-                         "DR target\nbucket", ax + aw - 118, DR_Y + 412, 64)
+                         f"{seg['name']} DR target\nbucket", ax + 56, ad_y + ad_h + 22, 84)
                     icon(f"{sid}drblk", "Storage - Block Storage",
-                         f"(Opt.) block\nbackups {seg['block']:,.0f} GB",
-                         ax + aw - 118, DR_Y + 520, 64)
-                else:
-                    icon(f"{sid}drblk", "Storage - Block Storage",
-                         f"(Optional) Backups\n{seg['block']:,.0f} GB", ax + 56, DR_Y + 442, 88)
-                    icon(f"{sid}drbkt", "Storage - Object Storage",
-                         f"{seg['name']} DR target\nbucket", ax + aw - 144, DR_Y + 442, 88)
-                link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
+                         f"(Opt.) block backups\n{seg['block']:,.0f} GB", ax + aw - 156, ad_y + ad_h + 22, 84)
+                    link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
+            else:
+                # ---- DR subnet layout (AD feature off) ----
+                box(f"{sid}dr_app", f"{seg['name']} DR App Subnet\n10.{third}.1.0/24",
+                    ax, DR_Y + 150, aw, 200, "subnet")
+                box(f"{sid}dr_data", f"{seg['name']} DR Data / Restore Subnet\n10.{third}.2.0/24",
+                    ax, DR_Y + 380, aw, 250, "subnet")
+                if rep_vms:
+                    icon(f"{sid}drvm", "Compute - Virtual Machine VM",
+                         f"{seg['vms']:,} {seg['name']}\nstandby VMs", ax + 56, DR_Y + 212, 88)
+                    link("drdrg", f"{sid}drvm", "DR transit", "dashed")
+                if db_slots:
+                    nd = len(db_slots)
+                    pr = min(3, nd)
+                    avail = aw - (150 if rep_obj else 40)   # reserve right margin for backups
+                    cw = avail // pr
+                    for k, (stencil, label, mo) in enumerate(db_slots):
+                        col, row = k % pr, k // pr
+                        cx = ax + 14 + col * cw + (cw - 56) // 2
+                        icon(f"{sid}drdb{k}", stencil,
+                             f"(Opt.) {label}\n{_db_dr_mechanism(label)}",
+                             cx, DR_Y + 412 + row * 106, 56)
+                if rep_obj:
+                    if db_slots:
+                        icon(f"{sid}drbkt", "Storage - Object Storage",
+                             "DR target\nbucket", ax + aw - 118, DR_Y + 412, 64)
+                        icon(f"{sid}drblk", "Storage - Block Storage",
+                             f"(Opt.) block\nbackups {seg['block']:,.0f} GB",
+                             ax + aw - 118, DR_Y + 520, 64)
+                    else:
+                        icon(f"{sid}drblk", "Storage - Block Storage",
+                             f"(Optional) Backups\n{seg['block']:,.0f} GB", ax + 56, DR_Y + 442, 88)
+                        icon(f"{sid}drbkt", "Storage - Object Storage",
+                             f"{seg['name']} DR target\nbucket", ax + aw - 144, DR_Y + 442, 88)
+                    link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
 
     # ---- notes --------------------------------------------------------------
     win_total = sum(s["win"] for s in segments)

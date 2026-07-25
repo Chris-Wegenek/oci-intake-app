@@ -227,9 +227,13 @@
               <input id="hideGpuToggle" type="checkbox" />
               <span>Hide GPU pricing</span>
             </label>
-            <label class="opt-chip" title="Turn off 3rd-party licensing — Windows OS (1 license per OCPU) and SQL Server licensing — in the OCI estimate, source-cloud estimate, cross-cloud comparison, and export.">
+            <label class="opt-chip" title="Remove OCI Windows OS licensing (1 license per OCPU) from the OCI estimate, source-cloud estimate, cross-cloud comparison, and export. Use when Windows is BYOL / Azure Hybrid Benefit.">
               <input id="hideWindowsToggle" type="checkbox" />
-              <span>Hide Windows &amp; SQL licensing</span>
+              <span>Remove Windows OS licensing</span>
+            </label>
+            <label class="opt-chip" title="Remove SQL Server licensing from the OCI estimate and export. Use when SQL Server is BYOL.">
+              <input id="hideSqlToggle" type="checkbox" />
+              <span>Remove SQL Server licensing</span>
             </label>
           </div>
           <div class="shape-action-buttons">

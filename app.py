@@ -3267,6 +3267,78 @@ def _reprice_row(row, rate_table):
     return money(total), priced_any
 
 
+def _estimate_source_cost(row, cloud, hide_windows=False):
+    """App Estimate: reconstruct what a single bill row would cost on its OWN source cloud
+    from its usage, for bills that arrive with SKUs/usage but no pricing (e.g. an Azure export
+    with the cost columns stripped). Mirrors the cross-cloud best-match per-row math so the
+    "<Cloud> Cost (App Estimate)" figure ties to the same engine that estimates the other cloud.
+    Returns a monthly dollar figure."""
+    if (row.get("costAction") or "") == "remove":
+        return 0.0
+    specs = row.get("specs") or {}
+    oc_in = row.get("originalOcpus")
+    if oc_in is None:
+        oc_in = specs.get("ocpus") or 0
+    mem = row.get("originalMemoryGb")
+    if mem is None:
+        mem = specs.get("memoryGb") or 0
+    vcpus = (oc_in or 0) * 2
+    is_compute = vcpus > 0 or mem > 0
+    if not is_compute:
+        # Non-compute services: networking re-priced per component, everything else on the
+        # cloud's list rates for the same usage (OCI proxy for the long tail).
+        if _is_networking_row(row):
+            return _reprice_networking_row(row, cloud)
+        est, _priced = _reprice_row(row, _CLOUD_RATE_TABLE.get(cloud) or {})
+        return est
+    # Compute: equivalent instance on the source cloud priced on the row's ACTUAL billed hours
+    # (not a full month per line), plus Windows licensing prorated to those hours.
+    hours = row.get("hoursPerMonth") or HOURS_PER_MONTH
+    uh = to_number(row.get("computeUsageHours"), 0)
+    if uh > 0:
+        hours = uh
+    windows = 0
+    if not hide_windows:
+        # windowsLicenseMonthly is already billed on actual usage hours; only un-rightsize it.
+        windows = row.get("windowsLicenseMonthly") or 0
+        cur = specs.get("ocpus")
+        if windows and oc_in and cur and float(cur) > 0:
+            windows = windows * (float(oc_in) / float(cur))
+    inst = equivalent_instance(cloud, (row.get("shapeUsed") or {}).get("vendor"), vcpus, mem, False)
+    base = inst["hourly"] * hours if inst else 0.0
+    return money(base + windows)
+
+
+def _apply_source_cost_estimate(priced_rows, totals, source_cloud, hide_windows=False):
+    """When a cloud bill carries usage/SKUs but essentially no pricing, fill each row's source
+    cost with an App Estimate reconstructed from usage x the source cloud's rates, and flag it so
+    the UI/BOM label the column "<Cloud> Cost (App Estimate)". Returns True when applied.
+    Trigger: cloud-bill, a known source cloud, and the billed source cost is ~0 vs the OCI total."""
+    if source_cloud not in _CLOUD_RATE_TABLE:
+        return False
+    oci_month = sum(to_number(r.get("monthly"), 0) for r in priced_rows)
+    src_total = to_number(totals.get("sourceMonthlyCost"), 0)
+    # "No pricing" = billed source cost is under 1% of the OCI monthly (and under $1 in absolute
+    # terms), i.e. the bill's cost column was blank/negligible.
+    if src_total >= max(1.0, 0.01 * oci_month):
+        return False
+    new_total = 0.0
+    for r in priced_rows:
+        est = money(_estimate_source_cost(r, source_cloud, hide_windows))
+        r["sourceMonthlyCost"] = est
+        r["sourceCostEstimated"] = True
+        # The results table + comparison sheets read the nested mapping's cost, so mirror it.
+        fsm = r.get("fullServiceMapping")
+        if isinstance(fsm, dict):
+            fsm["sourceMonthlyCost"] = est
+            fsm["sourceCostEstimated"] = True
+        new_total += est
+    totals["sourceMonthlyCost"] = money(new_total)
+    totals["mappedSourceMonthlyCost"] = money(new_total)
+    totals["unmappedSourceMonthlyCost"] = 0.0
+    return True
+
+
 def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mode=False, source_cloud=None):
     """Compute the AWS/Azure totals for one matching mode.
 
@@ -3358,14 +3430,12 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
             # otherwise OCI rightsizing trims the license add-on into the cross-cloud estimate.
             windows = 0
             if not hide_windows:
+                # windowsLicenseMonthly is already billed on the row's actual usage hours; here we
+                # only un-rightsize it back to the INPUT OCPU count so OCI's trim doesn't leak in.
                 windows = row.get("windowsLicenseMonthly") or 0
                 _cur = specs.get("ocpus")
                 if windows and _ocpus_in and _cur and float(_cur) > 0:
                     windows = windows * (float(_ocpus_in) / float(_cur))
-                # windowsLicenseMonthly is a full-month (730h) figure; prorate it to the billed
-                # hours so a daily row doesn't add a whole month of Windows licensing.
-                if windows and usage_hours > 0:
-                    windows = windows * (usage_hours / HOURS_PER_MONTH)
 
             # AWS: try the live Price List API for this workload's instance type
             # (its own source instance when marked AWS, otherwise the equivalent),
@@ -7155,7 +7225,7 @@ def detect_cpu_unit(fields):
     return "vcpu"
 
 
-def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto", hours_override=False, oic_message_packs=None):
+def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto", hours_override=False, oic_message_packs=None, hide_sql_pricing=False):
     # cpu_unit override (on-prem uploads): the parser normalizes the source CPU column
     # to OCPUs assuming it holds vCPUs (2 vCPU = 1 OCPU). 'auto' (default) detects the
     # unit from the column header and falls back to vCPU; 'ocpu' uses the source count
@@ -7237,9 +7307,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "Database Details",
         )
         or find_key_any(fields, [["database memory"], ["db memory"], ["database ram"], ["db ram"]]),
-        "db_total_allocated": find_key(fields, ["total allocated storage"], "Database Details"),
-        "db_total_storage": find_key(fields, ["total storage"], "Database Details"),
-        "db_size": find_key(fields, ["database size"], "Database Details"),
+        # Section-scoped first, then a section-less fallback on the field's own declared aliases
+        # (database/db storage, size) so a plainly-named "Database Storage (GB)" column prices
+        # too — mirroring how the application-storage keys resolve.
+        "db_total_allocated": find_key(fields, ["total allocated storage"], "Database Details")
+        or find_key_any(fields, [["database total allocated storage"], ["db total allocated storage"], ["database storage"], ["db storage"]]),
+        "db_total_storage": find_key(fields, ["total storage"], "Database Details")
+        or find_key_any(fields, [["database total storage"], ["db total storage"]]),
+        "db_size": find_key(fields, ["database size"], "Database Details")
+        or find_key_any(fields, [["database size"], ["db size"]]),
         "hours": find_key_any(
             fields,
             [["hours per month"], ["hours/month"], ["hours month"], ["monthly hours"], ["hours running"], ["running hours"], ["usage hours"], ["uptime hours"], ["hours"]],
@@ -8098,7 +8174,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # Source-cloud cost estimate (other-cloud comparison): Linux baseline + Windows license add-on.
         # Windows add-on mirrors the OCI rule (1 license per OCPU) and is gated by the Windows toggle.
         is_windows_row = row_operating_system(row) == "windows"
-        windows_addon = money(ocpus * WINDOWS_LICENSE_RATE * HOURS_PER_MONTH) if (is_windows_row and not hide_windows_pricing and ocpus) else 0.0
+        # Windows licensing is per-OCPU-hour. A cloud bill lists each resource at daily/hourly
+        # granularity, so bill Windows on the row's ACTUAL usage hours — not a full 730h month —
+        # or a VM split across ~30 daily lines gets charged ~30 months of licensing. On-prem
+        # inventory has no per-line hours, so it keeps the full-month basis.
+        _win_hours = HOURS_PER_MONTH
+        if cloud_bill_mode:
+            _uh = cloud_usage_hours(row, fields)
+            _win_hours = _uh if _uh and _uh > 0 else HOURS_PER_MONTH
+        windows_addon = money(ocpus * WINDOWS_LICENSE_RATE * _win_hours) if (is_windows_row and not hide_windows_pricing and ocpus) else 0.0
         source_cloud_estimate = None
         # Once the bill's provider is known (from filename/toggle), trust it for the
         # whole file instead of re-deciding per server.
@@ -8118,15 +8202,16 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             }
 
         # SQL Server 3rd-party licensing is bundled as line item(s) inside the OCI cost (unlike
-        # Windows, which is a separate add-on). The licensing toggle hides SQL Server licensing
-        # alongside Windows — both are BYOL-able 3rd-party licenses the customer may already own.
+        # Windows, which is a separate add-on). SQL Server licensing has its OWN toggle
+        # (hide_sql_pricing) so it can be removed independently of Windows — both are
+        # BYOL-able 3rd-party licenses the customer may already own.
         sql_license_monthly = 0.0
         for _li in (line_items or []):
             _d = normalize(_li.get("description", ""))
             if "sql server" in _d and ("licens" in _d):
                 sql_license_monthly += float(_li.get("monthly") or 0)
         sql_license_monthly = money(sql_license_monthly)
-        if hide_windows_pricing and sql_license_monthly:
+        if hide_sql_pricing and sql_license_monthly:
             for _li in line_items:
                 _d = normalize(_li.get("description", ""))
                 if "sql server" in _d and ("licens" in _d):
@@ -8206,6 +8291,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         else:
             totals[key] = round(totals[key], 4)
 
+    # App Estimate: a bill uploaded with SKUs/usage but no pricing (e.g. an Azure export with the
+    # cost columns stripped) still needs a source-cost figure. Reconstruct each row's cost on its
+    # own source cloud from usage, and flag it so the "<Cloud> Cost" labels become "(App Estimate)".
+    source_cost_estimated = False
+    source_cloud_key = _dominant_source_cloud({"rows": priced_rows}, source_provider) if cloud_bill_mode else None
+    if cloud_bill_mode:
+        source_cost_estimated = _apply_source_cost_estimate(
+            priced_rows, totals, source_cloud_key, hide_windows_pricing)
+
     return {
         "engine": "local-rule-engine",
         "intakeMode": intake_mode,
@@ -8224,8 +8318,12 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             priced_rows,
             hide_windows_pricing,
             cloud_bill_mode,
-            _dominant_source_cloud({"rows": priced_rows}, source_provider) if cloud_bill_mode else None,
+            source_cloud_key,
         ),
+        # True when the bill had no pricing and the source cost is an App Estimate (usage-based);
+        # sourceCloud names the cloud so the UI/BOM can label "<Cloud> Cost (App Estimate)".
+        "sourceCostEstimated": source_cost_estimated,
+        "sourceCloud": source_cloud_key,
         "priceCatalog": price_catalog_payload() if service_catalog_enabled else [],
     }
 
@@ -8876,6 +8974,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             bom_match = bool(payload.get("bomMatch"))
             hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
+            hide_sql_pricing = bool(payload.get("hideSqlPricing"))
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
             auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
@@ -8892,10 +8991,11 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Pricing requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None, hide_sql_pricing=hide_sql_pricing)
             pricing["bomMatch"] = bom_match
             pricing["hideGpuPricing"] = hide_gpu_pricing
             pricing["hideWindowsPricing"] = hide_windows_pricing
+            pricing["hideSqlPricing"] = hide_sql_pricing
             pricing["rightsize"] = rightsize
             pricing["auto"] = auto
             pricing["cpuUnit"] = cpu_unit  # requested (may be "auto")
@@ -8983,6 +9083,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             bom_match = bool(payload.get("bomMatch"))
             hide_gpu_pricing = bool(payload.get("hideGpuPricing"))
             hide_windows_pricing = bool(payload.get("hideWindowsPricing"))
+            hide_sql_pricing = bool(payload.get("hideSqlPricing"))
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
             hours_per_month = to_number(payload.get("hoursPerMonth"), 0) or None
@@ -9028,7 +9129,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if not fields or not rows:
                 self.send_error_json(400, "Export requires fields and rows.")
                 return
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None)
+            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, bom_match, hide_gpu_pricing, hide_windows_pricing, rightsize, auto, hours_per_month, source_provider, auto_tier, shape_overrides, cost_overrides, cpu_unit, hours_override=bool(payload.get('hoursOverride')), oic_message_packs=to_number(payload.get('oicMessagePacks'), 0) or None, hide_sql_pricing=hide_sql_pricing)
 
             # "Full BOM": the 12-sheet customer-facing deliverable (Table of Contents,
             # Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR,

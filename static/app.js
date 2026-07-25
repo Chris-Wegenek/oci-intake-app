@@ -16,6 +16,7 @@ const state = {
   fullServiceBeta: false,
   hideGpuPricing: false,
   hideWindowsPricing: false,
+  hideSqlPricing: false,
   rightsize: false,
   auto: false,
   cpuUnit: "auto",
@@ -204,6 +205,7 @@ const els = {
   priceShapeButton: document.querySelector("#priceShapeButton"),
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
   hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
+  hideSqlToggle: document.querySelector("#hideSqlToggle"),
   rightsizeSwitches: document.querySelectorAll(".rightsize-switch"),
   cpuUnitSwitches: document.querySelectorAll(".cpuunit-switch"),
   cpuUnitDetected: document.getElementById("cpuUnitDetected"),
@@ -745,6 +747,23 @@ function providerLabel(value = state.providerHint) {
     gcp: "GCP",
   };
   return labels[value] || "Auto-detect";
+}
+
+// Display name for the bill's source cloud ("AWS"/"Azure"/"GCP", else "Source").
+function cloudDisplayName(key = state.pricing?.sourceCloud) {
+  const k = String(key || "").toLowerCase();
+  return k === "aws" ? "AWS" : k === "azure" ? "Azure" : k === "gcp" ? "GCP" : "Source";
+}
+
+// True when the current pricing filled the source cost from usage (bill had no pricing).
+function sourceCostIsEstimated() {
+  return Boolean(state.pricing?.sourceCostEstimated);
+}
+
+// Label for any "<cloud> cost" / "current cost" spot: append "(App Estimate)" when the figure
+// was reconstructed by the app because the uploaded bill carried no pricing.
+function sourceCostLabel(base = "Source cost") {
+  return sourceCostIsEstimated() ? `${cloudDisplayName()} cost (App Estimate)` : base;
 }
 
 function pricingActionLabel(action = "price") {
@@ -1805,6 +1824,7 @@ async function priceRows({ keepView = false } = {}) {
           fullServiceBeta: state.fullServiceBeta,
           hideGpuPricing: state.hideGpuPricing,
           hideWindowsPricing: state.hideWindowsPricing,
+        hideSqlPricing: state.hideSqlPricing,
           rightsize: state.rightsize,
           cpuUnit: state.cpuUnit,
           auto: state.auto,
@@ -1916,6 +1936,7 @@ async function exportToExcel(template = "quick") {
         fullServiceBeta: state.fullServiceBeta,
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
+        hideSqlPricing: state.hideSqlPricing,
         rightsize: state.rightsize,
         cpuUnit: state.cpuUnit,
         auto: state.auto,
@@ -2097,7 +2118,7 @@ async function applyWorkflowState(wf) {
   if (!wf || !wf.rows) throw new Error("That file has no saved workflow data.");
   const assign = [
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
-    "hideWindowsPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
+    "hideWindowsPricing", "hideSqlPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
     "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
     "crossCloudTopTier", "extraServices", "diagramOptions", "fields", "rows",
     "shapeOverrides", "costOverrides",
@@ -2114,6 +2135,10 @@ async function applyWorkflowState(wf) {
   if (els.bomName) els.bomName.value = state.bomName || "";
   if (els.ociDiscount) els.ociDiscount.value = state.ociDiscount || 0;
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
+  // Reflect the restored licensing/GPU toggles into their checkboxes.
+  if (els.hideGpuToggle) els.hideGpuToggle.checked = !!state.hideGpuPricing;
+  if (els.hideWindowsToggle) els.hideWindowsToggle.checked = !!state.hideWindowsPricing;
+  if (els.hideSqlToggle) els.hideSqlToggle.checked = !!state.hideSqlPricing;
   // Reflect restored diagram-layout selections into their controls (region combobox,
   // AD-split toggle + chips, DR toggle + region + replication chips).
   if (state.diagramOptions) {
@@ -2140,6 +2165,11 @@ async function applyWorkflowState(wf) {
   }
   if (typeof renderTable === "function") renderTable();
   await priceRows();
+  // priceRows() doesn't touch the "Add OCI services" panel, so re-render the cart and fold the
+  // restored add-in services back into the results totals — otherwise a reloaded BOM shows an
+  // empty cart and drops the extras the user selected last time.
+  if (typeof renderServiceCart === "function") renderServiceCart();
+  if (typeof refreshResultsTotals === "function") refreshResultsTotals();
   // Opening a previous BOM jumps straight to the results page (page 4).
   if (state.pricing) showResultsPage();
 }
@@ -3509,7 +3539,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       },
       {
         key: "sourceCost",
-        label: "Source cost",
+        label: sourceCostLabel(),
         sortValue: (row) => Number(row.fullServiceMapping?.sourceMonthlyCost || 0),
         render: (row) => formatCurrency(row.fullServiceMapping?.sourceMonthlyCost || 0),
       },
@@ -3881,6 +3911,9 @@ els.rerunPricing?.addEventListener("click", priceRows);
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
 });
+els.hideSqlToggle?.addEventListener("change", (event) => {
+  state.hideSqlPricing = event.target.checked;
+});
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
 });
@@ -4017,6 +4050,7 @@ async function downloadDiagram() {
         fullServiceBeta: state.fullServiceBeta,
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
+        hideSqlPricing: state.hideSqlPricing,
         rightsize: state.rightsize,
         cpuUnit: state.cpuUnit,
         auto: state.auto,
@@ -4140,14 +4174,28 @@ els.convertBomFile?.addEventListener("change", (event) => {
 els.bomName?.addEventListener("input", (event) => {
   state.bomName = event.target.value;
 });
+let _discountRenderTimer = null;
+function _applyDiscountRender() {
+  clearTimeout(_discountRenderTimer);
+  _discountRenderTimer = null;
+  if (state.pricing) renderResults(state.pricing);
+}
 els.ociDiscount?.addEventListener("input", (event) => {
   let v = Number(event.target.value);
   if (!(v >= 0)) v = 0;
   if (v > 100) v = 100;
   state.ociDiscount = v;
-  // Reflect the discount immediately in the OCI total + ramp so the app matches
-  // the printout (which applies the same discount).
-  if (state.pricing) renderResults(state.pricing);
+  // Store the value immediately, but DEBOUNCE the heavy results re-render so the view
+  // isn't refreshing on every keystroke (which made the field impossible to type in).
+  // The OCI total + ramp update ~700ms after you stop typing.
+  clearTimeout(_discountRenderTimer);
+  _discountRenderTimer = setTimeout(_applyDiscountRender, 700);
+});
+// Also apply right away when the field loses focus (blur) or Enter is pressed, so the
+// update isn't left waiting on the debounce timer if you move on quickly.
+els.ociDiscount?.addEventListener("change", _applyDiscountRender);
+els.ociDiscount?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.target.blur(); _applyDiscountRender(); }
 });
 
 function renderCrossCloud() {
@@ -4190,7 +4238,7 @@ function renderCrossCloud() {
   `);
   const tier = state.crossCloudTopTier;
   const basisLabel = (v) => {
-    if (v.basis === "actual bill") return "your actual billed cost";
+    if (v.basis === "actual bill") return sourceCostIsEstimated() ? "App Estimate — from usage (bill had no pricing)" : "your actual billed cost";
     if (v.basis === "what-if: bill re-shaped on newest-gen") return "what-if: your bill re-shaped on newest-gen";
     if (v.basis && v.basis.startsWith("compute + services re-priced")) return v.basis;
     if (v.carriedRows) return `compute estimated · ${v.carriedRows} services at billed cost`;
@@ -4210,9 +4258,11 @@ function renderCrossCloud() {
       : "";
     // Reversed: other cloud cheaper than OCI (negative) = red; pricier = green.
     const deltaClass = delta >= 0 ? "cross-cloud-down" : "cross-cloud-up";
+    // The source cloud's card is an App Estimate when the bill had no pricing — flag it.
+    const nameSuffix = (sourceCostIsEstimated() && key === raw.sourceCloud) ? " (App Estimate)" : "";
     cards.push(`
       <div class="cross-cloud-card">
-        <span class="cross-cloud-card-name">${escapeHtml(v.label || key.toUpperCase())}</span>
+        <span class="cross-cloud-card-name">${escapeHtml((v.label || key.toUpperCase()) + nameSuffix)}</span>
         <span class="cross-cloud-card-monthly">${formatCurrency(monthly)}<small>/mo</small></span>
         <span class="cross-cloud-card-annual">${formatCurrency(Number(v.annualTotal || monthly * 12))}/yr</span>
         ${deltaLabel ? `<span class="cross-cloud-delta ${deltaClass}">${deltaLabel}</span>` : ""}
@@ -4238,10 +4288,13 @@ function renderCrossCloud() {
     : tier
     ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote."
     : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote.";
+  const estNote = sourceCostIsEstimated()
+    ? ` Your ${srcName} bill contained usage/SKUs but no pricing, so the ${srcName} total shown is an App Estimate reconstructed from usage — not a billed figure.`
+    : "";
   wrap.innerHTML = `
     ${toggle ? `<div class="cross-cloud-toolbar">${toggle}</div>` : ""}
     <div class="cross-cloud-grid">${cards.join("")}</div>
-    <p class="cross-cloud-note">${note}</p>
+    <p class="cross-cloud-note">${note}${estNote}</p>
   `;
   wrap.querySelectorAll("[data-cc-tier]").forEach((btn) => {
     btn.addEventListener("click", () => {
