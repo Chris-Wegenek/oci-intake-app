@@ -9025,6 +9025,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             full_service_beta = bool(payload.get("fullServiceBeta")) or intake_mode == INTAKE_MODE_CLOUD_BILL
             rightsize = bool(payload.get("rightsize"))
             auto = bool(payload.get("auto"))
+            hide_sql_pricing = bool(payload.get("hideSqlPricing"))
             hours_per_month = to_number(payload.get("hoursPerMonth"), 0) or None
             source_provider = normalize_provider_hint(payload.get("providerHint"))
             auto_tier = "top" if str(payload.get("autoTier", "best")).lower() == "top" else "best"
@@ -9034,21 +9035,31 @@ class IntakeHandler(BaseHTTPRequestHandler):
             if cpu_unit not in ("auto", "vcpu", "ocpu"):
                 cpu_unit = "auto"
             bom_name = clean_text(payload.get("bomName"))
+            extra_services = payload.get("extraServices") if isinstance(payload.get("extraServices"), list) else []
+            diagram_options = payload.get("diagramOptions") if isinstance(payload.get("diagramOptions"), dict) else {}
 
             pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, False,
                                         bool(payload.get("hideGpuPricing")), bool(payload.get("hideWindowsPricing")),
                                         rightsize, auto, hours_per_month, source_provider, auto_tier,
                                         shape_overrides, cost_overrides, cpu_unit,
-                                        hours_override=bool(payload.get("hoursOverride")))
+                                        hours_override=bool(payload.get("hoursOverride")),
+                                        oic_message_packs=to_number(payload.get("oicMessagePacks"), 0) or None,
+                                        hide_sql_pricing=hide_sql_pricing)
 
             import bom_diagram, bom_template, tempfile, zipfile, io
             keys = bom_template._resolve_inventory_keys(fields)
             shp = shape_payload(shape_key)
             out_dir = tempfile.mkdtemp(prefix="ocidiag_")
+            extra_priced = None
+            if extra_services:
+                import oci_catalog
+                extra_priced, _ = oci_catalog.price_extras(
+                    extra_services, hours_per_month or HOURS_PER_MONTH)
             drawio, png = bom_diagram.build_architecture(
                 pricing, rows, keys, bom_name,
                 shp.get("shortLabel") or shp.get("label") or "",
-                out_dir=out_dir, sites=bom_template._distinct_sites(fields, rows))
+                out_dir=out_dir, sites=bom_template._distinct_sites(fields, rows),
+                extra_priced=extra_priced, diagram_options=diagram_options)
             if not drawio and not png:
                 self.send_error_json(500, "Could not build the architecture diagram (no workloads found).")
                 return

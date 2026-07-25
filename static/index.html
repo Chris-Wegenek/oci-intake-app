@@ -20,7 +20,11 @@
         <button class="step is-active" type="button" data-step="upload" aria-current="step">1 Upload</button>
         <button class="step" type="button" data-step="review">2 Review</button>
         <button class="step" type="button" data-step="shape">3 Shape</button>
-        <button class="step" type="button" data-step="price">4 Price</button>
+        <button class="step" type="button" data-step="architecture" aria-label="Step 4: Architecture">
+          <span class="step-architecture-full">4 Architecture</span>
+          <span class="step-architecture-short" aria-hidden="true">4 Arch</span>
+        </button>
+        <button class="step" type="button" data-step="price">5 Price</button>
       </nav>
     </header>
 
@@ -238,7 +242,7 @@
           </div>
           <div class="shape-action-buttons">
             <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
-            <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
+            <button id="priceShapeButton" class="primary-button" type="button">Continue to architecture</button>
           </div>
         </div>
       </section>
@@ -279,6 +283,165 @@
       </section>
     </main>
 
+    <main id="architecturePage" class="architecture-page is-hidden">
+      <section class="architecture-hero">
+        <div>
+          <p class="page-kicker">Target architecture</p>
+          <h2>Configure the OCI architecture</h2>
+          <span id="architectureShape" class="shape-result-pill">E6 Standard Ax</span>
+          <p>Set the deployment regions, availability-domain layout, and disaster recovery plan for this estimate.</p>
+        </div>
+        <div class="architecture-actions">
+          <button id="backToShapeFromArchitecture" class="ghost-button" type="button">Back to shape</button>
+          <button id="continueToPrice" class="primary-button" type="button">View price</button>
+        </div>
+      </section>
+
+      <section class="architecture-layout" aria-label="Architecture configuration">
+        <div class="architecture-config">
+          <div class="architecture-section-heading">
+            <div>
+              <p class="page-kicker">Deployment layout</p>
+              <h3>Regions and resiliency</h3>
+            </div>
+            <p>These selections are used in the standalone diagram and the Full BOM.</p>
+          </div>
+
+          <div class="architecture-options-grid">
+            <div class="diagram-card">
+              <div class="diagram-card-head">
+                <span class="diagram-card-title">Primary region</span>
+                <span class="diagram-card-sub">Where the migrated workloads land</span>
+              </div>
+              <label class="diagram-field">
+                <span class="diagram-field-label">Primary OCI region</span>
+                <select id="primaryRegion" class="diagram-select" data-searchable="region">
+                  <option value="" data-ads="1" data-pin="auto">Auto (unnamed region - pick a region to enable AD split)</option>
+                  <option value="us-ashburn-1" data-ads="3">US East (Ashburn) - 3 ADs</option>
+                  <option value="us-phoenix-1" data-ads="3">US West (Phoenix) - 3 ADs</option>
+                  <option value="uk-london-1" data-ads="3">UK South (London) - 3 ADs</option>
+                  <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt) - 3 ADs</option>
+                  <option value="ap-sydney-1" data-ads="1">Australia East (Sydney) - 1 AD</option>
+                  <option value="sa-saopaulo-1" data-ads="1">Brazil East (Sao Paulo) - 1 AD</option>
+                  <option value="ca-montreal-1" data-ads="1">Canada Southeast (Montreal) - 1 AD</option>
+                  <option value="ca-toronto-1" data-ads="1">Canada Southeast (Toronto) - 1 AD</option>
+                  <option value="eu-paris-1" data-ads="1">France Central (Paris) - 1 AD</option>
+                  <option value="ap-mumbai-1" data-ads="1">India West (Mumbai) - 1 AD</option>
+                  <option value="ap-osaka-1" data-ads="1">Japan Central (Osaka) - 1 AD</option>
+                  <option value="ap-tokyo-1" data-ads="1">Japan East (Tokyo) - 1 AD</option>
+                  <option value="eu-amsterdam-1" data-ads="1">Netherlands NW (Amsterdam) - 1 AD</option>
+                  <option value="me-jeddah-1" data-ads="1">Saudi Arabia West (Jeddah) - 1 AD</option>
+                  <option value="ap-singapore-1" data-ads="1">Singapore - 1 AD</option>
+                  <option value="ap-seoul-1" data-ads="1">South Korea Central (Seoul) - 1 AD</option>
+                  <option value="eu-madrid-1" data-ads="1">Spain Central (Madrid) - 1 AD</option>
+                  <option value="eu-zurich-1" data-ads="1">Switzerland North (Zurich) - 1 AD</option>
+                  <option value="me-dubai-1" data-ads="1">UAE East (Dubai) - 1 AD</option>
+                  <option value="us-chicago-1" data-ads="1">US Midwest (Chicago) - 1 AD</option>
+                  <option value="us-sanjose-1" data-ads="1">US West (San Jose) - 1 AD</option>
+                </select>
+              </label>
+              <label class="diagram-switch" id="splitAcrossADsRow">
+                <input type="checkbox" id="splitAcrossADs" />
+                <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
+                <span class="diagram-switch-text">
+                  <strong>Split across Availability Domains</strong>
+                  <small id="adSplitHint">Pick a multi-AD region to enable</small>
+                </span>
+              </label>
+              <div id="adSplitResources" class="diagram-sub" hidden>
+                <div class="diagram-field">
+                  <span class="diagram-field-label">Split these resources across ADs</span>
+                  <div class="diagram-chips" id="adSplitChips">
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="adSplitVms" value="vms" checked />
+                      <span>Compute VMs</span>
+                    </label>
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="adSplitDbs" value="dbs" checked />
+                      <span>Databases</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="diagram-card">
+              <div class="diagram-card-head">
+                <span class="diagram-card-title">Disaster recovery</span>
+                <span class="diagram-card-sub">Add a secondary region when the design requires it</span>
+              </div>
+              <label class="diagram-switch">
+                <input type="checkbox" id="enableDr" />
+                <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
+                <span class="diagram-switch-text">
+                  <strong>Enable a DR region</strong>
+                  <small>Draw the secondary region and selected replicas</small>
+                </span>
+              </label>
+              <div id="drSubOptions" class="diagram-sub" hidden>
+                <label class="diagram-field">
+                  <span class="diagram-field-label">DR region</span>
+                  <select id="drRegion" class="diagram-select" data-searchable="region">
+                    <option value="" data-pin="auto">Auto (unnamed secondary region)</option>
+                    <option value="us-ashburn-1" data-ads="3">US East (Ashburn)</option>
+                    <option value="us-phoenix-1" data-ads="3">US West (Phoenix)</option>
+                    <option value="uk-london-1" data-ads="3">UK South (London)</option>
+                    <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt)</option>
+                    <option value="ap-sydney-1">Australia East (Sydney)</option>
+                    <option value="sa-saopaulo-1">Brazil East (Sao Paulo)</option>
+                    <option value="ca-montreal-1">Canada Southeast (Montreal)</option>
+                    <option value="ca-toronto-1">Canada Southeast (Toronto)</option>
+                    <option value="eu-paris-1">France Central (Paris)</option>
+                    <option value="ap-mumbai-1">India West (Mumbai)</option>
+                    <option value="ap-osaka-1">Japan Central (Osaka)</option>
+                    <option value="ap-tokyo-1">Japan East (Tokyo)</option>
+                    <option value="eu-amsterdam-1">Netherlands NW (Amsterdam)</option>
+                    <option value="me-jeddah-1">Saudi Arabia West (Jeddah)</option>
+                    <option value="ap-singapore-1">Singapore</option>
+                    <option value="ap-seoul-1">South Korea Central (Seoul)</option>
+                    <option value="eu-madrid-1">Spain Central (Madrid)</option>
+                    <option value="eu-zurich-1">Switzerland North (Zurich)</option>
+                    <option value="me-dubai-1">UAE East (Dubai)</option>
+                    <option value="us-chicago-1">US Midwest (Chicago)</option>
+                    <option value="us-sanjose-1">US West (San Jose)</option>
+                  </select>
+                </label>
+                <div class="diagram-field">
+                  <span class="diagram-field-label">Replicate to DR</span>
+                  <div class="diagram-chips" id="drReplicateChips">
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="drRepVms" value="vms" checked />
+                      <span>Compute VMs</span>
+                    </label>
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="drRepDbs" value="dbs" checked />
+                      <span>Databases</span>
+                    </label>
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="drRepObj" value="object" checked />
+                      <span>Object Storage backups</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="architecture-export-panel" aria-labelledby="architectureExportHeading">
+          <p class="architecture-export-eyebrow">Architecture package</p>
+          <h3 id="architectureExportHeading">Export the diagram</h3>
+          <p>Generate the target architecture from the current BOM and the selections on this page.</p>
+          <div class="architecture-file-list" aria-label="Included files">
+            <div><strong>PNG</strong><span>Rendered when available</span></div>
+            <div><strong>DRAWIO</strong><span>Editable source</span></div>
+          </div>
+          <button id="downloadDiagram" class="primary-button architecture-export-button" type="button">Download architecture ZIP</button>
+          <p id="architectureExportStatus" class="architecture-export-status" role="status" aria-live="polite">Ready to generate.</p>
+        </aside>
+      </section>
+    </main>
+
     <main id="resultsPage" class="results-page is-hidden">
       <section class="bom-name-bar">
         <label for="bomName" class="bom-name-label">BOM name</label>
@@ -299,7 +462,6 @@
             <div id="exportMenuList" class="export-menu-list" role="menu" hidden>
               <button id="exportExcel" class="export-menu-item" type="button" role="menuitem" title="Quick BOM — the compact workbook: the BOM sheet plus the Overview/ramp sheet.">Quick BOM</button>
               <button id="exportJson" class="export-menu-item" type="button" role="menuitem">Export .json</button>
-              <button id="downloadDiagram" class="export-menu-item" type="button" role="menuitem" title="Download just the OCI architecture diagram generated from this BOM — the rendered PNG and the editable draw.io file, zipped together. No workbook.">Download diagram</button>
             </div>
           </div>
           <input id="loadWorkflowFile" type="file" accept=".json,.xlsx" hidden />
@@ -450,133 +612,6 @@
               <p class="service-cart-note">Added services are included in the totals above and in both BOM exports. Networking / Security / DR / Storage lines land on the matching Pricing Overview row.</p>
             </aside>
           </div>
-        </div>
-      </section>
-
-      <section class="add-services-section" aria-label="Diagram and DR options">
-        <button type="button" id="diagramOptionsToggle" class="add-services-toggle" aria-expanded="false" aria-controls="diagramOptionsBody">
-          <span class="add-services-toggle-icon" aria-hidden="true">＋</span>
-          <span class="add-services-toggle-text">
-            <strong>Diagram &amp; DR options</strong>
-            <small>Pick the OCI region (splits compute across availability domains when supported) and a DR region.</small>
-          </span>
-          <span class="add-services-caret" aria-hidden="true">▾</span>
-        </button>
-        <div id="diagramOptionsBody" class="add-services-body" hidden>
-          <div class="diagram-card">
-            <div class="diagram-card-head">
-              <span class="diagram-card-title">Primary region</span>
-              <span class="diagram-card-sub">Where the migrated workloads land</span>
-            </div>
-            <label class="diagram-field">
-              <span class="diagram-field-label">Primary OCI region</span>
-              <select id="primaryRegion" class="diagram-select" data-searchable="region">
-                <option value="" data-ads="1" data-pin="auto">Auto (unnamed region — pick a region to enable AD split)</option>
-                <option value="us-ashburn-1" data-ads="3">US East (Ashburn) · 3 ADs</option>
-                <option value="us-phoenix-1" data-ads="3">US West (Phoenix) · 3 ADs</option>
-                <option value="uk-london-1" data-ads="3">UK South (London) · 3 ADs</option>
-                <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt) · 3 ADs</option>
-                <option value="ap-sydney-1" data-ads="1">Australia East (Sydney) · 1 AD</option>
-                <option value="sa-saopaulo-1" data-ads="1">Brazil East (São Paulo) · 1 AD</option>
-                <option value="ca-montreal-1" data-ads="1">Canada Southeast (Montreal) · 1 AD</option>
-                <option value="ca-toronto-1" data-ads="1">Canada Southeast (Toronto) · 1 AD</option>
-                <option value="eu-paris-1" data-ads="1">France Central (Paris) · 1 AD</option>
-                <option value="ap-mumbai-1" data-ads="1">India West (Mumbai) · 1 AD</option>
-                <option value="ap-osaka-1" data-ads="1">Japan Central (Osaka) · 1 AD</option>
-                <option value="ap-tokyo-1" data-ads="1">Japan East (Tokyo) · 1 AD</option>
-                <option value="eu-amsterdam-1" data-ads="1">Netherlands NW (Amsterdam) · 1 AD</option>
-                <option value="me-jeddah-1" data-ads="1">Saudi Arabia West (Jeddah) · 1 AD</option>
-                <option value="ap-singapore-1" data-ads="1">Singapore · 1 AD</option>
-                <option value="ap-seoul-1" data-ads="1">South Korea Central (Seoul) · 1 AD</option>
-                <option value="eu-madrid-1" data-ads="1">Spain Central (Madrid) · 1 AD</option>
-                <option value="eu-zurich-1" data-ads="1">Switzerland North (Zurich) · 1 AD</option>
-                <option value="me-dubai-1" data-ads="1">UAE East (Dubai) · 1 AD</option>
-                <option value="us-chicago-1" data-ads="1">US Midwest (Chicago) · 1 AD</option>
-                <option value="us-sanjose-1" data-ads="1">US West (San Jose) · 1 AD</option>
-              </select>
-            </label>
-            <label class="diagram-switch" id="splitAcrossADsRow">
-              <input type="checkbox" id="splitAcrossADs" />
-              <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
-              <span class="diagram-switch-text">
-                <strong>Split compute across Availability Domains</strong>
-                <small id="adSplitHint">Pick a multi-AD region to enable</small>
-              </span>
-            </label>
-            <div id="adSplitResources" class="diagram-sub" hidden>
-              <div class="diagram-field">
-                <span class="diagram-field-label">Split which resources across ADs</span>
-                <div class="diagram-chips" id="adSplitChips">
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="adSplitVms" value="vms" checked />
-                    <span>Compute VMs</span>
-                  </label>
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="adSplitDbs" value="dbs" checked />
-                    <span>Databases</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="diagram-card">
-            <label class="diagram-switch">
-              <input type="checkbox" id="enableDr" />
-              <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
-              <span class="diagram-switch-text">
-                <strong>Enable Disaster Recovery region</strong>
-                <small>Draw a secondary OCI region and replicate the resources you choose</small>
-              </span>
-            </label>
-            <div id="drSubOptions" class="diagram-sub" hidden>
-              <label class="diagram-field">
-                <span class="diagram-field-label">DR region (secondary)</span>
-                <select id="drRegion" class="diagram-select" data-searchable="region">
-                  <option value="" data-pin="auto">Auto (unnamed secondary region)</option>
-                  <option value="us-ashburn-1" data-ads="3">US East (Ashburn)</option>
-                  <option value="us-phoenix-1" data-ads="3">US West (Phoenix)</option>
-                  <option value="uk-london-1" data-ads="3">UK South (London)</option>
-                  <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt)</option>
-                  <option value="ap-sydney-1">Australia East (Sydney)</option>
-                  <option value="sa-saopaulo-1">Brazil East (São Paulo)</option>
-                  <option value="ca-montreal-1">Canada Southeast (Montreal)</option>
-                  <option value="ca-toronto-1">Canada Southeast (Toronto)</option>
-                  <option value="eu-paris-1">France Central (Paris)</option>
-                  <option value="ap-mumbai-1">India West (Mumbai)</option>
-                  <option value="ap-osaka-1">Japan Central (Osaka)</option>
-                  <option value="ap-tokyo-1">Japan East (Tokyo)</option>
-                  <option value="eu-amsterdam-1">Netherlands NW (Amsterdam)</option>
-                  <option value="me-jeddah-1">Saudi Arabia West (Jeddah)</option>
-                  <option value="ap-singapore-1">Singapore</option>
-                  <option value="ap-seoul-1">South Korea Central (Seoul)</option>
-                  <option value="eu-madrid-1">Spain Central (Madrid)</option>
-                  <option value="eu-zurich-1">Switzerland North (Zurich)</option>
-                  <option value="me-dubai-1">UAE East (Dubai)</option>
-                  <option value="us-chicago-1">US Midwest (Chicago)</option>
-                  <option value="us-sanjose-1">US West (San Jose)</option>
-                </select>
-              </label>
-              <div class="diagram-field">
-                <span class="diagram-field-label">Replicate to DR</span>
-                <div class="diagram-chips" id="drReplicateChips">
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="drRepVms" value="vms" checked />
-                    <span>Compute VMs</span>
-                  </label>
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="drRepDbs" value="dbs" checked />
-                    <span>Databases</span>
-                  </label>
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="drRepObj" value="object" checked />
-                    <span>Object Storage backups</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p class="service-cart-note">These shape the architecture diagram in the Full BOM: the region names, whether compute is split across availability domains, and — when DR is enabled — the secondary region and which resources it replicates.</p>
         </div>
       </section>
 

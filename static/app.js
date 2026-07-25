@@ -183,6 +183,7 @@ const els = {
   intakePage: document.querySelector("#intakePage"),
   pricingRail: document.querySelector("#pricingRail"),
   shapePage: document.querySelector("#shapePage"),
+  architecturePage: document.querySelector("#architecturePage"),
   reviewPanel: document.querySelector("#reviewPanel"),
   resultsPage: document.querySelector("#resultsPage"),
   reviewTable: document.querySelector("#reviewTable"),
@@ -243,6 +244,10 @@ const els = {
   inventoryNotice: document.querySelector("#inventoryNotice"),
   switchToOnPrem: document.querySelector("#switchToOnPrem"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
+  backToShapeFromArchitecture: document.querySelector("#backToShapeFromArchitecture"),
+  continueToPrice: document.querySelector("#continueToPrice"),
+  architectureShape: document.querySelector("#architectureShape"),
+  architectureExportStatus: document.querySelector("#architectureExportStatus"),
   processorPicker: document.querySelector("#processorPicker"),
   shapeDropdown: document.querySelector("#shapeDropdown"),
   shapeVendorTitle: document.querySelector("#shapeVendorTitle"),
@@ -300,13 +305,11 @@ const els = {
 };
 
 // "Add OCI services to the BOM" expand/collapse. Delegated on document and re-querying
-// the nodes on every click, so it works regardless of load order or any later re-render
-// (a stale node reference or an init error further down can't break it).
+// the nodes on every click, so it works regardless of load order or any later re-render.
 document.addEventListener("click", (event) => {
-  const toggle = event.target.closest("#addServicesToggle, #diagramOptionsToggle");
+  const toggle = event.target.closest("#addServicesToggle");
   if (!toggle) return;
-  const bodyId = toggle.id === "diagramOptionsToggle" ? "#diagramOptionsBody" : "#addServicesBody";
-  const body = document.querySelector(bodyId);
+  const body = document.querySelector("#addServicesBody");
   if (!body) return;
   const willOpen = body.hasAttribute("hidden");
   body.toggleAttribute("hidden", !willOpen);
@@ -314,7 +317,7 @@ document.addEventListener("click", (event) => {
   toggle.classList.toggle("is-open", willOpen);
   const icon = toggle.querySelector(".add-services-toggle-icon");
   if (icon) icon.textContent = willOpen ? "－" : "＋";  // − when open, ＋ when closed
-  if (toggle.id === "addServicesToggle" && willOpen && typeof fetchCatalog === "function"
+  if (willOpen && typeof fetchCatalog === "function"
       && !(state.catalog && state.catalog.groups && state.catalog.groups.length)) {
     fetchCatalog();
   }
@@ -512,9 +515,11 @@ function enhanceSearchableSelect(select) {
     }
   });
   input.addEventListener("blur", () => { setTimeout(close, 120); });
+  select.addEventListener("change", syncInputText);
   syncInputText();
 }
 document.querySelectorAll('select[data-searchable="region"]').forEach(enhanceSearchableSelect);
+_syncAdSplitControl();
 
 function rowSourceName(row) {
   return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
@@ -775,7 +780,7 @@ function pricingActionLabel(action = "price") {
 
 function syncApiUi() {
   if (els.priceShapeButton && !els.priceShapeButton.disabled) {
-    els.priceShapeButton.textContent = pricingActionLabel("price");
+    els.priceShapeButton.textContent = "Continue to architecture";
   }
   if (els.rerunPricing && !els.rerunPricing.disabled) {
     els.rerunPricing.textContent = pricingActionLabel("rerun");
@@ -1794,7 +1799,7 @@ async function applyTableEdit() {
   }
 }
 
-async function priceRows({ keepView = false } = {}) {
+async function priceRows({ keepView = false, destination = "price" } = {}) {
   // Non-fading floating spinner so in-place edits (e.g. removing a large
   // selection from the BOM) show progress without blanking the screen.
   if (els.priceSpinner) els.priceSpinner.hidden = false;
@@ -1803,7 +1808,7 @@ async function priceRows({ keepView = false } = {}) {
   els.priceButton.disabled = true;
   els.priceButton.textContent = "Pricing...";
   els.priceShapeButton.disabled = true;
-  els.priceShapeButton.textContent = "Pricing...";
+  els.priceShapeButton.textContent = destination === "architecture" ? "Preparing architecture..." : "Pricing...";
   if (els.rerunPricing) { els.rerunPricing.disabled = true; els.rerunPricing.textContent = "Pricing..."; }
   els.engineStatus.textContent = isCloudBillMode()
     ? `Mapping cloud bill lines to OCI equivalents for ${selectedShape().label}`
@@ -1849,9 +1854,10 @@ async function priceRows({ keepView = false } = {}) {
     if (keepView) {
       const y = window.scrollY;
       requestAnimationFrame(() => window.scrollTo({ top: y }));
+    } else if (destination === "architecture") {
+      showArchitecturePage();
     } else {
       showResultsPage();
-      setStep("price");
     }
   } catch (error) {
     els.engineStatus.textContent = "Pricing error";
@@ -1861,7 +1867,7 @@ async function priceRows({ keepView = false } = {}) {
     els.priceButton.disabled = false;
     els.priceButton.textContent = "Continue to shape";
     els.priceShapeButton.disabled = false;
-    els.priceShapeButton.textContent = pricingActionLabel("price");
+    els.priceShapeButton.textContent = "Continue to architecture";
     if (els.rerunPricing) { els.rerunPricing.disabled = false; els.rerunPricing.textContent = pricingActionLabel("rerun"); }
     if (els.priceSpinner) els.priceSpinner.hidden = true;
   }
@@ -2170,7 +2176,7 @@ async function applyWorkflowState(wf) {
   // empty cart and drops the extras the user selected last time.
   if (typeof renderServiceCart === "function") renderServiceCart();
   if (typeof refreshResultsTotals === "function") refreshResultsTotals();
-  // Opening a previous BOM jumps straight to the results page (page 4).
+  // Opening a previous BOM jumps straight to the results page (page 5).
   if (state.pricing) showResultsPage();
 }
 
@@ -2278,6 +2284,7 @@ function renderPricing(pricing) {
 function showIntakePage() {
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   syncIntakeLayout();
   if (state.rows.length) {
@@ -2294,6 +2301,7 @@ function showIntakePage() {
 function showUploadPage() {
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.uploadPanel.classList.remove("is-hidden");
   els.reviewPanel.classList.add("is-hidden");
@@ -2306,6 +2314,7 @@ function showReviewPage() {
   ensureReviewRows();
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.uploadPanel.classList.add("is-hidden");
   els.reviewPanel.classList.remove("is-hidden");
@@ -2322,6 +2331,7 @@ function showShapePage() {
   }
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.remove("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   renderProcessorPicker();
   renderShapeChoices();
@@ -2330,12 +2340,47 @@ function showShapePage() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function showArchitecturePage() {
+  els.intakePage.classList.add("is-hidden");
+  els.shapePage.classList.add("is-hidden");
+  els.architecturePage.classList.remove("is-hidden");
+  els.resultsPage.classList.add("is-hidden");
+  if (els.architectureShape) {
+    const shape = selectedShape();
+    els.architectureShape.textContent = state.auto ? "Best Match" : (shape.shortLabel || shape.label);
+  }
+  if (state.pricing) {
+    setArchitectureExportStatus("Ready to generate.");
+  } else if (state.rows.length) {
+    setArchitectureExportStatus("Choose a shape and prepare pricing before exporting.");
+  } else {
+    setArchitectureExportStatus("Upload inventory before generating a diagram.");
+  }
+  setStep("architecture");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function showResultsPage() {
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.remove("is-hidden");
   setStep("price");
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function openPriceStep() {
+  if (state.pricing) {
+    showResultsPage();
+    return;
+  }
+  if (state.rows.length) {
+    priceRows({ destination: "price" });
+    return;
+  }
+  showUploadPage();
+  els.uploadStatus.textContent = "Upload inventory before viewing price.";
+  els.uploadStatus.style.color = "var(--danger)";
 }
 
 function navigateStep(step) {
@@ -2351,14 +2396,12 @@ function navigateStep(step) {
     showShapePage();
     return;
   }
+  if (step === "architecture") {
+    showArchitecturePage();
+    return;
+  }
   if (step === "price") {
-    if (state.pricing) {
-      showResultsPage();
-    } else if (state.rows.length) {
-      showShapePage();
-    } else {
-      showReviewPage();
-    }
+    openPriceStep();
   }
 }
 
@@ -3901,10 +3944,10 @@ function onPriceShapeClick() {
     applyBulkVmShape(state.selectedShape);
     renderPricing(state.pricing);
     renderResults(state.pricing);
-    showResultsPage();
+    showArchitecturePage();
     return;
   }
-  priceRows();
+  priceRows({ destination: "architecture" });
 }
 els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing?.addEventListener("click", priceRows);
@@ -4028,15 +4071,24 @@ els.exportExcel?.addEventListener("click", () => exportToExcel("quick"));
 els.exportFullBom?.addEventListener("click", () => exportToExcel("full"));
 
 // Download ONLY the architecture diagram (PNG + editable .drawio, zipped) for this BOM.
+function setArchitectureExportStatus(message, tone = "") {
+  if (!els.architectureExportStatus) return;
+  els.architectureExportStatus.textContent = message;
+  if (tone) els.architectureExportStatus.dataset.tone = tone;
+  else delete els.architectureExportStatus.dataset.tone;
+}
+
 async function downloadDiagram() {
   if (!state.pricing) {
     els.engineStatus.textContent = "Run \"Reprice estimate\" first, then download the diagram.";
+    setArchitectureExportStatus("Choose a shape and prepare the estimate first.", "error");
     return;
   }
   const btn = els.downloadDiagram;
   const original = btn ? btn.textContent : "";
   if (btn) { btn.disabled = true; btn.textContent = "Rendering diagram…"; }
   els.engineStatus.textContent = "Rendering the OCI architecture diagram…";
+  setArchitectureExportStatus("Rendering the PNG and editable draw.io file...");
   try {
     const res = await fetch("/api/diagram", {
       method: "POST",
@@ -4059,6 +4111,9 @@ async function downloadDiagram() {
         costOverrides: state.costOverrides,
         hoursPerMonth: state.hoursPerMonth,
         hoursOverride: state.hoursOverride,
+        oicMessagePacks: state.oicMessagePacks,
+        extraServices: state.extraServices || [],
+        diagramOptions: state.diagramOptions || {},
         bomName: state.bomName || "",
       }),
     });
@@ -4078,8 +4133,10 @@ async function downloadDiagram() {
     link.remove();
     URL.revokeObjectURL(url);
     els.engineStatus.textContent = `Diagram downloaded: ${link.download} (PNG + draw.io)`;
+    setArchitectureExportStatus(`Downloaded ${link.download}`, "success");
   } catch (error) {
     els.engineStatus.textContent = `Diagram download failed — ${error.message}`;
+    setArchitectureExportStatus(`Download failed: ${error.message}`, "error");
     console.error("diagram download failed", error);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = original; }
@@ -4090,8 +4147,8 @@ els.exportJson?.addEventListener("click", exportWorkflowJson);
 els.loadWorkflow?.addEventListener("click", () => els.loadWorkflowFile?.click());
 els.loadPrevBom?.addEventListener("click", () => els.loadWorkflowFile?.click());
 
-// Export split-button: Full BOM is the primary action; the caret reveals Quick BOM / .json /
-// diagram. Clicking an item or outside, or pressing Escape, closes the menu.
+// Export split-button: Full BOM is the primary action; the caret reveals Quick BOM and
+// workflow JSON. Clicking an item or outside, or pressing Escape, closes the menu.
 (function wireExportMenu() {
   const menu = document.querySelector("#exportMenu");
   const toggle = document.querySelector("#exportMenuToggle");
@@ -4315,6 +4372,8 @@ els.crossCloudTile?.addEventListener("click", () => {
 });
 els.backToReview?.addEventListener("click", showIntakePage);
 els.backToReviewFromShape.addEventListener("click", showIntakePage);
+els.backToShapeFromArchitecture?.addEventListener("click", showShapePage);
+els.continueToPrice?.addEventListener("click", openPriceStep);
 els.steps.forEach((step) => {
   step.addEventListener("click", () => navigateStep(step.dataset.step));
 });

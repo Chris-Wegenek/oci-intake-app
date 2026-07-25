@@ -21,6 +21,19 @@ async function main() {
   await page.goto(APP_URL, { waitUntil: "domcontentloaded" });
   await page.screenshot({ path: path.join(QA_DIR, "landing.png"), fullPage: false });
 
+  const navigationCheck = await browser.newPage({ viewport: { width: 1024, height: 768 } });
+  await navigationCheck.goto(APP_URL, { waitUntil: "domcontentloaded" });
+  await navigationCheck.locator('[data-step="architecture"]').click();
+  await navigationCheck.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor();
+  await navigationCheck.getByText("Upload inventory before generating a diagram.", { exact: true }).waitFor();
+  await navigationCheck.locator('[data-step="price"]').click();
+  await navigationCheck.getByText("Upload inventory before viewing price.", { exact: true }).waitFor();
+  await navigationCheck.setInputFiles("#fileInput", SAMPLE);
+  await navigationCheck.getByText("Adjust your table", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
+  await navigationCheck.locator('[data-step="price"]').click();
+  await navigationCheck.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await navigationCheck.close();
+
   await page.setInputFiles("#fileInput", SAMPLE);
   await page.getByText("Adjust your table", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
   await page.screenshot({ path: path.join(QA_DIR, "review.png"), fullPage: false });
@@ -35,13 +48,33 @@ async function main() {
 
   await page.getByRole("button", { name: "Continue to shape" }).click();
   await page.getByText("Choose the OCI shape for this estimate", { exact: true }).waitFor({ timeout: 20000 });
-  await page.getByRole("button", { name: /E5 Standard/ }).click();
-  await page.locator("#shapeRateTable").getByRole("cell", { name: "$0.0300" }).waitFor({ timeout: 20000 });
+  await page.locator("#shapeGrid button").first().waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "shape.png"), fullPage: false });
 
-  await page.getByRole("button", { name: /Price (estimate|on OCI)/ }).click();
+  await page.getByRole("button", { name: "Continue to architecture" }).click();
+  await page.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await page.getByRole("heading", { name: "Export the diagram" }).waitFor({ timeout: 20000 });
+  await page.locator("#primaryRegion").selectOption("us-ashburn-1");
+  if (await page.locator("#splitAcrossADs").isDisabled()) {
+    throw new Error("Availability Domain split stayed disabled for a three-AD region.");
+  }
+  await page.locator("#splitAcrossADsRow").click();
+  if (!(await page.locator("#splitAcrossADs").isChecked())) {
+    throw new Error("Availability Domain split did not turn on from the visible switch.");
+  }
+  await page.screenshot({ path: path.join(QA_DIR, "architecture.png"), fullPage: false });
+
+  const architectureDownload = page.waitForEvent("download", { timeout: 120000 });
+  await page.getByRole("button", { name: "Download architecture ZIP" }).click();
+  const downloadedArchitecture = await architectureDownload;
+  if (!downloadedArchitecture.suggestedFilename().endsWith("_architecture.zip")) {
+    throw new Error(`Unexpected architecture download: ${downloadedArchitecture.suggestedFilename()}`);
+  }
+  await page.getByText(/Downloaded .*_architecture\.zip/).waitFor({ timeout: 20000 });
+
+  await page.getByRole("button", { name: "View price" }).click();
   await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
-  await page.locator("#resultsPage").getByText("E5 Standard", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsShape").waitFor({ timeout: 20000 });
   await page.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await page.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
   await page.locator("#resultsKpis").getByText("Specs identified", { exact: true }).waitFor({ timeout: 20000 });
@@ -63,7 +96,11 @@ async function main() {
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-review.png"), fullPage: false });
   await mobile.getByRole("button", { name: "Continue to shape" }).click();
   await mobile.getByText("Choose the OCI shape for this estimate", { exact: true }).waitFor({ timeout: 20000 });
-  await mobile.getByRole("button", { name: /Price (estimate|on OCI)/ }).click();
+  await mobile.getByRole("button", { name: "Continue to architecture" }).click();
+  await mobile.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await mobile.getByRole("button", { name: "Download architecture ZIP" }).waitFor({ timeout: 20000 });
+  await mobile.screenshot({ path: path.join(QA_DIR, "mobile-architecture.png"), fullPage: false });
+  await mobile.getByRole("button", { name: "View price" }).click();
   await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await mobile.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
@@ -82,9 +119,11 @@ async function main() {
           "qa/landing.png",
           "qa/review.png",
           "qa/shape.png",
+          "qa/architecture.png",
           "qa/pricing.png",
           "qa/mobile-landing.png",
           "qa/mobile-review.png",
+          "qa/mobile-architecture.png",
           "qa/mobile-pricing.png",
         ],
       },
