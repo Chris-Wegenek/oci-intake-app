@@ -89,6 +89,18 @@ async function main() {
   }
   await page.locator("#rampChart").screenshot({ path: path.join(QA_DIR, "ramp.png") });
 
+  const fullBomDownload = page.waitForEvent("download", { timeout: 180000 });
+  await page.getByRole("button", { name: "Full BOM", exact: true }).click();
+  const downloadedFullBom = await fullBomDownload;
+  if (!/_Full_BOM(?:_\d{4}-\d{2}-\d{2})?\.xlsx$/.test(downloadedFullBom.suggestedFilename())) {
+    throw new Error(`Unexpected Full BOM download: ${downloadedFullBom.suggestedFilename()}`);
+  }
+  await downloadedFullBom.saveAs(path.join(QA_DIR, "full-bom.xlsx"));
+  const exportStatus = await page.locator("#engineStatus").textContent();
+  if (!/Full BOM downloaded:/.test(exportStatus || "")) {
+    throw new Error(`Full BOM completion status was not set: ${exportStatus}`);
+  }
+
   await page.getByRole("button", { name: "Estimate on other clouds", exact: true }).click();
   await page.getByRole("heading", { name: "Estimate on other clouds" }).waitFor();
   await page.locator("#crossCloudResults .cross-cloud-card").first().waitFor();
@@ -161,6 +173,7 @@ async function main() {
           "qa/networking.png",
           "qa/pricing.png",
           "qa/ramp.png",
+          "qa/full-bom.xlsx",
           "qa/other-clouds.png",
           "qa/architecture.png",
           "qa/mobile-landing.png",
