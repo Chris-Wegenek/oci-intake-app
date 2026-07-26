@@ -59,6 +59,7 @@ const state = {
     nextPointId: 1,
     selectedPointId: null,
     points: [],
+    restorePending: false,
   },
 };
 
@@ -2133,7 +2134,8 @@ async function applyWorkflowState(wf) {
     state.ramp.months = wf.ramp.months || state.ramp.months;
     state.ramp.ceiling = wf.ramp.ceiling || 0;
     state.ramp.points = Array.isArray(wf.ramp.points) ? wf.ramp.points : [];
-    state.ramp.signature = null; // force the ramp to honor the restored points
+    state.ramp.signature = null;
+    state.ramp.restorePending = state.ramp.points.length > 0;
   }
   // Reflect restored simple inputs back into their controls if present.
   if (els.bomName) els.bomName.value = state.bomName || "";
@@ -2711,19 +2713,40 @@ function initializeConsumptionRamp(pricing) {
   const shapeKey = pricing.selectedShape?.key || state.selectedShape;
   const signature = `${shapeKey}:${ceiling}:${pricing.rows.length}`;
   if (state.ramp.signature !== signature) {
+    const restoredCeiling = Number(state.ramp.ceiling || 0);
+    const restoredPoints = state.ramp.restorePending
+      ? (state.ramp.points || []).map((point) => ({ ...point }))
+      : [];
     state.ramp.signature = signature;
     state.ramp.ceiling = ceiling;
     state.ramp.nextPointId = 1;
-    // Seed 4 evenly-spaced ramp dots regardless of ramp length (e.g. 12-month
-    // ramp -> dots at months 3, 6, 9, 12 climbing to the BOM maximum).
-    const seedDots = 4;
-    const seedMonths = state.ramp.months || 12;
-    state.ramp.points = Array.from({ length: seedDots }, (_, i) =>
-      newRampPoint(
-        Math.max(1, Math.round((seedMonths * (i + 1)) / seedDots)),
-        ceiling * ((i + 1) / seedDots),
-      ),
-    );
+    if (restoredPoints.length) {
+      const ratio = restoredCeiling > 0 ? ceiling / restoredCeiling : 1;
+      state.ramp.points = restoredPoints.map((point) => ({
+        ...point,
+        month: Math.round(clamp(point.month, 1, state.ramp.months)),
+        monthly: clamp(Number(point.monthly || 0) * ratio, 0, ceiling),
+      }));
+      const maxId = state.ramp.points.reduce((max, point) => {
+        const match = String(point.id || "").match(/(\d+)$/);
+        return Math.max(max, match ? Number(match[1]) : 0);
+      }, 0);
+      state.ramp.nextPointId = maxId + 1;
+    } else {
+      // Start every new estimate in month 1 and grow continuously to the selected
+      // horizon. Clear the prior curve before creating points so repricing cannot clamp
+      // the new defaults against stale zero-value handles.
+      state.ramp.points = [];
+      const seedMonths = state.ramp.months || 12;
+      const seedDots = Math.min(4, seedMonths);
+      for (let i = 0; i < seedDots; i += 1) {
+        const month = seedDots === 1
+          ? 1
+          : Math.floor(1 + ((seedMonths - 1) * i) / (seedDots - 1));
+        state.ramp.points.push(newRampPoint(month, ceiling * (month / seedMonths)));
+      }
+    }
+    state.ramp.restorePending = false;
     state.ramp.selectedPointId = state.ramp.points.at(-1).id;
   } else {
     state.ramp.ceiling = ceiling;

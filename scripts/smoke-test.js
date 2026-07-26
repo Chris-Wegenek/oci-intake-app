@@ -75,6 +75,19 @@ async function main() {
   if (!/\$[\d,]+\.\d{2}/.test(pricingText)) {
     throw new Error("No formatted pricing total was visible after pricing.");
   }
+  const rampHandles = page.locator("#rampChart .ramp-handle");
+  if ((await rampHandles.count()) < 1) {
+    throw new Error("The consumption ramp rendered without adjustable points.");
+  }
+  await rampHandles.first().click();
+  const firstRampMonth = Number(await page.locator("#rampPeakMonth").inputValue());
+  const firstRampMonthly = Number(await page.locator("#rampPeakMonthly").inputValue());
+  if (firstRampMonth !== 1 || !(firstRampMonthly > 0)) {
+    throw new Error(
+      `Default ramp did not start in month 1: month=${firstRampMonth}, monthly=${firstRampMonthly}`,
+    );
+  }
+  await page.locator("#rampChart").screenshot({ path: path.join(QA_DIR, "ramp.png") });
 
   await page.getByRole("button", { name: "Estimate on other clouds", exact: true }).click();
   await page.getByRole("heading", { name: "Estimate on other clouds" }).waitFor();
@@ -147,6 +160,7 @@ async function main() {
           "qa/shape.png",
           "qa/networking.png",
           "qa/pricing.png",
+          "qa/ramp.png",
           "qa/other-clouds.png",
           "qa/architecture.png",
           "qa/mobile-landing.png",
