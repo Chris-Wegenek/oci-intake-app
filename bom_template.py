@@ -14,7 +14,8 @@ Compute sheet contract (from the template):
     A VM/Server  B Tier  C Environment  D Master Application  E Master Description
     F Virtual/Physical  G OS Name  H OS Family  I vCPU/Cores  J OCPU (formula)
     K Memory GB  L Storage GB  M Block VPUs (formula)  N Monthly Hours
-    O RAM $/mo  P OCPU $/mo  Q Block $/mo  R Total $/mo   (O..R formulas)
+    O RAM $/mo  P OCPU $/mo  Q Block $/mo  R Total $/mo  S Total $/year
+    T Source Shape  U OCI Shape
     Rate Card refs: C8=OCPU rate, C9=RAM rate, C10=block rate, C11=VPU rate,
     C12=default VPUs.  Compute!B9 = E6 optimization factor.
 """
@@ -118,8 +119,8 @@ COMPUTE_SHEET = "Compute"
 COMPUTE_HEADER_ROW = 13
 COMPUTE_FIRST_ROW = 14
 COMPUTE_LAST_TEMPLATE_ROW = 689          # rows the reference deliverable ships with
-COMPUTE_FORMULA_COLS = ["J", "M", "O", "P", "Q", "R"]
-COMPUTE_ALL_COLS = list("ABCDEFGHIJKLMNOPQR")
+COMPUTE_FORMULA_COLS = ["J", "M", "O", "P", "Q", "R", "S"]
+COMPUTE_ALL_COLS = list("ABCDEFGHIJKLMNOPQRSTU")
 
 APPS_SHEET = "Applications Migrated to OCI"
 APPS_FIRST_ROW = 6
@@ -362,13 +363,38 @@ def _postprocess(path, spec):
             parts.append(f'<color theme="{c["theme"]}"/>')
         return "<font>" + "".join(parts) + "</font>"
 
-    zero_rows = {}
-    for i, sd in enumerate(spec["sheets"], start=1):
-        zr = [r for r, d in sd.get("row_dimensions", {}).items() if d.get("height") == 0]
-        if zr:
-            zero_rows[f"xl/worksheets/sheet{i}.xml"] = zr
-
     tmp = str(path) + ".tmp"
+    with zipfile.ZipFile(path) as zin:
+        # New service tabs are inserted among the reference sheets, so worksheet XML
+        # numbers no longer match the original 12-sheet spec. Resolve each sheet by its
+        # workbook relationship instead of assuming sheet1/sheet2/... positional identity.
+        import xml.etree.ElementTree as ET
+        main_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        rel_attr = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        book_root = ET.fromstring(zin.read("xl/workbook.xml"))
+        rel_root = ET.fromstring(zin.read("xl/_rels/workbook.xml.rels"))
+        targets = {
+            rel.get("Id"): rel.get("Target")
+            for rel in rel_root.findall(f"{{{rel_ns}}}Relationship")
+        }
+        sheet_paths = {}
+        for sheet in book_root.findall(f".//{{{main_ns}}}sheet"):
+            target = targets.get(sheet.get(rel_attr), "")
+            if target.startswith("/"):
+                target = target.lstrip("/")
+            elif target and not target.startswith("xl/"):
+                target = f"xl/{target}"
+            sheet_paths[sheet.get("name")] = target
+
+        zero_rows = {}
+        for sd in spec["sheets"]:
+            zr = [r for r, d in sd.get("row_dimensions", {}).items()
+                  if d.get("height") == 0]
+            target = sheet_paths.get(sd["name"])
+            if zr and target:
+                zero_rows[target] = zr
+
     with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             data = zin.read(item.filename)
@@ -496,15 +522,16 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     # Block-VPU seed (column M) references the Rate Card default-VPUs cell.
     protos["M"] = (f"=IF($A{R}<>\"\",'Rate Card'!$C${vpus_ref},\"\")" if vpus_ref else '=""')
 
-    # Columns S/T show the shape mapping: what each server maps FROM (source) and TO (OCI).
+    # The Polaris template reserves S for Total Annual. T/U show what each server maps
+    # FROM (source) and TO (OCI) without overwriting that annual-cost formula.
     from copy import copy as _copy_style
     _hdr_style = ws.cell(13, 1)._style
-    ws.cell(13, 19).value = "Source Shape (Mapped From)"
-    ws.cell(13, 19)._style = _copy_style(_hdr_style)
-    ws.cell(13, 20).value = "OCI Shape (Mapped To)"
+    ws.cell(13, 20).value = "Source Shape (Mapped From)"
     ws.cell(13, 20)._style = _copy_style(_hdr_style)
-    ws.column_dimensions["S"].width = 24
-    ws.column_dimensions["T"].width = 22
+    ws.cell(13, 21).value = "OCI Shape (Mapped To)"
+    ws.cell(13, 21)._style = _copy_style(_hdr_style)
+    ws.column_dimensions["T"].width = 24
+    ws.column_dimensions["U"].width = 22
     # The O/P/R headers hard-coded "E6"; restate them for whatever shape is used.
     if shape_label:
         ws["O13"] = f"{shape_label} RAM Monthly"
@@ -531,10 +558,10 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
         ws[f"L{r}"] = s.get("storage_gb") or None
         # Per-row hours from the data source (falls back to the global hours).
         ws[f"N{r}"] = s.get("hours") or hours
-        ws[f"S{r}"] = s.get("source_shape") or None          # Mapped From (source)
-        ws[f"T{r}"] = s.get("shape") or shape_label or None   # Mapped To (OCI)
-        ws[f"S{r}"]._style = _copy_style(proto_styles["A"])
+        ws[f"T{r}"] = s.get("source_shape") or None          # Mapped From (source)
+        ws[f"U{r}"] = s.get("shape") or shape_label or None  # Mapped To (OCI)
         ws[f"T{r}"]._style = _copy_style(proto_styles["A"])
+        ws[f"U{r}"]._style = _copy_style(proto_styles["A"])
         for c in COMPUTE_FORMULA_COLS:
             proto = protos.get(c)
             if proto:
@@ -641,6 +668,26 @@ def _cloud_storage_rows(pricing):
             "gb": round(v["gb"], 2) or None,
             "rate": round(v["monthly"] / v["gb"], 6) if v["gb"] else None,
             "monthly": round(v["monthly"], 2),
+        })
+    return rows
+
+
+def _extra_storage_rows(extra_priced):
+    """Summarize added Storage-category services in the reference Storage table."""
+    rows = []
+    for service in extra_priced or []:
+        if _service_category(service.get("group"), service.get("name")) != "Storage":
+            continue
+        qty = float(service.get("qty") or 0)
+        unit = _norm(service.get("unit"))
+        gb = qty if "gb" in unit else None
+        rows.append({
+            "server": service.get("name"),
+            "signal": "Added in service catalog",
+            "target": service.get("name"),
+            "gb": round(gb, 2) if gb else None,
+            "rate": float(service.get("rate") or 0) or None,
+            "monthly": round(float(service.get("monthly") or 0), 2),
         })
     return rows
 
@@ -914,6 +961,16 @@ _TOC_DESC = {
                                      "Filter by application for VM counts, tier mix, and cost."),
     "Database": ("Database service mapping and pricing detail.",
                  "Review DB shapes, editions, and storage."),
+    "Integration": ("Integration service SKU mapping and pricing detail.",
+                    "Review OIC, API, event, and messaging services."),
+    "Observability": ("Observability and management service detail.",
+                      "Review logging, monitoring, and management usage."),
+    "AI and Machine Learning": ("AI and machine-learning service detail.",
+                                "Review GPU, AI, and model-service mappings."),
+    "Licensing": ("Third-party licensing SKU detail.",
+                  "Review license quantities and non-discountable cost."),
+    "Other Services": ("Additional OCI service mapping and pricing detail.",
+                       "Review services outside the core infrastructure tabs."),
     "Notes + Assumptions": ("Per-service mapping notes and assumptions.",
                             "Reference for how each source service was mapped."),
 }
@@ -1238,7 +1295,7 @@ def _add_extra_services(wb, extra_priced):
     Security -> B19, everything else -> B16), by appending its monthly cost to that line's
     formula. Those lines all sit inside the Total's SUM(B13:B21), so the workbook total
     picks the extras up automatically and still ties out. The added services are also
-    itemized on a dedicated sheet for traceability.
+    itemized on their matching service tabs for traceability.
 
     `extra_priced` is the authoritative list from oci_catalog.price_extras().
     """
@@ -1249,7 +1306,9 @@ def _add_extra_services(wb, extra_priced):
     sums = {}
     non_storage_into_16 = False
     for s in extra_priced:
-        row = oci_catalog.GROUP_TO_OVERVIEW_ROW.get(s["group"], 16)
+        category = _service_category(s.get("group"), s.get("name"), s.get("name"))
+        row = 20 if category == "DR" else oci_catalog.GROUP_TO_OVERVIEW_ROW.get(
+            s["group"], 16)
         sums[row] = sums.get(row, 0.0) + float(s["monthly"] or 0)
         if row == 16 and s["group"] not in ("Storage", "Database"):
             non_storage_into_16 = True
@@ -1266,54 +1325,288 @@ def _add_extra_services(wb, extra_priced):
     if 16 in sums and non_storage_into_16:
         ws["A16"] = "Storage / Other OCI Services:"
 
-    _itemize_extra_services(wb, extra_priced)
+_SERVICE_SHEETS = {
+    "Compute": "Compute",
+    "Storage": "Storage",
+    "Networking": "Networking",
+    "Database": "Database",
+    "Integration": "Integration",
+    "Security": "Security KMS",
+    "Observability": "Observability",
+    "AI & Machine Learning": "AI and Machine Learning",
+    "Licensing": "Licensing",
+    "Other Services": "Other Services",
+    "DR": "DR",
+}
 
 
-def _itemize_extra_services(wb, extra_priced):
-    """Write a dedicated 'Added OCI Services' sheet listing EVERY constituent SKU of each
-    app-added service (the estimator's 'Pricing Details'). Pure paper trail — the amounts
-    already flow to the Pricing Overview category lines via _add_extra_services, so nothing
-    here is summed into any total that feeds the BOM (no double-counting)."""
-    if not extra_priced:
+def _service_category(category, product="", source_service=""):
+    """Normalize app/catalog and cloud-bill group names to the service tabs used by the BOM."""
+    raw = _clean(category)
+    key = _norm(raw)
+    aliases = {
+        "compute": "Compute",
+        "storage": "Storage",
+        "networking": "Networking",
+        "database": "Database",
+        "integration": "Integration",
+        "devops": "Integration",
+        "security": "Security",
+        "observability": "Observability",
+        "obs management": "Observability",
+        "ai machine learning": "AI & Machine Learning",
+        "ai and machine learning": "AI & Machine Learning",
+        "licensing": "Licensing",
+        "other services": "Other Services",
+        "support": "Other Services",
+        "marketplace": "Other Services",
+    }
+    combined = _norm(f"{product} {source_service}")
+    if "full stack disaster recovery" in combined or "full stack dr" in combined:
+        return "DR"
+    return aliases.get(key, "Other Services")
+
+
+def _service_detail_lines(pricing, extra_priced):
+    """Return a full, per-SKU paper trail grouped by the app's service categories."""
+    import bom_export
+    grouped = {}
+
+    def add(category, line):
+        grouped.setdefault(category, []).append(line)
+
+    source_cloud = _clean((pricing or {}).get("sourceCloud")).upper()
+    for row in (pricing or {}).get("rows", []):
+        if (row.get("costAction") or "") == "remove":
+            continue
+        raw_cat = row.get("ociServiceCategory")
+        if not raw_cat:
+            raw_cat = bom_export._cloud_product_group(
+                raw_cat, row.get("sourceService"), row.get("ociProduct"))
+        category = _service_category(
+            raw_cat, row.get("ociProduct"), row.get("sourceService"))
+        # VM compute already has a complete row-level contract on the Compute sheet.
+        if category == "Compute" and (row.get("specs") or {}).get("ocpus"):
+            continue
+        items = row.get("lineItems") or [{
+            "sku": (row.get("fullServiceMapping") or {}).get("sku"),
+            "description": row.get("ociProduct"),
+            "quantity": 1,
+            "unit": "month",
+            "rate": row.get("monthly"),
+            "monthly": row.get("monthly"),
+        }]
+        for i, item in enumerate(items):
+            source = _clean(row.get("sourceService")) or "uploaded inventory"
+            mapping = _clean(item.get("mapping"))
+            note = f"Mapped from {source_cloud + ' ' if source_cloud else ''}{source}."
+            if mapping:
+                note += f" {mapping}"
+            add(category, {
+                "component": _clean(row.get("ociProduct")) if i == 0 else "",
+                "sku": _clean(item.get("sku")),
+                "unit": _clean(item.get("unit")) or "usage",
+                "rate": float(item.get("rate") or 0),
+                "qty": item.get("quantity"),
+                "hours": item.get("hours"),
+                "monthly": float(item.get("monthly") or 0),
+                "notes": note,
+            })
+
+    for service in extra_priced or []:
+        category = _service_category(
+            service.get("group"), service.get("name"), service.get("name"))
+        skus = service.get("skus") or [{
+            "sku": service.get("sku"), "desc": service.get("name"),
+            "qty": service.get("qty"), "rate": service.get("rate"),
+            "hours": service.get("hours"), "monthly": service.get("monthly"),
+        }]
+        for i, item in enumerate(skus):
+            note = "Added in the Networking and Other Services step."
+            sizing = _clean(service.get("sizing"))
+            if sizing:
+                note += f" {sizing}"
+            add(category, {
+                "component": _clean(service.get("name")) if i == 0 else _clean(item.get("desc")),
+                "sku": _clean(item.get("sku")),
+                "unit": _clean(service.get("unit")) or _clean(service.get("basis")),
+                "rate": float(item.get("rate") or 0),
+                "qty": item.get("qty"),
+                "hours": item.get("hours"),
+                "monthly": float(item.get("monthly") or 0),
+                "notes": note,
+            })
+    return grouped
+
+
+def _add_spec_sheet_images(ws, spec, source_sheet):
+    """Copy the Polaris banner image onto a generated service sheet."""
+    source = next((s for s in spec.get("sheets", []) if s.get("name") == source_sheet), None)
+    if not source:
         return
-    name = "Added OCI Services"
-    ws = wb[name] if name in wb.sheetnames else wb.create_sheet(name)
-    for col, w in (("A", 30), ("B", 14), ("C", 42), ("D", 12), ("E", 16),
-                   ("F", 14), ("G", 16), ("H", 20)):
-        ws.column_dimensions[col].width = w
-    ws["A1"] = "Added OCI Services — full SKU breakdown"
-    ws["A1"].font = Font(name="Calibri", size=14, bold=True)
-    headers = ["Service", "SKU", "SKU Description", "Unit Rate", "Qty / Input",
-               "Hours / Month", "Est. Monthly", "Category"]
-    hdr_fill = PatternFill("solid", fgColor="FF4472C4")
-    for j, h in enumerate(headers, start=1):
-        c = ws.cell(3, j, h)
-        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFFFF")
-        c.fill = hdr_fill
-    # One row per constituent SKU so every service's full SKU list is documented.
-    r = 4
-    first = r
-    for s in extra_priced:
-        skus = s.get("skus") or [{"sku": s.get("sku"), "desc": s.get("name"),
-                                  "qty": s.get("qty"), "rate": s.get("rate"),
-                                  "hours": s.get("hours"), "monthly": s.get("monthly")}]
-        for k, sk in enumerate(skus):
-            ac = ws.cell(r, 1, s["name"] if k == 0 else "  ↳")
-            if k == 0:
-                ac.font = Font(name="Calibri", size=11, bold=True)
-            ws.cell(r, 2, sk.get("sku"))
-            ws.cell(r, 3, sk.get("desc"))
-            rc = ws.cell(r, 4, round(float(sk.get("rate") or 0), 4)); rc.number_format = "#,##0.0000"
-            ws.cell(r, 5, sk.get("qty"))
-            hrs = sk.get("hours")
-            ws.cell(r, 6, hrs if isinstance(hrs, (int, float)) and hrs else None)
-            mc = ws.cell(r, 7, round(float(sk.get("monthly") or 0), 2)); mc.number_format = "#,##0.00"
-            ws.cell(r, 8, s.get("group"))
-            r += 1
-    tc = ws.cell(r, 1, "Total Added OCI Services"); tc.font = Font(name="Calibri", size=12, bold=True)
-    tot = ws.cell(r, 7, f"=SUM(G{first}:G{r - 1})")
-    tot.number_format = "#,##0.00"; tot.font = Font(name="Calibri", size=12, bold=True)
-    ws.freeze_panes = "A4"
+    for im in source.get("images", []):
+        data = base64.b64decode(spec["images"][im["image_ref"]]["base64"])
+        img = XLImage(io.BytesIO(data))
+        anchor = im["anchor"]
+        fr = anchor["from"]
+        m1 = AnchorMarker(
+            col=fr["col"], colOff=fr["colOff"], row=fr["row"], rowOff=fr["rowOff"])
+        if anchor["type"] == "TwoCellAnchor" and "to" in anchor:
+            to = anchor["to"]
+            m2 = AnchorMarker(
+                col=to["col"], colOff=to["colOff"], row=to["row"], rowOff=to["rowOff"])
+            img.anchor = TwoCellAnchor(_from=m1, to=m2)
+        else:
+            ext = anchor.get("ext_emu")
+            img.anchor = OneCellAnchor(
+                _from=m1,
+                ext=XDRPositiveSize2D(cx=ext["cx"], cy=ext["cy"]) if ext else None)
+        ws.add_image(img)
+
+
+def _service_style_prototype(wb):
+    """Capture the reference Networking styles before that sheet is repopulated."""
+    from copy import copy
+    src = wb["Networking"]
+    return {
+        "header": [copy(src.cell(10, c)._style) for c in range(1, 9)],
+        "odd": [copy(src.cell(11, c)._style) for c in range(1, 9)],
+        "even": [copy(src.cell(12, c)._style) for c in range(1, 9)],
+        "summary": {coord: copy(src[coord]._style)
+                    for coord in ("A4", "A5", "B5", "C5", "D5", "F4", "F5", "A6", "A9")},
+    }
+
+
+def _write_service_region(ws, sheet_name, lines, styles, start_row=10, replace=False):
+    """Populate one template-styled service detail table without feeding BOM totals twice."""
+    from copy import copy
+    end_clear = max(120, start_row + len(lines) + 4)
+    if replace:
+        for r in range(4, end_clear + 1):
+            for c in range(1, 10):
+                cell = ws.cell(r, c)
+                if not isinstance(cell, MergedCell):
+                    cell.value = None
+        ws["A1"] = sheet_name
+        ws["A2"] = sheet_name
+        ws["A4"] = f"{sheet_name} BOM Summary"
+        ws["A4"]._style = copy(styles["summary"]["A4"])
+        ws["A5"] = "Mapped Monthly"
+        ws["A5"]._style = copy(styles["summary"]["A5"])
+        ws["C5"] = "Mapped Annual"
+        ws["C5"]._style = copy(styles["summary"]["C5"])
+        ws["F4"] = "Mapping Notes / Assumptions"
+        ws["F4"]._style = copy(styles["summary"]["F4"])
+        ws["F5"] = (
+            "These rows are the complete per-SKU mapping from the app. They are a detail "
+            "view only; Pricing Overview remains the workbook total."
+        )
+        ws["F5"]._style = copy(styles["summary"]["F5"])
+        ws["A6"] = (
+            "Every populated service, source mapping, unit rate, quantity, and monthly "
+            "amount is carried from the estimator output."
+        )
+        ws["A6"]._style = copy(styles["summary"]["A6"])
+        ws["A9"] = "Service pricing rows below reconcile to the mapped monthly summary."
+        ws["A9"]._style = copy(styles["summary"]["A9"])
+        header_row = start_row
+    else:
+        for r in range(start_row, end_clear + 1):
+            for c in range(1, 9):
+                cell = ws.cell(r, c)
+                if not isinstance(cell, MergedCell):
+                    cell.value = None
+        ws.cell(start_row, 1).value = f"{sheet_name} - mapped service detail"
+        ws.cell(start_row, 1)._style = copy(styles["summary"]["A4"])
+        header_row = start_row + 1
+
+    headers = ["Component", "SKU", "Unit", "Unit Rate", "Qty / Input",
+               "Hours / Volume", "Est. Monthly", "Source Mapping / Notes"]
+    for c, value in enumerate(headers, start=1):
+        cell = ws.cell(header_row, c, value)
+        cell._style = copy(styles["header"][c - 1])
+
+    first = header_row + 1
+    for i, line in enumerate(lines):
+        r = first + i
+        row_styles = styles["odd"] if i % 2 == 0 else styles["even"]
+        values = [
+            line.get("component"), line.get("sku"), line.get("unit"),
+            round(float(line.get("rate") or 0), 6), line.get("qty"),
+            line.get("hours"), round(float(line.get("monthly") or 0), 2),
+            line.get("notes"),
+        ]
+        for c, value in enumerate(values, start=1):
+            cell = ws.cell(r, c, value)
+            cell._style = copy(row_styles[c - 1])
+        ws.cell(r, 4).number_format = "#,##0.000000"
+        ws.cell(r, 7).number_format = "#,##0.00"
+        ws.row_dimensions[r].hidden = False
+
+    total_row = first + len(lines)
+    for c in range(1, 9):
+        ws.cell(total_row, c)._style = copy(styles["header"][c - 1])
+    ws.cell(total_row, 1).value = f"Total {sheet_name}"
+    ws.cell(total_row, 7).value = (
+        f"=SUM(G{first}:G{total_row - 1})" if lines else 0)
+    ws.cell(total_row, 7).number_format = "#,##0.00"
+    ws.row_dimensions[header_row].hidden = False
+    ws.row_dimensions[total_row].hidden = False
+    if replace:
+        ws["B5"] = f"=G{total_row}"
+        ws["B5"]._style = copy(styles["summary"]["B5"])
+        ws["D5"] = "=B5*12"
+        ws["D5"]._style = copy(styles["summary"]["D5"])
+        ws.freeze_panes = f"A{first}"
+        for r in range(total_row + 1, end_clear + 1):
+            ws.row_dimensions[r].hidden = True
+    ws.sheet_state = "visible"
+    return total_row
+
+
+def _write_service_tabs(wb, pricing, extra_priced, spec, compute_last, storage_count):
+    """Map every non-VM service into the matching Polaris-styled workbook tab."""
+    grouped = _service_detail_lines(pricing, extra_priced)
+    if not grouped:
+        return
+    styles = _service_style_prototype(wb)
+    source = wb["Networking"]
+
+    # Create missing category tabs from the reference Networking layout before that
+    # source sheet is repopulated. copy_worksheet preserves its cells/styles/merges;
+    # images are copied explicitly from the build spec.
+    for category in grouped:
+        name = _SERVICE_SHEETS[category]
+        if name in wb.sheetnames:
+            continue
+        ws = wb.copy_worksheet(source)
+        ws.title = name
+        _add_spec_sheet_images(ws, spec, "Networking")
+
+    for category, lines in grouped.items():
+        name = _SERVICE_SHEETS[category]
+        ws = wb[name]
+        if name in ("Networking", "Security KMS") or name not in {
+                "Compute", "Storage", "DR"}:
+            _write_service_region(ws, name, lines, styles, start_row=10, replace=True)
+        elif name == "Compute":
+            _write_service_region(
+                ws, name, lines, styles, start_row=max(compute_last + 3, 20), replace=False)
+        elif name == "Storage":
+            _write_service_region(
+                ws, name, lines, styles,
+                start_row=max(STORAGE_FIRST_ROW + storage_count + 2, 24), replace=False)
+        elif name == "DR":
+            _write_service_region(ws, name, lines, styles, start_row=46, replace=False)
+
+    # Keep service tabs together and in the same order as the app's service selector.
+    after = "Compute"
+    for name in ("Storage", "Networking", "Database", "Integration", "Security KMS",
+                 "Observability", "AI and Machine Learning", "Licensing",
+                 "Other Services", "DR"):
+        if name in wb.sheetnames:
+            _place_after(wb, name, after)
+            after = name
 
 
 def _repoint_ramp_refs(ws_po, months, include_windows=False):
@@ -1608,7 +1901,8 @@ def _hide_empty_sheets(wb, apps, storage_rows):
         dr = wb["DR"]
         included = any(str(dr.cell(r, 2).value).strip().lower() == "yes"
                        for r in list(range(12, 16)) + list(range(19, 23)) + list(range(26, 30)))
-        if not included:
+        has_service_detail = _sheet_has_values(dr, range(48, 140), range(1, 9))
+        if not included and not has_service_detail:
             hide("DR")
     if "Annexure Addendum to Storage" in wb.sheetnames:
         if wb["Annexure Addendum to Storage"]["D6"].value in (None, "", 0):
@@ -1937,6 +2231,11 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     # Overview by _add_cloud_bill_services, so there's no double count.
     if cloud_comparison:
         storage_rows = _cloud_storage_rows(cloud_comparison.get("pricing") or pricing)
+    _extra_priced = None
+    if extra_services:
+        import oci_catalog
+        _extra_priced, _ = oci_catalog.price_extras(extra_services, hours)
+        storage_rows.extend(_extra_storage_rows(_extra_priced))
     windows_monthly = sum(float(r.get("windowsLicenseMonthly") or 0)
                           for r in (pricing or {}).get("rows", []))
     # Build the Rate Card FIRST — from only the SKUs/rates used in this build, sorted
@@ -1948,7 +2247,8 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         windows_sku, windows_monthly > 0, servers, storage_rows, pricing,
         extra_services, is_cloud_bill)
     rate_refs = _write_rate_card(wb["Rate Card"], rate_entries)
-    _populate_compute(wb[COMPUTE_SHEET], servers, hours, rate_refs, shape_label)
+    _compute_last = _populate_compute(
+        wb[COMPUTE_SHEET], servers, hours, rate_refs, shape_label)
     _populate_apps(wb[APPS_SHEET], apps)
     _populate_storage(wb[STORAGE_SHEET], storage_rows, rate_refs, file_rate)
     _set_toc(wb["Table of Contents"], bom_name)
@@ -1969,18 +2269,16 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     _add_licensing_line(wb["Pricing Overview"], windows_monthly)
     # App-added OCI services roll into the matching Pricing Overview lines (which sit inside
     # the total) and are itemized on the Networking sheet.
-    _extra_priced = None
-    if extra_services:
-        import oci_catalog
-        _extra_priced, _ = oci_catalog.price_extras(extra_services, hours)
+    if _extra_priced:
         _add_extra_services(wb, _extra_priced)
     # Cloud-bill mode: roll the non-compute mapped services into the Pricing Overview lines
     # so the template total covers the whole bill, not just compute.
     if cloud_comparison:
         _add_cloud_bill_services(wb, cloud_comparison.get("pricing") or pricing)
-        # Summarize all 11 product-group topics on the Pricing Overview and add a detail
-        # sheet for each group that has cost and lacks a dedicated sheet.
-        _add_product_group_topics(wb, cloud_comparison.get("pricing") or pricing)
+    _service_pricing = (
+        cloud_comparison.get("pricing") if cloud_comparison else pricing) or pricing
+    _write_service_tabs(
+        wb, _service_pricing, _extra_priced, spec, _compute_last, len(storage_rows))
     # Cloud-bill mode shifts the Pricing Overview baseline up by 4 rows (relayout below) and
     # exposes an editable OCI discount at $B$7; feed both to the ramp so its lines point at the
     # right cells and tie to Total Monthly. On-prem keeps the template layout (no shift/discount).

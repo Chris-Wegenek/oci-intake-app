@@ -17,8 +17,6 @@ const state = {
   hideGpuPricing: false,
   hideWindowsPricing: false,
   hideSqlPricing: false,
-  rightsize: false,
-  auto: false,
   cpuUnit: "auto",
   hoursPerMonth: 730,
   // True once the user edits the hours field — then it overrides any per-row hours from
@@ -37,7 +35,6 @@ const state = {
     enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
   },
   catalog: { groups: [], results: [], group: "", query: "", groupsOpen: {} },
-  autoTier: "best",
   shapeOverrides: {},
   costOverrides: {},
   approvedFlags: {},
@@ -183,9 +180,11 @@ const els = {
   intakePage: document.querySelector("#intakePage"),
   pricingRail: document.querySelector("#pricingRail"),
   shapePage: document.querySelector("#shapePage"),
+  networkingPage: document.querySelector("#networkingPage"),
   architecturePage: document.querySelector("#architecturePage"),
   reviewPanel: document.querySelector("#reviewPanel"),
   resultsPage: document.querySelector("#resultsPage"),
+  otherCloudsPage: document.querySelector("#otherCloudsPage"),
   reviewTable: document.querySelector("#reviewTable"),
   sheetMeta: document.querySelector("#sheetMeta"),
   rowCount: document.querySelector("#rowCount"),
@@ -207,7 +206,6 @@ const els = {
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
   hideWindowsToggle: document.querySelector("#hideWindowsToggle"),
   hideSqlToggle: document.querySelector("#hideSqlToggle"),
-  rightsizeSwitches: document.querySelectorAll(".rightsize-switch"),
   cpuUnitSwitches: document.querySelectorAll(".cpuunit-switch"),
   cpuUnitDetected: document.getElementById("cpuUnitDetected"),
   cpuUnitRow: document.getElementById("cpuUnitRow"),
@@ -227,7 +225,6 @@ const els = {
   ociDiscount: document.querySelector("#ociDiscount"),
   oicMessagePacks: document.querySelector("#oicMessagePacks"),
   oicMessagePacksControl: document.querySelector("#oicMessagePacksControl"),
-  crossCloudTile: document.querySelector("#crossCloudTile"),
   addServicesToggle: document.querySelector("#addServicesToggle"),
   addServicesBody: document.querySelector("#addServicesBody"),
   serviceSearch: document.querySelector("#serviceSearch"),
@@ -243,10 +240,20 @@ const els = {
   selectedDocClear: document.querySelector("#selectedDocClear"),
   inventoryNotice: document.querySelector("#inventoryNotice"),
   switchToOnPrem: document.querySelector("#switchToOnPrem"),
+  backToUploadFromReview: document.querySelector("#backToUploadFromReview"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
-  backToShapeFromArchitecture: document.querySelector("#backToShapeFromArchitecture"),
-  continueToPrice: document.querySelector("#continueToPrice"),
+  backToShapeFromNetworking: document.querySelector("#backToShapeFromNetworking"),
+  continueToPriceFromServices: document.querySelector("#continueToPriceFromServices"),
+  backToCompareFromArchitecture: document.querySelector("#backToCompareFromArchitecture"),
+  backToServicesFromPrice: document.querySelector("#backToServicesFromPrice"),
+  continueToOtherClouds: document.querySelector("#continueToOtherClouds"),
+  backToPriceFromOtherClouds: document.querySelector("#backToPriceFromOtherClouds"),
+  continueToArchitectureFromOtherClouds: document.querySelector("#continueToArchitectureFromOtherClouds"),
+  networkingPageStatus: document.querySelector("#networkingPageStatus"),
+  pricePageStatus: document.querySelector("#pricePageStatus"),
+  networkingShape: document.querySelector("#networkingShape"),
   architectureShape: document.querySelector("#architectureShape"),
+  otherCloudsShape: document.querySelector("#otherCloudsShape"),
   architectureExportStatus: document.querySelector("#architectureExportStatus"),
   processorPicker: document.querySelector("#processorPicker"),
   shapeDropdown: document.querySelector("#shapeDropdown"),
@@ -537,6 +544,28 @@ function setStep(step) {
   });
 }
 
+function setPricePageStatus(message = "", tone = "") {
+  if (!els.pricePageStatus) return;
+  els.pricePageStatus.textContent = message;
+  els.pricePageStatus.hidden = !message;
+  if (tone) {
+    els.pricePageStatus.dataset.tone = tone;
+  } else {
+    delete els.pricePageStatus.dataset.tone;
+  }
+}
+
+function setNetworkingPageStatus(message = "", tone = "") {
+  if (!els.networkingPageStatus) return;
+  els.networkingPageStatus.textContent = message;
+  els.networkingPageStatus.hidden = !message;
+  if (tone) {
+    els.networkingPageStatus.dataset.tone = tone;
+  } else {
+    delete els.networkingPageStatus.dataset.tone;
+  }
+}
+
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -780,7 +809,7 @@ function pricingActionLabel(action = "price") {
 
 function syncApiUi() {
   if (els.priceShapeButton && !els.priceShapeButton.disabled) {
-    els.priceShapeButton.textContent = "Continue to architecture";
+    els.priceShapeButton.textContent = "Continue to services";
   }
   if (els.rerunPricing && !els.rerunPricing.disabled) {
     els.rerunPricing.textContent = pricingActionLabel("rerun");
@@ -799,7 +828,7 @@ function processorLogo(key) {
   if (key === "amd") return `<span class="processor-logo amd-logo"><span>AMD</span><i aria-hidden="true"></i></span>`;
   if (key === "intel") return `<span class="processor-logo intel-logo"><span>intel</span></span>`;
   if (key === "arm") return `<span class="processor-logo arm-logo"><span>Ampere</span></span>`;
-  return `<span class="processor-logo match-logo"><span>Best&nbsp;Match</span></span>`;
+  return "";
 }
 
 function renderProcessorPicker() {
@@ -807,7 +836,7 @@ function renderProcessorPicker() {
   const vendorTiles = PROCESSOR_VENDORS.map((vendor) => {
     const shapeCount = shapesForVendor(vendor.key).length;
     const countLabel = `${formatNumber(shapeCount)} ${shapeCount === 1 ? "shape" : "shapes"}`;
-    const isSelected = !state.auto && vendor.key === state.selectedVendor;
+    const isSelected = vendor.key === state.selectedVendor;
     return `
       <button
         class="processor-button ${isSelected ? "is-selected" : ""}"
@@ -822,49 +851,13 @@ function renderProcessorPicker() {
     `;
   }).join("");
 
-  const matchTile = `
-    <button
-      class="processor-button processor-match ${state.auto ? "is-selected" : ""}"
-      type="button"
-      data-processor-match="1"
-      title="Map each workload to the best OCI shape for its own CPU vendor and generation."
-    >
-      ${processorLogo("match")}
-      <em>auto per workload</em>
-    </button>
-  `;
-
-  const tierToggle = state.auto
-    ? `<div class="match-tier-toggle">
-         <span class="match-tier-label">Best Match maps to</span>
-         <div class="mode-switch match-tier-switch" role="group" aria-label="Best Match shape generation">
-           <button type="button" class="mode-opt ${state.autoTier === "top" ? "" : "is-active"}" data-auto-tier="best" title="Map each workload to the OCI shape of the equivalent processor generation to its source.">Equivalent generation</button>
-           <button type="button" class="mode-opt ${state.autoTier === "top" ? "is-active" : ""}" data-auto-tier="top" title="Map every workload to OCI's newest shape (E6 Ax / X12 Ax / A4 Ax).">Top of the line</button>
-         </div>
-       </div>`
-    : "";
-
-  els.processorPicker.innerHTML = vendorTiles + matchTile + tierToggle;
-
-  els.processorPicker.querySelectorAll("[data-auto-tier]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.autoTier = button.dataset.autoTier === "top" ? "top" : "best";
-      renderProcessorPicker();
-    });
-  });
+  els.processorPicker.innerHTML = vendorTiles;
 
   els.processorPicker.querySelectorAll("[data-processor-vendor]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.auto = false;
       setProcessorVendor(button.dataset.processorVendor);
-      applyAutoUI();
       renderProcessorPicker();
     });
-  });
-  els.processorPicker.querySelector("[data-processor-match]")?.addEventListener("click", () => {
-    state.auto = true;
-    applyAutoUI();
-    renderProcessorPicker();
   });
 }
 
@@ -1149,8 +1142,6 @@ function renderShapeDetail() {
       </table>
     `;
   }
-  // Enable/disable Rightsize based on whether the selected shape supports it.
-  if (typeof syncRightsizeAvailability === "function") syncRightsizeAvailability();
 }
 
 function renderStats(meta = {}) {
@@ -1800,6 +1791,9 @@ async function applyTableEdit() {
 }
 
 async function priceRows({ keepView = false, destination = "price" } = {}) {
+  if (destination === "price" && !keepView) {
+    setPricePageStatus("Preparing your OCI estimate...");
+  }
   // Non-fading floating spinner so in-place edits (e.g. removing a large
   // selection from the BOM) show progress without blanking the screen.
   if (els.priceSpinner) els.priceSpinner.hidden = false;
@@ -1808,7 +1802,7 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
   els.priceButton.disabled = true;
   els.priceButton.textContent = "Pricing...";
   els.priceShapeButton.disabled = true;
-  els.priceShapeButton.textContent = destination === "architecture" ? "Preparing architecture..." : "Pricing...";
+  els.priceShapeButton.textContent = destination === "networking" ? "Preparing services..." : "Pricing...";
   if (els.rerunPricing) { els.rerunPricing.disabled = true; els.rerunPricing.textContent = "Pricing..."; }
   els.engineStatus.textContent = isCloudBillMode()
     ? `Mapping cloud bill lines to OCI equivalents for ${selectedShape().label}`
@@ -1830,10 +1824,7 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
           hideGpuPricing: state.hideGpuPricing,
           hideWindowsPricing: state.hideWindowsPricing,
         hideSqlPricing: state.hideSqlPricing,
-          rightsize: state.rightsize,
           cpuUnit: state.cpuUnit,
-          auto: state.auto,
-          autoTier: state.autoTier,
           shapeOverrides: state.shapeOverrides,
           costOverrides: state.costOverrides,
           hoursPerMonth: state.hoursPerMonth,
@@ -1850,24 +1841,37 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
     updateCpuUnitHint();
     renderPricing(payload);
     renderResults(payload);
+    setPricePageStatus();
     // When re-pricing in place (e.g. editing a shape dropdown), don't jump the page.
     if (keepView) {
       const y = window.scrollY;
       requestAnimationFrame(() => window.scrollTo({ top: y }));
+    } else if (destination === "networking") {
+      showNetworkingPage();
     } else if (destination === "architecture") {
       showArchitecturePage();
     } else {
       showResultsPage();
     }
+    return payload;
   } catch (error) {
     els.engineStatus.textContent = "Pricing error";
     els.pricingSummary.className = "empty-state";
     els.pricingSummary.textContent = error.message;
+    if (destination === "price") {
+      setPricePageStatus(`Pricing could not be completed: ${error.message}`, "error");
+    } else if (destination === "networking") {
+      showNetworkingPage();
+      setNetworkingPageStatus(`Pricing could not be completed: ${error.message}`, "error");
+    } else if (destination === "architecture") {
+      setArchitectureExportStatus(`Pricing could not be completed: ${error.message}`, "error");
+    }
+    return null;
   } finally {
     els.priceButton.disabled = false;
     els.priceButton.textContent = "Continue to shape";
     els.priceShapeButton.disabled = false;
-    els.priceShapeButton.textContent = "Continue to architecture";
+    els.priceShapeButton.textContent = "Continue to services";
     if (els.rerunPricing) { els.rerunPricing.disabled = false; els.rerunPricing.textContent = pricingActionLabel("rerun"); }
     if (els.priceSpinner) els.priceSpinner.hidden = true;
   }
@@ -1943,10 +1947,7 @@ async function exportToExcel(template = "quick") {
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
         hideSqlPricing: state.hideSqlPricing,
-        rightsize: state.rightsize,
         cpuUnit: state.cpuUnit,
-        auto: state.auto,
-        autoTier: state.autoTier,
         shapeOverrides: state.shapeOverrides,
         costOverrides: state.costOverrides,
         hoursPerMonth: state.hoursPerMonth,
@@ -2055,10 +2056,7 @@ function collectWorkflowState() {
     fullServiceBeta: state.fullServiceBeta,
     hideGpuPricing: state.hideGpuPricing,
     hideWindowsPricing: state.hideWindowsPricing,
-    rightsize: state.rightsize,
     cpuUnit: state.cpuUnit,
-    auto: state.auto,
-    autoTier: state.autoTier,
     hoursPerMonth: state.hoursPerMonth,
     bomName: state.bomName,
     ociDiscount: state.ociDiscount,
@@ -2124,7 +2122,7 @@ async function applyWorkflowState(wf) {
   if (!wf || !wf.rows) throw new Error("That file has no saved workflow data.");
   const assign = [
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
-    "hideWindowsPricing", "hideSqlPricing", "rightsize", "auto", "autoTier", "hoursPerMonth", "hoursOverride",
+    "hideWindowsPricing", "hideSqlPricing", "hoursPerMonth", "hoursOverride",
     "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
     "crossCloudTopTier", "extraServices", "diagramOptions", "fields", "rows",
     "shapeOverrides", "costOverrides",
@@ -2269,7 +2267,7 @@ function renderPricing(pricing) {
           ? `<div class="kpi"><span>Mapped services</span><strong>${formatNumber(pricing.totals.mappedServiceRows)}</strong></div>
              <div class="kpi"><span>Review rows</span><strong>${formatNumber(pricing.totals.unpricedServiceRows)}</strong></div>`
           : `<div class="kpi"><span>OCPUs</span><strong>${formatNumber(pricing.totals.ocpus)}</strong></div>
-             <div class="kpi"><span>Shape</span><strong>${pricing.auto ? "Best Match" : escapeHtml(shape.shortLabel || shape.label)}</strong></div>`
+             <div class="kpi"><span>Shape</span><strong>${escapeHtml(shape.shortLabel || shape.label)}</strong></div>`
       }
     </div>
     <table class="result-table">
@@ -2284,8 +2282,10 @@ function renderPricing(pricing) {
 function showIntakePage() {
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
   syncIntakeLayout();
   if (state.rows.length) {
     els.uploadPanel.classList.add("is-hidden");
@@ -2301,8 +2301,10 @@ function showIntakePage() {
 function showUploadPage() {
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
   els.uploadPanel.classList.remove("is-hidden");
   els.reviewPanel.classList.add("is-hidden");
   syncIntakeLayout();
@@ -2314,8 +2316,10 @@ function showReviewPage() {
   ensureReviewRows();
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
   els.uploadPanel.classList.add("is-hidden");
   els.reviewPanel.classList.remove("is-hidden");
   renderTable();
@@ -2331,8 +2335,10 @@ function showShapePage() {
   }
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.remove("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
   renderProcessorPicker();
   renderShapeChoices();
   renderShapeDetail();
@@ -2340,16 +2346,54 @@ function showShapePage() {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function showNetworkingPage() {
+  els.intakePage.classList.add("is-hidden");
+  els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.remove("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
+  els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
+  if (els.networkingShape) {
+    const shape = selectedShape();
+    els.networkingShape.textContent = shape.shortLabel || shape.label;
+  }
+  if (state.pricing) {
+    setNetworkingPageStatus();
+  } else if (state.rows.length) {
+    setNetworkingPageStatus("Continue from Shape to prepare workload pricing. Services added here will be retained.");
+  } else {
+    setNetworkingPageStatus("Upload inventory before building the complete estimate.");
+  }
+  renderServiceCart();
+  if (!(state.catalog?.groups?.length || state.catalog?.results?.length)) {
+    fetchCatalog();
+  }
+  setStep("networking");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function showArchitecturePage() {
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.remove("is-hidden");
   els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
   if (els.architectureShape) {
     const shape = selectedShape();
-    els.architectureShape.textContent = state.auto ? "Best Match" : (shape.shortLabel || shape.label);
+    els.architectureShape.textContent = shape.shortLabel || shape.label;
   }
-  if (state.pricing) {
+  const diagramUnavailable = state.pricing?.diagramAvailable === false;
+  if (els.downloadDiagram) {
+    els.downloadDiagram.disabled = !state.pricing || diagramUnavailable;
+  }
+  if (diagramUnavailable) {
+    setArchitectureExportStatus(
+      state.pricing.diagramUnavailableReason ||
+        "This converted BOM does not contain workload-level sizing for an architecture diagram.",
+      "error",
+    );
+  } else if (state.pricing) {
     setArchitectureExportStatus("Ready to generate.");
   } else if (state.rows.length) {
     setArchitectureExportStatus("Choose a shape and prepare pricing before exporting.");
@@ -2363,23 +2407,59 @@ function showArchitecturePage() {
 function showResultsPage() {
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
   els.resultsPage.classList.remove("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
   setStep("price");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function showOtherCloudsPage() {
+  els.intakePage.classList.add("is-hidden");
+  els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
+  els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.remove("is-hidden");
+  if (els.otherCloudsShape) {
+    const shape = selectedShape();
+    els.otherCloudsShape.textContent = shape.shortLabel || shape.label;
+  }
+  renderCrossCloud();
+  setStep("other-clouds");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function openPriceStep() {
   if (state.pricing) {
+    setPricePageStatus();
     showResultsPage();
     return;
   }
   if (state.rows.length) {
+    showResultsPage();
     priceRows({ destination: "price" });
     return;
   }
   showUploadPage();
   els.uploadStatus.textContent = "Upload inventory before viewing price.";
+  els.uploadStatus.style.color = "var(--danger)";
+}
+
+async function openOtherCloudsStep() {
+  if (state.pricing) {
+    showOtherCloudsPage();
+    return;
+  }
+  if (state.rows.length) {
+    showResultsPage();
+    const pricing = await priceRows({ destination: "price" });
+    if (pricing) showOtherCloudsPage();
+    return;
+  }
+  showUploadPage();
+  els.uploadStatus.textContent = "Upload inventory before estimating other clouds.";
   els.uploadStatus.style.color = "var(--danger)";
 }
 
@@ -2396,12 +2476,20 @@ function navigateStep(step) {
     showShapePage();
     return;
   }
+  if (step === "networking") {
+    showNetworkingPage();
+    return;
+  }
   if (step === "architecture") {
     showArchitecturePage();
     return;
   }
   if (step === "price") {
     openPriceStep();
+    return;
+  }
+  if (step === "other-clouds") {
+    openOtherCloudsStep();
   }
 }
 
@@ -2902,7 +2990,7 @@ function renderResults(pricing) {
   const serviceRows = pricing.totals.mappedServiceRows || 0;
   const reviewRows = pricing.totals.unpricedServiceRows || 0;
 
-  els.resultsShape.textContent = pricing.auto ? "Best Match" : (shape.label || "Selected shape");
+  els.resultsShape.textContent = shape.label || "Selected shape";
   els.resultsSubtitle.textContent = cloudBill
     ? `${pricing.rows.length} source bill lines reviewed; ${serviceRows} mapped to OCI-equivalent products and ${reviewRows} need review before they affect totals.`
     : pricing.fullServiceBeta
@@ -2952,10 +3040,8 @@ function renderResults(pricing) {
     })}
     ${resultKpiCard({
       label: "Flex shape",
-      value: pricing.auto ? "Best Match" : (shape.shortLabel || shape.label),
-      meta: pricing.auto
-        ? "Each workload mapped to its best OCI shape"
-        : `$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr`,
+      value: shape.shortLabel || shape.label,
+      meta: `$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr`,
       accent: shape.accent || "#164f68",
       fill: 62,
     })}
@@ -3043,7 +3129,7 @@ function renderResults(pricing) {
   // Detail table defaults to the document's VM order (not cost-sorted).
   renderResultsTable(pricing.rows.slice(), pricing.fullServiceBeta, cloudBill);
   // Refresh the other-cloud tile if it's currently expanded.
-  if (els.crossCloudResults && !els.crossCloudResults.hidden) renderCrossCloud();
+  if (els.otherCloudsPage && !els.otherCloudsPage.classList.contains("is-hidden")) renderCrossCloud();
 }
 
 function renderCostMix(skuCosts, total) {
@@ -3528,13 +3614,6 @@ function sizeFlagBadge(row) {
   } else if (check.status === "baremetal") {
     badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">BARE METAL</span>`);
   }
-  if (row.rightsized) {
-    const fromBits = [];
-    if (row.originalOcpus) fromBits.push(`${formatNumber(row.originalOcpus)} OCPU`);
-    if (row.originalMemoryGb) fromBits.push(`${formatNumber(row.originalMemoryGb)} GB`);
-    const from = fromBits.length ? ` (from ${fromBits.join(" / ")})` : "";
-    badges.push(` <span class="size-flag size-flag-rightsized" title="OCPU &amp; RAM trimmed for newer-generation efficiency${escapeHtml(from)}">RIGHTSIZED</span>`);
-  }
   if (Array.isArray(row.lineItems) && row.lineItems.some((li) => li && li.isGpu)) {
     badges.push(` <span class="size-flag size-flag-gpu" title="Mapped to an OCI GPU shape">GPU</span>`);
   }
@@ -3944,10 +4023,10 @@ function onPriceShapeClick() {
     applyBulkVmShape(state.selectedShape);
     renderPricing(state.pricing);
     renderResults(state.pricing);
-    showArchitecturePage();
+    showNetworkingPage();
     return;
   }
-  priceRows({ destination: "architecture" });
+  priceRows({ destination: "networking" });
 }
 els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing?.addEventListener("click", priceRows);
@@ -3960,43 +4039,6 @@ els.hideSqlToggle?.addEventListener("change", (event) => {
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
 });
-// Compute optimization (Rightsize) is only meaningful on the Ax shapes and the regular E6
-// — those are the only shapes with a defined OCPU/RAM reduction. For anything else it would
-// do nothing, so the control is disabled rather than silently no-op.
-function rightsizeEligible() {
-  const key = String((selectedShape() || {}).key || "");
-  return key.endsWith("-ax") || key === "e6-standard";
-}
-function syncRightsizeAvailability() {
-  const ok = rightsizeEligible();
-  document.querySelectorAll(".rightsize-switch").forEach((sw) => {
-    sw.classList.toggle("is-disabled", !ok);
-    sw.querySelectorAll("[data-rightsize]").forEach((b) => {
-      b.disabled = !ok;
-    });
-    sw.title = ok
-      ? sw.dataset.titleOn || sw.title
-      : "Rightsize is only available for the Ax shapes and the regular E6 — those are the shapes with a defined OCPU/RAM optimization. Select an Ax or E6 shape to enable it.";
-  });
-  // Force back to 1-to-1 if the current shape can't be rightsized.
-  if (!ok && state.rightsize) setRightsizeMode(false);
-}
-function setRightsizeMode(value) {
-  // Guard: never turn rightsize on for an ineligible shape.
-  if (value && !rightsizeEligible()) value = false;
-  state.rightsize = value;
-  document.querySelectorAll(".rightsize-switch .mode-opt").forEach((b) => {
-    b.classList.toggle("is-active", (b.dataset.rightsize === "true") === value);
-  });
-}
-els.rightsizeSwitches?.forEach((sw) => {
-  sw.addEventListener("click", (event) => {
-    const opt = event.target.closest("[data-rightsize]");
-    if (!opt || opt.disabled) return;
-    setRightsizeMode(opt.dataset.rightsize === "true");
-  });
-});
-
 function setCpuUnit(value) {
   const v = ["auto", "vcpu", "ocpu"].includes(value) ? value : "auto";
   state.cpuUnit = v;
@@ -4063,10 +4105,6 @@ els.oicMessagePacks?.addEventListener("change", (event) => {
   // so the app view + export reflect the new Oracle Integration Cloud line.
   if (state.pricing) priceRows({ keepView: true });
 });
-function applyAutoUI() {
-  // Grey out only the shape grid/detail (keep the processor picker clickable so you can switch back).
-  if (els.shapeDropdown) els.shapeDropdown.classList.toggle("shape-auto-disabled", state.auto);
-}
 els.exportExcel?.addEventListener("click", () => exportToExcel("quick"));
 els.exportFullBom?.addEventListener("click", () => exportToExcel("full"));
 
@@ -4082,6 +4120,14 @@ async function downloadDiagram() {
   if (!state.pricing) {
     els.engineStatus.textContent = "Run \"Reprice estimate\" first, then download the diagram.";
     setArchitectureExportStatus("Choose a shape and prepare the estimate first.", "error");
+    return;
+  }
+  if (state.pricing.diagramAvailable === false) {
+    setArchitectureExportStatus(
+      state.pricing.diagramUnavailableReason ||
+        "This converted BOM does not contain workload-level sizing for an architecture diagram.",
+      "error",
+    );
     return;
   }
   const btn = els.downloadDiagram;
@@ -4103,10 +4149,7 @@ async function downloadDiagram() {
         hideGpuPricing: state.hideGpuPricing,
         hideWindowsPricing: state.hideWindowsPricing,
         hideSqlPricing: state.hideSqlPricing,
-        rightsize: state.rightsize,
         cpuUnit: state.cpuUnit,
-        auto: state.auto,
-        autoTier: state.autoTier,
         shapeOverrides: state.shapeOverrides,
         costOverrides: state.costOverrides,
         hoursPerMonth: state.hoursPerMonth,
@@ -4115,6 +4158,7 @@ async function downloadDiagram() {
         extraServices: state.extraServices || [],
         diagramOptions: state.diagramOptions || {},
         bomName: state.bomName || "",
+        convertedPricing: state.pricing?.converted ? state.pricing : null,
       }),
     });
     if (!res.ok) {
@@ -4199,8 +4243,8 @@ async function convertBomFromFile(file) {
     const payload = await resp.json();
     if (!resp.ok) throw new Error(payload.error || "Could not convert this BOM.");
     // Load the converted pricing live into the app and jump to results (page 4).
-    state.intakeMode = "on_prem";
-    state.fullServiceBeta = true;
+    state.intakeMode = payload.intakeMode || "on_prem";
+    state.fullServiceBeta = payload.fullServiceBeta !== false;
     state.fields = [];
     state.rows = payload.rows || [];
     if (Array.isArray(payload.rateCards)) state.rateCards = payload.rateCards;
@@ -4215,7 +4259,10 @@ async function convertBomFromFile(file) {
     showShapePage();
     const rec = payload.recognizedSkus || 0;
     const rev = payload.unrecognizedSkus || 0;
-    setConvertStatus(nm, `converted — ${payload.rows.length} line items, ${rec} SKUs recognized${rev ? `, ${rev} for review` : ""}. Choose a shape →`, "ok");
+    const status = payload.comparisonSummary
+      ? `imported comparison summary — ${payload.rows.length} service lines. Choose a shape →`
+      : `converted — ${payload.rows.length} line items, ${rec} SKUs recognized${rev ? `, ${rev} for review` : ""}. Choose a shape →`;
+    setConvertStatus(nm, status, "ok");
   } catch (error) {
     setConvertStatus(nm, error.message || "conversion failed", "error");
   } finally {
@@ -4267,6 +4314,23 @@ function renderCrossCloud() {
     (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
   const ociMonthly = ociEffectiveMonthly(state.pricing) + extraServicesEffective() + _ccWindows;
   if (!raw) {
+    if (state.pricing?.converted) {
+      wrap.innerHTML = `
+        <div class="cross-cloud-grid">
+          <div class="cross-cloud-card cross-cloud-oci">
+            <span class="cross-cloud-card-name">Oracle Cloud (converted BOM)</span>
+            <span class="cross-cloud-card-monthly">${formatCurrency(ociMonthly)}<small>/mo</small></span>
+            <span class="cross-cloud-card-annual">${formatCurrency(ociMonthly * 12)}/yr</span>
+          </div>
+          <div class="cross-cloud-card cross-cloud-muted">
+            <span class="cross-cloud-card-name">Other-cloud estimates unavailable</span>
+            <span class="cross-cloud-card-note">Upload the original raw AWS or Azure bill in Cloud Bill mode to calculate equivalent-cloud pricing.</span>
+          </div>
+        </div>
+        <p class="cross-cloud-note">A converted OCI BOM contains OCI line-item pricing, but not the source-cloud usage details required for a defensible AWS or Azure comparison.</p>
+      `;
+      return;
+    }
     wrap.innerHTML = `<p class="cross-cloud-empty">Run a pricing estimate first to compare other clouds.</p>`;
     return;
   }
@@ -4296,6 +4360,7 @@ function renderCrossCloud() {
   const tier = state.crossCloudTopTier;
   const basisLabel = (v) => {
     if (v.basis === "actual bill") return sourceCostIsEstimated() ? "App Estimate — from usage (bill had no pricing)" : "your actual billed cost";
+    if (v.basis === "imported comparison total") return "imported comparison total";
     if (v.basis === "what-if: bill re-shaped on newest-gen") return "what-if: your bill re-shaped on newest-gen";
     if (v.basis && v.basis.startsWith("compute + services re-priced")) return v.basis;
     if (v.carriedRows) return `compute estimated · ${v.carriedRows} services at billed cost`;
@@ -4338,7 +4403,9 @@ function renderCrossCloud() {
   }
   const srcCloud = raw.sourceCloud;
   const srcName = srcCloud === "azure" ? "Azure" : "AWS";
-  const note = raw.cloudBillMode
+  const note = raw.importedComparison
+    ? `Imported from the finished ${srcName}-to-OCI comparison workbook. These are the source-cloud and OCI totals recorded in that file; another cloud cannot be estimated without the original raw usage export.`
+    : raw.cloudBillMode
     ? (tier
         ? `Top-of-the-line (what-if): every cloud — including your ${srcName} bill — is re-estimated on that cloud's newest-generation equivalent shape, so you can see what the same workloads would cost re-shaped. Non-compute services (storage, data transfer, managed services) stay at their actual billed cost. For directional comparison only — not a quote.`
         : `Best match: your ${srcName} total is your actual billed cost — no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services at their billed cost. Switch to Top of the line to re-estimate your bill on newest-generation shapes. For directional comparison only — not a quote.`)
@@ -4361,19 +4428,16 @@ function renderCrossCloud() {
   });
 }
 
-els.crossCloudTile?.addEventListener("click", () => {
-  const wrap = els.crossCloudResults;
-  if (!wrap) return;
-  const willShow = wrap.hidden;
-  if (willShow) renderCrossCloud();
-  wrap.hidden = !willShow;
-  els.crossCloudTile.setAttribute("aria-expanded", String(willShow));
-  els.crossCloudTile.classList.toggle("is-open", willShow);
-});
 els.backToReview?.addEventListener("click", showIntakePage);
+els.backToUploadFromReview?.addEventListener("click", showUploadPage);
 els.backToReviewFromShape.addEventListener("click", showIntakePage);
-els.backToShapeFromArchitecture?.addEventListener("click", showShapePage);
-els.continueToPrice?.addEventListener("click", openPriceStep);
+els.backToShapeFromNetworking?.addEventListener("click", showShapePage);
+els.continueToPriceFromServices?.addEventListener("click", openPriceStep);
+els.backToCompareFromArchitecture?.addEventListener("click", showOtherCloudsPage);
+els.backToServicesFromPrice?.addEventListener("click", showNetworkingPage);
+els.continueToOtherClouds?.addEventListener("click", openOtherCloudsStep);
+els.backToPriceFromOtherClouds?.addEventListener("click", showResultsPage);
+els.continueToArchitectureFromOtherClouds?.addEventListener("click", showArchitecturePage);
 els.steps.forEach((step) => {
   step.addEventListener("click", () => navigateStep(step.dataset.step));
 });

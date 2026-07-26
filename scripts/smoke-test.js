@@ -23,7 +23,10 @@ async function main() {
 
   const navigationCheck = await browser.newPage({ viewport: { width: 1024, height: 768 } });
   await navigationCheck.goto(APP_URL, { waitUntil: "domcontentloaded" });
-  await navigationCheck.locator('[data-step="architecture"]').click();
+  await navigationCheck.getByRole("button", { name: "Step 4: Services" }).click();
+  await navigationCheck.getByRole("heading", { name: "OCI services" }).waitFor();
+  await navigationCheck.getByText("Upload inventory before building the complete estimate.", { exact: true }).waitFor();
+  await navigationCheck.getByRole("button", { name: "Step 7: Architecture" }).click();
   await navigationCheck.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor();
   await navigationCheck.getByText("Upload inventory before generating a diagram.", { exact: true }).waitFor();
   await navigationCheck.locator('[data-step="price"]').click();
@@ -32,6 +35,11 @@ async function main() {
   await navigationCheck.getByText("Adjust your table", { exact: true }).waitFor({ timeout: UPLOAD_TIMEOUT_MS });
   await navigationCheck.locator('[data-step="price"]').click();
   await navigationCheck.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await navigationCheck.getByRole("button", { name: "Step 6: Compare" }).click();
+  await navigationCheck.getByRole("heading", { name: "Estimate on other clouds" }).waitFor();
+  await navigationCheck.locator("#crossCloudResults .cross-cloud-card").first().waitFor();
+  await navigationCheck.getByRole("button", { name: "Back to price" }).click();
+  await navigationCheck.getByText("OCI cost breakdown", { exact: true }).waitFor();
   await navigationCheck.close();
 
   await page.setInputFiles("#fileInput", SAMPLE);
@@ -51,6 +59,27 @@ async function main() {
   await page.locator("#shapeGrid button").first().waitFor({ timeout: 20000 });
   await page.screenshot({ path: path.join(QA_DIR, "shape.png"), fullPage: false });
 
+  await page.getByRole("button", { name: "Continue to services" }).click();
+  await page.getByRole("heading", { name: "OCI services" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await page.locator("#serviceResults .service-group-head").first().waitFor({ timeout: 20000 });
+  await page.screenshot({ path: path.join(QA_DIR, "networking.png"), fullPage: false });
+  await page.getByRole("button", { name: "Continue to price" }).click();
+  await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await page.locator("#resultsShape").waitFor({ timeout: 20000 });
+  await page.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
+  await page.locator("#resultsKpis").getByText("Specs identified", { exact: true }).waitFor({ timeout: 20000 });
+  await page.screenshot({ path: path.join(QA_DIR, "pricing.png"), fullPage: false });
+
+  const pricingText = await page.locator("#resultsPage").textContent();
+  if (!/\$[\d,]+\.\d{2}/.test(pricingText)) {
+    throw new Error("No formatted pricing total was visible after pricing.");
+  }
+
+  await page.getByRole("button", { name: "Estimate on other clouds", exact: true }).click();
+  await page.getByRole("heading", { name: "Estimate on other clouds" }).waitFor();
+  await page.locator("#crossCloudResults .cross-cloud-card").first().waitFor();
+  await page.screenshot({ path: path.join(QA_DIR, "other-clouds.png"), fullPage: false });
   await page.getByRole("button", { name: "Continue to architecture" }).click();
   await page.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await page.getByRole("heading", { name: "Export the diagram" }).waitFor({ timeout: 20000 });
@@ -71,19 +100,8 @@ async function main() {
     throw new Error(`Unexpected architecture download: ${downloadedArchitecture.suggestedFilename()}`);
   }
   await page.getByText(/Downloaded .*_architecture\.zip/).waitFor({ timeout: 20000 });
-
-  await page.getByRole("button", { name: "View price" }).click();
-  await page.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
-  await page.locator("#resultsShape").waitFor({ timeout: 20000 });
-  await page.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
-  await page.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
-  await page.locator("#resultsKpis").getByText("Specs identified", { exact: true }).waitFor({ timeout: 20000 });
-  await page.screenshot({ path: path.join(QA_DIR, "pricing.png"), fullPage: false });
-
-  const pricingText = await page.locator("#resultsPage").textContent();
-  if (!/\$[\d,]+\.\d{2}/.test(pricingText)) {
-    throw new Error("No formatted pricing total was visible after pricing.");
-  }
+  await page.getByRole("button", { name: "Back to compare" }).click();
+  await page.getByRole("heading", { name: "Estimate on other clouds" }).waitFor();
 
   const mobile = await browser.newPage({
     viewport: { width: 390, height: 844 },
@@ -96,16 +114,24 @@ async function main() {
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-review.png"), fullPage: false });
   await mobile.getByRole("button", { name: "Continue to shape" }).click();
   await mobile.getByText("Choose the OCI shape for this estimate", { exact: true }).waitFor({ timeout: 20000 });
-  await mobile.getByRole("button", { name: "Continue to architecture" }).click();
-  await mobile.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
-  await mobile.getByRole("button", { name: "Download architecture ZIP" }).waitFor({ timeout: 20000 });
-  await mobile.screenshot({ path: path.join(QA_DIR, "mobile-architecture.png"), fullPage: false });
-  await mobile.getByRole("button", { name: "View price" }).click();
+  await mobile.getByRole("button", { name: "Continue to services" }).click();
+  await mobile.getByRole("heading", { name: "OCI services" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await mobile.locator("#serviceResults .service-group-head").first().waitFor({ timeout: 20000 });
+  await mobile.screenshot({ path: path.join(QA_DIR, "mobile-networking.png"), fullPage: false });
+  await mobile.getByRole("button", { name: "Continue to price" }).click();
   await mobile.getByText("OCI cost breakdown", { exact: true }).waitFor({ timeout: PRICING_TIMEOUT_MS });
   await mobile.locator("#resultsPage").getByText("Total Contract Value", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.locator("#resultsKpis").getByText("Pricing summary", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.locator("#resultsKpis").getByText("Specs identified", { exact: true }).waitFor({ timeout: 20000 });
   await mobile.screenshot({ path: path.join(QA_DIR, "mobile-pricing.png"), fullPage: false });
+  await mobile.getByRole("button", { name: "Step 6: Compare" }).click();
+  await mobile.getByRole("heading", { name: "Estimate on other clouds" }).waitFor();
+  await mobile.locator("#crossCloudResults .cross-cloud-card").first().waitFor();
+  await mobile.screenshot({ path: path.join(QA_DIR, "mobile-other-clouds.png"), fullPage: false });
+  await mobile.getByRole("button", { name: "Continue to architecture" }).click();
+  await mobile.getByRole("heading", { name: "Configure the OCI architecture" }).waitFor({ timeout: PRICING_TIMEOUT_MS });
+  await mobile.getByRole("button", { name: "Download architecture ZIP" }).waitFor({ timeout: 20000 });
+  await mobile.screenshot({ path: path.join(QA_DIR, "mobile-architecture.png"), fullPage: false });
 
   await browser.close();
   console.log(
@@ -119,12 +145,16 @@ async function main() {
           "qa/landing.png",
           "qa/review.png",
           "qa/shape.png",
-          "qa/architecture.png",
+          "qa/networking.png",
           "qa/pricing.png",
+          "qa/other-clouds.png",
+          "qa/architecture.png",
           "qa/mobile-landing.png",
           "qa/mobile-review.png",
-          "qa/mobile-architecture.png",
+          "qa/mobile-networking.png",
           "qa/mobile-pricing.png",
+          "qa/mobile-other-clouds.png",
+          "qa/mobile-architecture.png",
         ],
       },
       null,

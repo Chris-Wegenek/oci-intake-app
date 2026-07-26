@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OCI Intake</title>
+    <title>Oracle Cloud Infrastructure BOM + Architecture Generator</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="app-header">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
+        <img class="brand-mark" src="/static/assets/oracle-o.png" alt="" aria-hidden="true" />
         <div>
-          <h1>Oracle Cloud Infrastructure Intake</h1>
+          <h1>Oracle Cloud Infrastructure BOM + Architecture Generator</h1>
           <p>Spreadsheet review, SKU mapping, and OCI estimates</p>
         </div>
       </div>
@@ -20,11 +20,19 @@
         <button class="step is-active" type="button" data-step="upload" aria-current="step">1 Upload</button>
         <button class="step" type="button" data-step="review">2 Review</button>
         <button class="step" type="button" data-step="shape">3 Shape</button>
-        <button class="step" type="button" data-step="architecture" aria-label="Step 4: Architecture">
-          <span class="step-architecture-full">4 Architecture</span>
-          <span class="step-architecture-short" aria-hidden="true">4 Arch</span>
+        <button class="step" type="button" data-step="networking" aria-label="Step 4: Services">
+          <span class="step-networking-full">4 Services</span>
+          <span class="step-networking-short" aria-hidden="true">4 Services</span>
         </button>
         <button class="step" type="button" data-step="price">5 Price</button>
+        <button class="step" type="button" data-step="other-clouds" aria-label="Step 6: Compare">
+          <span class="step-clouds-full">6 Compare</span>
+          <span class="step-clouds-short" aria-hidden="true">6 Compare</span>
+        </button>
+        <button class="step" type="button" data-step="architecture" aria-label="Step 7: Architecture">
+          <span class="step-architecture-full">7 Architecture</span>
+          <span class="step-architecture-short" aria-hidden="true">7 Arch</span>
+        </button>
       </nav>
     </header>
 
@@ -135,7 +143,6 @@
                   <small id="missingOnlySummary">Show rows with blanks</small>
                 </span>
               </label>
-              <button id="priceButton" class="primary-button" type="button">Continue to shape</button>
             </div>
           </div>
 
@@ -202,6 +209,11 @@
             </div>
             <p id="tableEditStatus" class="table-assistant-status" role="status" aria-live="polite"></p>
           </div>
+
+          <div class="workflow-page-footer">
+            <button id="backToUploadFromReview" class="ghost-button" type="button">Back to upload</button>
+            <button id="priceButton" class="primary-button" type="button">Continue to shape</button>
+          </div>
         </div>
       </section>
 
@@ -240,26 +252,15 @@
               <span>Remove SQL Server licensing</span>
             </label>
           </div>
-          <div class="shape-action-buttons">
-            <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
-            <button id="priceShapeButton" class="primary-button" type="button">Continue to architecture</button>
-          </div>
         </div>
       </section>
 
       <section class="processor-section" aria-label="Processor platform">
         <div class="processor-section-copy">
           <span>Processor family</span>
-          <p>Choose a processor logo to reveal the matching OCI shapes and rate card, or "Match processor type" to map each workload to the best shape for its own vendor.</p>
+          <p>Choose a processor family to reveal its matching OCI shapes and rate card.</p>
         </div>
         <div id="processorPicker" class="processor-picker" aria-label="Choose processor family"></div>
-        <div class="sizing-mode-row">
-          <span class="sizing-mode-label">Sizing</span>
-          <div class="mode-switch rightsize-switch" role="group" aria-label="Sizing mode" title="1 to 1 carries source CPU/memory as-is. Rightsize trims OCPU &amp; RAM for the efficiency gain of newer OCI generations — Ax shapes -15% OCPU / -20% RAM per generation behind, regular E6 -10% / -15% (rounded down) — to cut cost.">
-            <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
-            <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
-          </div>
-        </div>
       </section>
 
       <section id="shapeDropdown" class="shape-dropdown" aria-live="polite">
@@ -281,6 +282,66 @@
           </div>
         </section>
       </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
+        <button id="priceShapeButton" class="primary-button" type="button">Continue to services</button>
+      </div>
+    </main>
+
+    <main id="networkingPage" class="networking-page is-hidden">
+      <section class="networking-hero">
+        <div>
+          <p class="page-kicker">Complete the BOM</p>
+          <h2>OCI services</h2>
+          <span id="networkingShape" class="shape-result-pill">E6 Standard Ax</span>
+          <p>Add Storage, Networking, Database, Integration, Security, Observability, Licensing, and Other Services before generating the architecture.</p>
+        </div>
+      </section>
+
+      <p id="networkingPageStatus" class="price-page-status" role="status" aria-live="polite" hidden></p>
+
+      <section class="add-services-section" aria-label="Add OCI services">
+        <button type="button" id="addServicesToggle" class="add-services-toggle is-open" aria-expanded="true" aria-controls="addServicesBody">
+          <span class="add-services-toggle-icon" aria-hidden="true">－</span>
+          <span class="add-services-toggle-text">
+            <strong>Add OCI services to the BOM</strong>
+            <span>Search Storage, Networking, Database, Integration, Security, Observability, Licensing, and more.</span>
+          </span>
+          <span class="add-services-caret" aria-hidden="true">▾</span>
+        </button>
+
+        <div id="addServicesBody" class="add-services-body">
+          <div class="add-services-search-row">
+            <input id="serviceSearch" type="search" placeholder="Search services, e.g. load balancer, object storage, WAF, Autonomous…" autocomplete="off" aria-label="Search OCI services" />
+          </div>
+          <div id="serviceChips" class="service-chips" role="group" aria-label="Service categories"></div>
+
+          <div class="add-services-columns">
+            <div class="service-results-col">
+              <div id="serviceResults" class="service-results" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <aside class="service-cart" aria-label="Added services">
+            <div class="service-cart-head">
+              <h4>Added services</h4>
+              <span id="serviceCartCount" class="service-cart-count">0</span>
+            </div>
+            <div id="serviceCartList" class="service-cart-list"></div>
+            <div class="service-cart-foot">
+              <span>Added monthly</span>
+              <strong id="serviceCartTotal">$0.00</strong>
+            </div>
+            <p class="service-cart-note">Added services are included in Price and in both BOM exports. Networking, Security, DR, and Storage lines land on the matching Pricing Overview row.</p>
+          </aside>
+        </div>
+      </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToShapeFromNetworking" class="ghost-button" type="button">Back to shape</button>
+        <button id="continueToPriceFromServices" class="primary-button" type="button">Continue to price</button>
+      </div>
     </main>
 
     <main id="architecturePage" class="architecture-page is-hidden">
@@ -290,10 +351,6 @@
           <h2>Configure the OCI architecture</h2>
           <span id="architectureShape" class="shape-result-pill">E6 Standard Ax</span>
           <p>Set the deployment regions, availability-domain layout, and disaster recovery plan for this estimate.</p>
-        </div>
-        <div class="architecture-actions">
-          <button id="backToShapeFromArchitecture" class="ghost-button" type="button">Back to shape</button>
-          <button id="continueToPrice" class="primary-button" type="button">View price</button>
         </div>
       </section>
 
@@ -440,6 +497,10 @@
           <p id="architectureExportStatus" class="architecture-export-status" role="status" aria-live="polite">Ready to generate.</p>
         </aside>
       </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToCompareFromArchitecture" class="ghost-button" type="button">Back to compare</button>
+      </div>
     </main>
 
     <main id="resultsPage" class="results-page is-hidden">
@@ -468,19 +529,9 @@
         </div>
       </section>
 
-      <section id="resultsKpis" class="results-kpis" aria-label="Cost summary"></section>
+      <p id="pricePageStatus" class="price-page-status" role="status" aria-live="polite" hidden></p>
 
-      <section class="cross-cloud-section" aria-label="Other cloud estimate">
-        <button type="button" id="crossCloudTile" class="cross-cloud-tile" aria-expanded="false" aria-controls="crossCloudResults">
-          <span class="cross-cloud-tile-icon">☁</span>
-          <span class="cross-cloud-tile-text">
-            <strong>Estimate on other clouds</strong>
-            <span>Click to compare approximate AWS &amp; Azure on-demand cost for these workloads</span>
-          </span>
-          <span class="cross-cloud-tile-caret" aria-hidden="true">▾</span>
-        </button>
-        <div id="crossCloudResults" class="cross-cloud-results" hidden></div>
-      </section>
+      <section id="resultsKpis" class="results-kpis" aria-label="Cost summary"></section>
 
       <section class="insight-panel ramp-panel" aria-labelledby="rampHeading">
         <div class="panel-heading ramp-heading">
@@ -493,6 +544,7 @@
               <button type="button" class="mode-opt is-active" data-ramp-months="12">12 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="24">24 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="36">36 mo</button>
+              <button type="button" class="mode-opt" data-ramp-months="48">48 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="60">60 mo</button>
             </div>
             <span id="rampCeilingLabel">BOM maximum</span>
@@ -579,42 +631,6 @@
         </article>
       </section>
 
-      <section class="add-services-section" aria-label="Add OCI services">
-        <button type="button" id="addServicesToggle" class="add-services-toggle" aria-expanded="false" aria-controls="addServicesBody">
-          <span class="add-services-toggle-icon" aria-hidden="true">＋</span>
-          <span class="add-services-toggle-text">
-            <strong>Add OCI services to the BOM</strong>
-            <span>Search Networking, Storage, Database, PaaS and more — size each one and add it to your estimate and export.</span>
-          </span>
-          <span class="add-services-caret" aria-hidden="true">▾</span>
-        </button>
-
-        <div id="addServicesBody" class="add-services-body" hidden>
-          <div class="add-services-search-row">
-            <input id="serviceSearch" type="search" placeholder="Search services, e.g. load balancer, object storage, WAF, Autonomous…" autocomplete="off" aria-label="Search OCI services" />
-          </div>
-          <div id="serviceChips" class="service-chips" role="group" aria-label="Service categories"></div>
-
-          <div class="add-services-columns">
-            <div class="service-results-col">
-              <div id="serviceResults" class="service-results" aria-live="polite"></div>
-            </div>
-            <aside class="service-cart" aria-label="Added services">
-              <div class="service-cart-head">
-                <h4>Added services</h4>
-                <span id="serviceCartCount" class="service-cart-count">0</span>
-              </div>
-              <div id="serviceCartList" class="service-cart-list"></div>
-              <div class="service-cart-foot">
-                <span>Added monthly</span>
-                <strong id="serviceCartTotal">$0.00</strong>
-              </div>
-              <p class="service-cart-note">Added services are included in the totals above and in both BOM exports. Networking / Security / DR / Storage lines land on the matching Pricing Overview row.</p>
-            </aside>
-          </div>
-        </div>
-      </section>
-
       <section class="insight-panel result-detail-panel">
         <div class="panel-heading">
           <div class="detail-heading-left">
@@ -623,7 +639,6 @@
           <span id="resultRowCount">0 workloads</span>
         </div>
         <div class="sizing-legend" aria-label="Status key">
-          <span class="legend-item"><span class="size-flag size-flag-rightsized">RIGHTSIZED</span> OCPU &amp; RAM trimmed for newer-generation efficiency</span>
           <span class="legend-item"><span class="size-flag size-flag-baremetal">BARE METAL</span> too big for flex</span>
           <span class="legend-item"><span class="size-flag size-flag-impossible">IMPOSSIBLE</span> exceeds largest OCI shape</span>
           <span class="legend-item"><span class="size-flag size-flag-gpu">GPU</span> mapped to OCI GPU shape</span>
@@ -666,6 +681,31 @@
           </div>
         </div>
       </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToServicesFromPrice" class="ghost-button" type="button">Back to services</button>
+        <button id="continueToOtherClouds" class="primary-button" type="button">Estimate on other clouds</button>
+      </div>
+    </main>
+
+    <main id="otherCloudsPage" class="other-clouds-page is-hidden">
+      <section class="other-clouds-hero">
+        <div>
+          <p class="page-kicker">Cross-cloud comparison</p>
+          <h2>Estimate on other clouds</h2>
+          <span id="otherCloudsShape" class="shape-result-pill">E6 Standard Ax</span>
+          <p>Compare this OCI estimate with directional AWS and Azure on-demand estimates for the same workloads.</p>
+        </div>
+      </section>
+
+      <section class="other-clouds-comparison" aria-label="Other cloud estimate">
+        <div id="crossCloudResults" class="cross-cloud-results"></div>
+      </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToPriceFromOtherClouds" class="ghost-button" type="button">Back to price</button>
+        <button id="continueToArchitectureFromOtherClouds" class="primary-button" type="button">Continue to architecture</button>
+      </div>
     </main>
 
     <div id="exportOverlay" class="export-overlay" hidden role="status" aria-live="polite">

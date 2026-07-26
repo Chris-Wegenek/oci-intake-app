@@ -1904,6 +1904,7 @@ def rule_based_row_has_inventory_signal(row, fields):
 _COMPARISON_BOM_SHEET_SIGNATURES = (
     "product breakdown", "service mapping", "facts figures", "service comp list",
     "product groupings", "ax compute mapping", "obs management",
+    "comparison", "standard pricing", "ax shapes", "expansion commit",
 )
 
 
@@ -9015,11 +9016,16 @@ class IntakeHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
             fields = payload.get("fields", [])
             rows = payload.get("rows", [])
+            converted_pricing = payload.get("convertedPricing")
+            is_converted = (
+                isinstance(converted_pricing, dict)
+                and bool(converted_pricing.get("converted"))
+            )
             shape_key = payload.get("shape") or DEFAULT_SHAPE_KEY
             intake_mode = normalize_intake_mode(payload.get("intakeMode"))
             if shape_key not in SHAPE_LOOKUP:
                 shape_key = DEFAULT_SHAPE_KEY
-            if not fields or not rows:
+            if not rows or (not is_converted and not fields):
                 self.send_error_json(400, "Diagram needs fields and rows.")
                 return
             full_service_beta = bool(payload.get("fullServiceBeta")) or intake_mode == INTAKE_MODE_CLOUD_BILL
@@ -9038,16 +9044,19 @@ class IntakeHandler(BaseHTTPRequestHandler):
             extra_services = payload.get("extraServices") if isinstance(payload.get("extraServices"), list) else []
             diagram_options = payload.get("diagramOptions") if isinstance(payload.get("diagramOptions"), dict) else {}
 
-            pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, False,
-                                        bool(payload.get("hideGpuPricing")), bool(payload.get("hideWindowsPricing")),
-                                        rightsize, auto, hours_per_month, source_provider, auto_tier,
-                                        shape_overrides, cost_overrides, cpu_unit,
-                                        hours_override=bool(payload.get("hoursOverride")),
-                                        oic_message_packs=to_number(payload.get("oicMessagePacks"), 0) or None,
-                                        hide_sql_pricing=hide_sql_pricing)
+            if is_converted:
+                pricing = converted_pricing
+            else:
+                pricing = calculate_pricing(fields, rows, shape_key, full_service_beta, intake_mode, False,
+                                            bool(payload.get("hideGpuPricing")), bool(payload.get("hideWindowsPricing")),
+                                            rightsize, auto, hours_per_month, source_provider, auto_tier,
+                                            shape_overrides, cost_overrides, cpu_unit,
+                                            hours_override=bool(payload.get("hoursOverride")),
+                                            oic_message_packs=to_number(payload.get("oicMessagePacks"), 0) or None,
+                                            hide_sql_pricing=hide_sql_pricing)
 
             import bom_diagram, bom_template, tempfile, zipfile, io
-            keys = bom_template._resolve_inventory_keys(fields)
+            keys = bom_template._resolve_inventory_keys(fields) if fields else {}
             shp = shape_payload(shape_key)
             out_dir = tempfile.mkdtemp(prefix="ocidiag_")
             extra_priced = None
@@ -9058,7 +9067,8 @@ class IntakeHandler(BaseHTTPRequestHandler):
             drawio, png = bom_diagram.build_architecture(
                 pricing, rows, keys, bom_name,
                 shp.get("shortLabel") or shp.get("label") or "",
-                out_dir=out_dir, sites=bom_template._distinct_sites(fields, rows),
+                out_dir=out_dir,
+                sites=bom_template._distinct_sites(fields, rows) if fields else None,
                 extra_priced=extra_priced, diagram_options=diagram_options)
             if not drawio and not png:
                 self.send_error_json(500, "Could not build the architecture diagram (no workloads found).")

@@ -370,8 +370,13 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     def text(i, s, x, y, w, h):
         N.append({"id": i, "text": s, "x": x, "y": y + dy[0], "w": w, "h": h})
 
-    def link(a, b, label="", style="solid"):
-        E.append({"source": a, "target": b, "label": label, "style": style})
+    def link(a, b, label="", style="solid", source_anchor=None, target_anchor=None):
+        edge = {"source": a, "target": b, "label": label, "style": style}
+        if source_anchor:
+            edge["sourceAnchor"] = source_anchor
+        if target_anchor:
+            edge["targetAnchor"] = target_anchor
+        E.append(edge)
 
     # ---- tenancy / governance band -----------------------------------------
     box("tenancy", f"{cust} OCI Tenancy", 340, 20, tenancy_w, page_h - 250, "tenancy")
@@ -470,6 +475,10 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         box(f"{sid}vcn",
             f"{seg['name']} Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
             x, VCN_Y, SPOKE_W, VCN_H, "vcn")
+        # A DRG attaches to the spoke VCN, not to every VM. Anchor the connection below
+        # the VCN so the shared transit line stays outside its Availability Domains.
+        link("drg", f"{sid}vcn", "", "plain",
+             source_anchor=(1, 0.5), target_anchor=(0.08, 1))
         if ad_split:
             # ---- AD layout: EVERY compute/DB object lives inside an Availability Domain box.
             #      Multiple ADs when a resource type is split across them; otherwise ONE big AD.
@@ -510,7 +519,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 if split_vms:
                     icon(f"{sid}vm{j}", "Compute - Virtual Machine VM",
                          f"{_even_share(reg_vms, n_ad, j):,} VMs", adx + adw // 2 - 30, yy, 60)
-                    link("drg", f"{sid}vm{j}", "AD transit", "solid")
                     yy += 104
                     if win_vms > 0:
                         icon(f"{sid}winvm{j}", "Compute - Virtual Machine VM",
@@ -522,13 +530,11 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                     icon(f"{sid}vm", "Compute - Virtual Machine VM",
                          f"{reg_vms:,} {seg['name']} VMs\n{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB",
                          adx + adw // 2 - 30, yy, 60)
-                    link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
                     yy += 104
                     if win_vms > 0:
                         icon(f"{sid}winvm", "Compute - Virtual Machine VM",
                              f"{win_vms:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
                              adx + adw // 2 - 30, yy, 60)
-                        link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
                         yy += 110
                 # Databases INSIDE the AD: one big AD lays them in a row (uses the full width);
                 # narrow split ADs stack them below the VMs.
@@ -564,7 +570,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 icon(f"{sid}winvm", "Compute - Virtual Machine VM",
                      f"{_wv:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
                      ax + aw - 156, 500, 96)
-                link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
             if db_types:
                 n = len(db_types)
                 per_row = min(3, n)
@@ -583,7 +588,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             icon(f"{sid}bkt", "Storage - Object Storage",
                  f"{seg['name']} backup bucket\nObject Storage",
                  ax + aw // 2 - 44, VCN_Y + VCN_H - 130, 88)
-            link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
         # The attached block volume needs no backup edge — backups live at the DR site.
 
     # ---- DR region (only when the app's Enable DR toggle is on) --------------
@@ -632,6 +636,12 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             ax, aw = x + 24, SPOKE_W - 48
             box(f"{sid}drvcn", f"{seg['name']} DR Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
                 x, DR_Y + 90, SPOKE_W, DR_H - 150, "vcn")
+            link("drdrg", f"{sid}drvcn", "", "plain",
+                 source_anchor=(1, 0.5), target_anchor=(0.08, 1))
+            if rep_obj:
+                text(
+                    f"{sid}replnote", "Object Storage cross-region replication",
+                    ax + aw - 340, DR_Y + 116, 320, 24)
             # Only the resource types the user chose to replicate are drawn in the DR
             # region. Compute standbys, managed-DB replicas, and object/block backups are
             # each independently gated by the app's "Replicate to DR" selection.
@@ -648,7 +658,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 if rep_vms:
                     icon(f"{sid}drvm", "Compute - Virtual Machine VM",
                          f"{seg['vms']:,} {seg['name']}\nstandby VMs", ad_x + 40, yy, 88)
-                    link("drdrg", f"{sid}drvm", "DR transit", "dashed")
                     _dbx0 = ad_x + 210      # DB replicas sit to the right of the standby VMs
                     _dbcols = 2             # fewer, wider columns so the long DR labels fit
                 if db_slots:
@@ -666,7 +675,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                          f"{seg['name']} DR target\nbucket", ax + 56, ad_y + ad_h + 22, 84)
                     icon(f"{sid}drblk", "Storage - Block Storage",
                          f"(Opt.) block backups\n{seg['block']:,.0f} GB", ax + aw - 156, ad_y + ad_h + 22, 84)
-                    link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
             else:
                 # ---- DR subnet layout (AD feature off) ----
                 box(f"{sid}dr_app", f"{seg['name']} DR App Subnet\n10.{third}.1.0/24",
@@ -676,7 +684,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 if rep_vms:
                     icon(f"{sid}drvm", "Compute - Virtual Machine VM",
                          f"{seg['vms']:,} {seg['name']}\nstandby VMs", ax + 56, DR_Y + 212, 88)
-                    link("drdrg", f"{sid}drvm", "DR transit", "dashed")
                 if db_slots:
                     nd = len(db_slots)
                     pr = min(3, nd)
@@ -700,7 +707,6 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                              f"(Optional) Backups\n{seg['block']:,.0f} GB", ax + 56, DR_Y + 442, 88)
                         icon(f"{sid}drbkt", "Storage - Object Storage",
                              f"{seg['name']} DR target\nbucket", ax + aw - 144, DR_Y + 442, 88)
-                    link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
 
     # ---- notes --------------------------------------------------------------
     win_total = sum(s["win"] for s in segments)
@@ -731,6 +737,170 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         "page": {"width": page_w, "height": page_h},
         "containers": C, "nodes": N, "edges": E,
     }
+
+
+def _render_png_pillow(spec, out_png):
+    """Portable PNG renderer used when pycairo is unavailable (notably on Vercel).
+
+    The editable .drawio remains the icon-perfect source. This renderer preserves the
+    same topology, container hierarchy, anchors, labels, and Oracle visual language so
+    the Pricing Overview always receives a readable architecture image.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    import textwrap
+
+    page = spec.get("page") or {}
+    width = max(800, int(page.get("width") or 2600))
+    height = max(600, int(page.get("height") or 2050))
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+    bold_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    ]
+
+    def font(size, bold=False):
+        for path in (bold_paths if bold else font_paths):
+            try:
+                return ImageFont.truetype(path, size)
+            except (OSError, IOError):
+                pass
+        return ImageFont.load_default()
+
+    container_style = {
+        "tenancy": ("#9E9892", "#FFFFFF", 20),
+        "region": ("#C6C1BC", "#F5F4F2", 19),
+        "compartment": ("#BB501C", "#FFFFFF", 17),
+        "vcn": ("#AE562C", "#FFFFFF", 16),
+        "subnet": ("#AE562C", "#FFFFFF", 15),
+        "ad": ("#5E7D82", "#E9F0F0", 15),
+        "plain": ("#9E9892", "#FFFFFF", 16),
+        "note": ("#B5B0AA", "#FFFFFF", 15),
+        "external": ("#9E9892", "#FFFFFF", 16),
+    }
+    dashed_styles = {"tenancy", "compartment", "vcn", "subnet", "external"}
+
+    def dashed_rect(box, color, radius=8, dash=8, gap=5, line_width=2):
+        x1, y1, x2, y2 = box
+        # Pillow has no portable dashed rounded rectangle; short segments keep the
+        # hierarchy legible and avoid depending on a native graphics library.
+        for x in range(int(x1 + radius), int(x2 - radius), dash + gap):
+            draw.line((x, y1, min(x + dash, x2 - radius), y1), fill=color, width=line_width)
+            draw.line((x, y2, min(x + dash, x2 - radius), y2), fill=color, width=line_width)
+        for y in range(int(y1 + radius), int(y2 - radius), dash + gap):
+            draw.line((x1, y, x1, min(y + dash, y2 - radius)), fill=color, width=line_width)
+            draw.line((x2, y, x2, min(y + dash, y2 - radius)), fill=color, width=line_width)
+
+    def wrapped(value, max_chars):
+        lines = []
+        for raw in str(value or "").splitlines() or [""]:
+            lines.extend(textwrap.wrap(raw, width=max(8, max_chars)) or [""])
+        return "\n".join(lines)
+
+    bounds = {}
+    for con in spec.get("containers", []):
+        x, y, w, h = (int(con[k]) for k in ("x", "y", "w", "h"))
+        bounds[con.get("id", "")] = (x, y, w, h)
+        style = con.get("style", "plain")
+        stroke, fill, size = container_style.get(style, container_style["plain"])
+        draw.rounded_rectangle((x, y, x + w, y + h), radius=8, fill=fill)
+        if style in dashed_styles:
+            dashed_rect((x, y, x + w, y + h), stroke)
+        else:
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=8, outline=stroke, width=2)
+        if con.get("label"):
+            label = wrapped(con["label"], max(12, int(w / 9)))
+            draw.multiline_text(
+                (x + 12, y + 10), label, fill=stroke if style in {"compartment", "vcn", "ad"} else "#312D2A",
+                font=font(size, bold=style in {"region", "compartment", "vcn", "ad"}),
+                spacing=3)
+
+    for node in spec.get("nodes", []):
+        bounds[node.get("id", "")] = (
+            int(node["x"]), int(node["y"]), int(node.get("w", 84)), int(node.get("h", 84)))
+
+    def anchor(node_id, explicit, toward_id):
+        x, y, w, h = bounds[node_id]
+        if isinstance(explicit, (list, tuple)) and len(explicit) == 2:
+            return (x + w * float(explicit[0]), y + h * float(explicit[1]))
+        tx, ty, tw, th = bounds[toward_id]
+        dx = (tx + tw / 2) - (x + w / 2)
+        dy = (ty + th / 2) - (y + h / 2)
+        if abs(dx) > abs(dy):
+            return (x + (w if dx > 0 else 0), y + h / 2)
+        return (x + w / 2, y + (h if dy > 0 else 0))
+
+    edge_styles = {
+        "solid": ("#55504B", 3),
+        "dashed": ("#55504B", 2),
+        "backup": ("#8B857F", 2),
+        "plain": ("#55504B", 3),
+    }
+    for edge in spec.get("edges", []):
+        source, target = edge.get("source"), edge.get("target")
+        if source not in bounds or target not in bounds:
+            continue
+        a = anchor(source, edge.get("sourceAnchor"), target)
+        b = anchor(target, edge.get("targetAnchor"), source)
+        color, line_width = edge_styles.get(
+            edge.get("style", "solid"), edge_styles["solid"])
+        if abs(a[0] - b[0]) < 10 or abs(a[1] - b[1]) < 10:
+            points = [a, b]
+        elif abs(a[1] - b[1]) > abs(a[0] - b[0]):
+            mid = (a[1] + b[1]) / 2
+            points = [a, (a[0], mid), (b[0], mid), b]
+        else:
+            mid = (a[0] + b[0]) / 2
+            points = [a, (mid, a[1]), (mid, b[1]), b]
+        draw.line(points, fill=color, width=line_width, joint="curve")
+        bx, by = b
+        draw.polygon([(bx, by), (bx - 9, by - 5), (bx - 9, by + 5)], fill=color)
+        if edge.get("label"):
+            label = edge["label"]
+            mx, my = points[len(points) // 2]
+            bbox = draw.textbbox((0, 0), label, font=font(13))
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            draw.rectangle((mx - tw / 2 - 4, my - th - 4, mx + tw / 2 + 4, my + 4),
+                           fill="white")
+            draw.text((mx - tw / 2, my - th), label, fill="#312D2A", font=font(13))
+
+    for node in spec.get("nodes", []):
+        x, y, w, h = bounds[node.get("id", "")]
+        if "text" in node:
+            draw.multiline_text(
+                (x + 4, y + 3), wrapped(node["text"], max(12, int(w / 8))),
+                fill="#312D2A", font=font(15), spacing=3)
+            continue
+        # A compact OCI service tile keeps the fallback readable while the editable
+        # draw.io retains Oracle's full stencil artwork.
+        draw.rounded_rectangle(
+            (x, y, x + w, y + h), radius=max(6, min(w, h) // 8),
+            fill="#FFFFFF", outline="#2D5967", width=3)
+        words = [p for p in re.split(r"[^A-Za-z0-9]+", node.get("shape", "")) if p]
+        mark = "".join(p[0] for p in words[-3:])[:3].upper() or "OCI"
+        mark_font = font(max(12, min(24, h // 3)), bold=True)
+        mark_box = draw.textbbox((0, 0), mark, font=mark_font)
+        draw.text(
+            (x + (w - (mark_box[2] - mark_box[0])) / 2,
+             y + (h - (mark_box[3] - mark_box[1])) / 2 - 2),
+            mark, fill="#2D5967", font=mark_font)
+        if node.get("label"):
+            label = wrapped(node["label"], max(10, int(max(w + 90, 130) / 8)))
+            label_box = draw.multiline_textbbox((0, 0), label, font=font(14), spacing=2,
+                                                align="center")
+            label_w = label_box[2] - label_box[0]
+            draw.multiline_text(
+                (x + w / 2 - label_w / 2, y + h + 7), label,
+                fill="#312D2A", font=font(14), spacing=2, align="center")
+
+    image.save(out_png, "PNG", optimize=True)
 
 
 def render(spec, out_dir, name="oci_architecture"):
@@ -764,7 +934,12 @@ def render(spec, out_dir, name="oci_architecture"):
             import traceback
             traceback.print_exc()
         build_diagram.build(str(spec_path), str(drawio), None, str(LIB_PATH))
-        png = None
+        try:
+            _render_png_pillow(spec, png)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            png = None
     return drawio, (png if png and png.exists() else None)
 
 
