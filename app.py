@@ -2189,6 +2189,18 @@ def parse_workbook_rule_based(path, full_service_beta=False):
         storage_keys=storage_field_keys,
     )
 
+    # Express RAM in whole GB. Inventories often report fractional GB (e.g. 5.95, 15.96) that
+    # just clutter the review table and BOM; round to the nearest whole GB once here so the
+    # review, pricing, and export all show the same clean figure.
+    for _mk in memory_field_keys:
+        for _r in rows:
+            if clean_text(_r.get(_mk)) == "":
+                continue
+            try:
+                _r[_mk] = compact_number(round(float(str(_r.get(_mk)).replace(",", ""))))
+            except (TypeError, ValueError):
+                pass
+
     return {
         "fileName": Path(path).name,
         "sheetName": sheet,

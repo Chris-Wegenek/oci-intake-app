@@ -126,6 +126,9 @@ const PREVIEW_FIELD_RULES = [
   { label: "RAM (GB)", containsAny: [["memory per server"], ["memory"], ["ram"]], required: true },
   { label: "Storage (GB)", containsAny: [["local storage"], ["shared storage"], ["total allocated storage"], ["database size"], ["total storage"], ["storage gb"], ["disk gb"]], required: true },
   { label: "Hours Running", containsAny: [["hours running"], ["hours per month"], ["monthly hours"], ["running hours"], ["uptime hours"], ["hours"]], required: true },
+  // Optional: surface the OS column when the inventory has one (shows only if populated). Placed
+  // last so it doesn't shift the index alignment between PREVIEW_FIELD_RULES and MANUAL_REVIEW_FIELDS.
+  { label: "OS", containsAny: [["operating system"], ["os name"], ["os family"], ["os type"], ["os version"], ["guest os"], ["platform os"]] },
 ];
 
 const FULL_SERVICE_PREVIEW_FIELD_RULES = [
