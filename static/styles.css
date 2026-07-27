@@ -1474,6 +1474,11 @@ td input[type="checkbox"] {
 
 .processor-logo.arm-logo {
   min-width: 112px;
+  color: #4a8a1f;
+  font-size: 27px;
+  font-weight: 860;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .arm-logo-frame {

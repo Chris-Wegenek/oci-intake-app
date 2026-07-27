@@ -2390,7 +2390,10 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             "desc": rv("desc"),
             "virt": virt,
             "os_name": rv("os_name"),
-            "os_family": rv("os_family"),
+            # Prefer a real OS family/type column; otherwise fall back to the same
+            # Windows/Linux classification the estimator priced on (osDetected), so the
+            # export's OS column matches the Price page and the Windows-license basis.
+            "os_family": rv("os_family") or (str(pr.get("osDetected") or "").capitalize() or None),
             # Full precision - rounding here would put the workbook a few cents off the
             # app's total across hundreds of rows, and the two must tie out exactly.
             "vcpu": float(vcpu) if vcpu else None,

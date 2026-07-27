@@ -1145,13 +1145,7 @@ function processorLogo(key) {
   if (key === "amd") return `<span class="processor-logo amd-logo"><span>AMD</span><i aria-hidden="true"></i></span>`;
   if (key === "intel") return `<span class="processor-logo intel-logo"><span>intel</span></span>`;
   if (key === "arm") {
-    return `
-      <span class="processor-logo arm-logo">
-        <span class="arm-logo-frame">
-          <img src="/static/assets/ampere-logo.png" alt="Ampere" />
-        </span>
-      </span>
-    `;
+    return `<span class="processor-logo arm-logo"><span>Ampere</span></span>`;
   }
   return "";
 }
