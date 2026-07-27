@@ -1746,6 +1746,24 @@ td input[type="checkbox"] {
   letter-spacing: 0;
 }
 
+.row-remove-btn {
+  margin-left: 6px;
+  border: none;
+  background: transparent;
+  color: #c0392b;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 5px;
+  border-radius: 4px;
+  opacity: 0.55;
+}
+.row-remove-btn:hover {
+  opacity: 1;
+  background: rgba(192, 57, 43, 0.12);
+}
+
 .os-badge {
   display: inline-block;
   font-size: 10px;

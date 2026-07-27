@@ -1598,6 +1598,22 @@ function renderDataCheck(check) {
   panel.hidden = false;
 }
 
+function removeReviewRow(row) {
+  const id = row && row.__id;
+  const idx = state.rows.findIndex((r) => r === row || (id && r.__id === id));
+  if (idx === -1) return;
+  state.rows.splice(idx, 1);
+  // Drop any per-row state keyed by this row's id so it doesn't linger.
+  if (id) {
+    [state.selectedRows, state.approvedFlags, state.shapeOverrides, state.costOverrides]
+      .forEach((map) => { if (map && typeof map === "object") delete map[id]; });
+  }
+  // Sizing changed - invalidate the estimate so Price re-runs on the reduced set.
+  state.pricing = null;
+  renderTable();
+  syncWorkflowAvailability();
+}
+
 function renderTable() {
   const fields = previewFields();
   const rowEntries = reviewRowEntries(fields);
@@ -1620,6 +1636,15 @@ function renderTable() {
       renderStats();
     });
     approveCell.append(checkbox);
+    // Remove this VM from the BOM entirely (unlike unchecking Approve, which keeps the row).
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "row-remove-btn";
+    removeBtn.textContent = "×";
+    removeBtn.title = "Remove this VM from the BOM";
+    removeBtn.setAttribute("aria-label", `Remove row ${rowIndex + 1}`);
+    removeBtn.addEventListener("click", () => removeReviewRow(row));
+    approveCell.append(removeBtn);
     tr.append(approveCell);
 
     fields.forEach((field) => {
