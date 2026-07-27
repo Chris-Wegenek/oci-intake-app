@@ -3656,6 +3656,7 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
         total = 0.0
         storage_total = 0.0
         sql_total = 0.0
+        gpu_total = 0.0
         actual_rows = 0
         estimated_rows = 0
         live_rows = 0
@@ -3729,11 +3730,6 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                 if _file_gb > 0:
                     _file_rate = (_CLOUD_RATE_TABLE.get(cloud, {}).get("B89057") or (1.0, 0.0))[1]
                     storage_total += _file_gb * _file_rate
-                # SQL Server licensing is a BYOL-able 3rd-party license the customer pays on ANY
-                # cloud (AWS/Azure charge it too), so mirror OCI's SQL license onto the other
-                # clouds - otherwise a SQL workload makes OCI look artificially expensive, the
-                # same way Windows/storage did. Already reflects the hide-SQL toggle (0 when hidden).
-                sql_total += to_number(row.get("sqlLicenseMonthly"), 0)
 
             hours = row.get("hoursPerMonth") or HOURS_PER_MONTH
             # Cloud bills are often billed at daily/hourly granularity, so a single VM shows up
@@ -3754,6 +3750,21 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                 _cur = specs.get("ocpus")
                 if windows and _ocpus_in and _cur and float(_cur) > 0:
                     windows = windows * (float(_ocpus_in) / float(_cur))
+
+            # SQL Server licensing and the GPU premium are in OCI's total (and in the source
+            # cloud's actual bill), so mirror them onto the target-cloud estimate for compute
+            # rows too - otherwise SQL / GPU workloads make OCI look artificially expensive, the
+            # same class of bug as the storage/Windows omissions. Runs for every compute row that
+            # reaches here (the source-cloud-at-actual row already returned above, so no
+            # double-count). On-prem GPU is unmodeled (gpu_info is cloud-bill-only), so it's 0 there.
+            sql_total += to_number(row.get("sqlLicenseMonthly"), 0)
+            _gpu_li = next((li for li in (row.get("lineItems") or [])
+                            if li.get("isGpu") and to_number(li.get("monthly"), 0) > 0), None)
+            if _gpu_li:
+                _gpu_hours = to_number(_gpu_li.get("quantity"), 0)  # already gpuCount x 730
+                _gpu_rate = (_CLOUD_RATE_TABLE.get(cloud, {}).get(_gpu_li.get("sku"))
+                             or _CLOUD_RATE_TABLE.get(cloud, {}).get("VM.GPU.A10.1") or (1.0, 0.0))[1]
+                gpu_total += _gpu_hours * _gpu_rate
 
             # AWS: try the live Price List API for this workload's instance type
             # (its own source instance when marked AWS, otherwise the equivalent),
@@ -3802,13 +3813,14 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
             basis = "actual"
         else:
             basis = "equivalent"
-        total += storage_total + sql_total
+        total += storage_total + sql_total + gpu_total
         out[cloud] = {
             "label": "AWS" if cloud == "aws" else "Microsoft Azure",
             "monthlyTotal": money(total),
             "annualTotal": money(total * 12),
             "storageMonthly": money(storage_total),
             "sqlLicenseMonthly": money(sql_total),
+            "gpuMonthly": money(gpu_total),
             "priced": True,
             "basis": basis,
             "actualRows": actual_rows,
