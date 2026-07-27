@@ -3926,16 +3926,54 @@ def oci_size_check(shape_key, ocpus, memory_gb):
     flex_shape, max_ocpu, max_mem, vendor = info
     if ocpus <= max_ocpu and memory_gb <= max_mem:
         return {"status": "ok", "shape": flex_shape}
-    # Overflows the selected flex shape - try the vendor's bare-metal tier.
+    # Overflows the SELECTED flex shape. Two escape hatches, in preference order:
+    #   (a) a LARGER flex shape (same CPU vendor) that still fits - no bare metal needed;
+    #   (b) the vendor's bare-metal tier - a whole physical server.
+    _sel_gen = str(shape_key).split("-")[0]  # e.g. "e6" from "e6-standard-ax"
+    flex_alt = None
+    _flex_alt_key = None
+    for _k, (_sh, _mo, _mm, _vend) in SHAPE_KEY_TO_OCI.items():
+        if _vend != vendor or _sh == flex_shape or ocpus > _mo or memory_gb > _mm:
+            continue
+        # Prefer a flex shape of the SAME generation as the one the user picked (e.g. stay on
+        # E6 rather than dropping to an older E4), then the smallest RAM that still fits.
+        if flex_alt is None:
+            flex_alt, _flex_alt_key = {"shape": _sh, "maxOcpu": _mo, "maxMem": _mm}, _k
+        else:
+            cur_same = _flex_alt_key.split("-")[0] == _sel_gen
+            cand_same = _k.split("-")[0] == _sel_gen
+            if (cand_same and not cur_same) or (cand_same == cur_same and _mm < flex_alt["maxMem"]):
+                flex_alt, _flex_alt_key = {"shape": _sh, "maxOcpu": _mo, "maxMem": _mm}, _k
+    bm = None
     for tier in OCI_VENDOR_TIERS.get(vendor, []):
         if tier.get("tier") == "flex":
             continue
         if ocpus <= tier["maxOcpu"] and memory_gb <= tier["maxMem"]:
-            return {
-                "status": "baremetal",
-                "shape": tier["shape"],
-                "message": f"Per server: {ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}; fits bare metal {tier['shape']}. (The row total is the sum across this workload's servers.)",
-            }
+            bm = tier
+            break
+    if bm:
+        if flex_alt:
+            message = (
+                f"Per server: {ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}. It fits the "
+                f"larger flex shape {flex_alt['shape']} ({flex_alt['maxOcpu']:g} OCPU / {flex_alt['maxMem']:g} GB), "
+                f"or bare metal {bm['shape']} ({bm['maxOcpu']:g} OCPU / {bm['maxMem']:g} GB). "
+                f"The row total is the sum across this workload's servers."
+            )
+        else:
+            message = (
+                f"Per server: {ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape} and every larger "
+                f"flex shape, so it needs bare metal {bm['shape']} ({bm['maxOcpu']:g} OCPU / "
+                f"{bm['maxMem']:g} GB) - a full physical server, billed in full. The row total is the "
+                f"sum across this workload's servers."
+            )
+        return {
+            "status": "baremetal",
+            "shape": bm["shape"],
+            "bmMaxOcpu": bm["maxOcpu"],
+            "bmMaxMem": bm["maxMem"],
+            "flexAlt": flex_alt,
+            "message": message,
+        }
     biggest = (OCI_VENDOR_TIERS.get(vendor) or [{}])[-1]
     return {
         "status": "impossible",
@@ -3945,6 +3983,21 @@ def oci_size_check(shape_key, ocpus, memory_gb):
             f"({biggest.get('shape')}: {biggest.get('maxOcpu')} OCPU / {biggest.get('maxMem')} GB)."
         ),
     }
+
+
+def _billed_bm_size(shape_key, vm_ocpu, vm_mem):
+    """Pricing size for ONE VM. A VM that fits a flex shape bills its own OCPU/RAM. A VM that can
+    ONLY run on bare metal (it overflows every flex shape) bills the FULL bare-metal server -
+    bare metal is sold as a whole physical box, so you pay for all its cores/RAM even if the
+    workload needs fewer. A VM that overflows the selected flex but fits a LARGER flex shape is
+    NOT inflated (it can just use the bigger flex). Returns (billed_ocpu, billed_mem)."""
+    try:
+        chk = oci_size_check(shape_key, float(vm_ocpu or 0), float(vm_mem or 0))
+        if chk.get("status") == "baremetal" and not chk.get("flexAlt") and chk.get("bmMaxOcpu"):
+            return float(chk["bmMaxOcpu"]), float(chk["bmMaxMem"])
+    except Exception:
+        pass
+    return vm_ocpu, vm_mem
 
 
 AWS_INSTANCE_SIZE_SHAPES = {
@@ -8067,8 +8120,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             # OCPU can never exceed RAM: RAM (GB) is floored at the OCPU count.
             app_vm_mem = max(app_vm_mem, app_vm_ocpu)
             db_ocpus = 0.0
-            ocpus = app_vm_ocpu
-            memory_gb = app_vm_mem
+            # Bill the full bare-metal server when the VM can only run on bare metal.
+            ocpus, memory_gb = _billed_bm_size(row_shape_key, app_vm_ocpu, app_vm_mem)
         else:
             # OCPU: 2 vCPU = 1 OCPU, rounded per-VM; RAM floored like the BOM script.
             # Rightsize (gen-gap) reduction is then applied per VM before aggregating.
@@ -8083,10 +8136,14 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             # OCPU can never exceed RAM: floor each VM's RAM (GB) at its OCPU count.
             app_vm_mem = max(app_vm_mem, app_vm_ocpu)
             db_vm_mem = max(db_vm_mem, db_vm_ocpu)
-            app_ocpus = app_servers * app_vm_ocpu if app_servers else 0.0
-            db_ocpus = db_servers * db_vm_ocpu if db_servers else 0.0
+            # Bill the full bare-metal server for any VM that can only run on bare metal (its own
+            # OCPU/RAM otherwise). Size-check below still uses the true per-VM footprint for the badge.
+            _app_o_bill, _app_m_bill = _billed_bm_size(row_shape_key, app_vm_ocpu, app_vm_mem)
+            _db_o_bill, _db_m_bill = _billed_bm_size(row_shape_key, db_vm_ocpu, db_vm_mem)
+            app_ocpus = app_servers * _app_o_bill if app_servers else 0.0
+            db_ocpus = db_servers * _db_o_bill if db_servers else 0.0
             ocpus = app_ocpus + db_ocpus
-            memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
+            memory_gb = (app_servers * _app_m_bill if app_servers else 0.0) + (db_servers * _db_m_bill if db_servers else 0.0)
 
         # Per-server running hours: use an "hours running"/"hours per month" column if present,
         # otherwise the global hours setting (default 730).

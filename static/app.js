@@ -4260,7 +4260,10 @@ function sizeFlagBadge(row) {
   if (check.status === "impossible") {
     badges.push(` <span class="size-flag size-flag-impossible" title="${escapeHtml(check.message || "")}">IMPOSSIBLE</span>`);
   } else if (check.status === "baremetal") {
-    badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">BARE METAL</span>`);
+    // A workload that fits a larger flex shape isn't truly bare metal - label it so, and reserve
+    // the "BARE METAL" badge (which now bills a full physical server) for genuine overflow.
+    const label = check.flexAlt ? "LARGER SHAPE" : "BARE METAL";
+    badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">${label}</span>`);
   }
   if (Array.isArray(row.lineItems) && row.lineItems.some((li) => li && li.isGpu)) {
     badges.push(` <span class="size-flag size-flag-gpu" title="Mapped to an OCI GPU shape">GPU</span>`);
