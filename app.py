@@ -3954,17 +3954,15 @@ def oci_size_check(shape_key, ocpus, memory_gb):
     if bm:
         if flex_alt:
             message = (
-                f"Per server: {ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}. It fits the "
-                f"larger flex shape {flex_alt['shape']} ({flex_alt['maxOcpu']:g} OCPU / {flex_alt['maxMem']:g} GB), "
-                f"or bare metal {bm['shape']} ({bm['maxOcpu']:g} OCPU / {bm['maxMem']:g} GB). "
-                f"The row total is the sum across this workload's servers."
+                f"{ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}. It fits the larger flex "
+                f"shape {flex_alt['shape']} ({flex_alt['maxOcpu']:g} OCPU / {flex_alt['maxMem']:g} GB), "
+                f"or bare metal {bm['shape']} ({bm['maxOcpu']:g} OCPU / {bm['maxMem']:g} GB)."
             )
         else:
             message = (
-                f"Per server: {ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape} and every larger "
-                f"flex shape, so it needs bare metal {bm['shape']} ({bm['maxOcpu']:g} OCPU / "
-                f"{bm['maxMem']:g} GB) - a full physical server, billed in full. The row total is the "
-                f"sum across this workload's servers."
+                f"{ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape} and every larger flex shape, "
+                f"so it needs bare metal {bm['shape']} ({bm['maxOcpu']:g} OCPU / {bm['maxMem']:g} GB) "
+                f"- a full physical server, billed in full."
             )
         return {
             "status": "baremetal",
@@ -7251,7 +7249,12 @@ def field_by_key(fields, key):
 
 def field_is_ocpu(fields, key):
     field = field_by_key(fields, key)
-    return bool(field and "ocpu" in normalize(field.get("label")))
+    if not field:
+        return False
+    label = normalize(field.get("label"))
+    # OCPU columns, or physical-CORE columns (in OCI 1 OCPU = 1 physical core, so a "CPU cores
+    # per server" / "physical cores" count is OCPUs 1:1 and must NOT be halved like vCPUs).
+    return "ocpu" in label or ("core" in label and "vcpu" not in label)
 
 
 def field_text(fields, key):
@@ -7859,9 +7862,10 @@ def detect_cpu_unit(fields):
             return "ocpu"
         if "vcpu" in src or "v cpu" in src or "virtual cpu" in src:
             return "vcpu"
-        # A "rationalized cores" column is an already-right-sized PHYSICAL-core count
-        # (1 core = 1 OCPU), so it must be treated as OCPUs, NOT halved like vCPUs.
-        if "rationalized" in src and "core" in src:
+        # A physical-CORE column (CPU cores per server, physical cores, rationalized cores) is a
+        # real core count, and in OCI 1 OCPU = 1 physical core - treat it as OCPUs (1:1), NOT
+        # halved like vCPUs. Only vcpu-labelled columns (above) are halved.
+        if "core" in src:
             return "ocpu"
     return "vcpu"
 
@@ -8136,14 +8140,13 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             # OCPU can never exceed RAM: floor each VM's RAM (GB) at its OCPU count.
             app_vm_mem = max(app_vm_mem, app_vm_ocpu)
             db_vm_mem = max(db_vm_mem, db_vm_ocpu)
-            # Bill the full bare-metal server for any VM that can only run on bare metal (its own
-            # OCPU/RAM otherwise). Size-check below still uses the true per-VM footprint for the badge.
-            _app_o_bill, _app_m_bill = _billed_bm_size(row_shape_key, app_vm_ocpu, app_vm_mem)
-            _db_o_bill, _db_m_bill = _billed_bm_size(row_shape_key, db_vm_ocpu, db_vm_mem)
-            app_ocpus = app_servers * _app_o_bill if app_servers else 0.0
-            db_ocpus = db_servers * _db_o_bill if db_servers else 0.0
+            app_ocpus = app_servers * app_vm_ocpu if app_servers else 0.0
+            db_ocpus = db_servers * db_vm_ocpu if db_servers else 0.0
             ocpus = app_ocpus + db_ocpus
-            memory_gb = (app_servers * _app_m_bill if app_servers else 0.0) + (db_servers * _db_m_bill if db_servers else 0.0)
+            memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
+            # If the row's total can only run on bare metal (no flex shape fits), bill the full
+            # bare-metal server so the OCPUs/RAM shown match the bare-metal shape in the flag.
+            ocpus, memory_gb = _billed_bm_size(row_shape_key, ocpus, memory_gb)
 
         # Per-server running hours: use an "hours running"/"hours per month" column if present,
         # otherwise the global hours setting (default 730).
@@ -8835,20 +8838,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             assumptions.append("Recognized AWS, Azure, GCP, and on-prem rows are mapped to a curated Oracle price-list subset.")
             assumptions.extend(full_service_notes)
 
-        # Per-VM feasibility against the selected OCI shape (single VM, not the row aggregate),
-        # using the same rightsize reduction applied above.
-        if cloud_bill_mode:
-            per_vm_specs = [(app_vm_ocpu, app_vm_mem)]
-        else:
-            per_vm_specs = [(app_vm_ocpu, app_vm_mem), (db_vm_ocpu, db_vm_mem)]
-        size_check = {"status": "ok"}
-        _rank = {"ok": 0, "baremetal": 1, "impossible": 2}
-        for vm_ocpu, vm_mem in per_vm_specs:
-            if (vm_ocpu or 0) <= 0 and (vm_mem or 0) <= 0:
-                continue
-            chk = oci_size_check(row_shape_key, float(vm_ocpu or 0), float(vm_mem or 0))
-            if _rank[chk["status"]] > _rank[size_check["status"]]:
-                size_check = chk
+        # Feasibility against the selected OCI shape, evaluated on the SAME total shown in the
+        # row (specs.ocpus / specs.memoryGb) so the flag message matches the displayed size.
+        size_check = oci_size_check(row_shape_key, float(ocpus or 0), float(memory_gb or 0))
         if size_check["status"] == "impossible":
             totals["impossibleRows"] += 1
         elif size_check["status"] == "baremetal":
@@ -10020,6 +10012,10 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "build": APP_BUILD_TAG,
+                    "bareMetalShapes": {
+                        _v: [t for t in _tiers if t.get("tier") == "baremetal"]
+                        for _v, _tiers in OCI_VENDOR_TIERS.items()
+                    },
                     "openaiApiEnabled": openai_api_enabled(),
                     "openaiApiConfigured": openai_api_configured(),
                     "openaiApiConnected": openai_api_enabled() and openai_api_configured(),

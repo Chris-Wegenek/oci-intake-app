@@ -1454,6 +1454,28 @@ function renderShapeChoices() {
   els.shapeGrid.querySelectorAll("[data-shape]").forEach((button) => {
     button.addEventListener("click", () => setShape(button.dataset.shape));
   });
+  renderBareMetalShapes();
+}
+
+function renderBareMetalShapes() {
+  const section = document.getElementById("bareMetalSection");
+  const grid = document.getElementById("bareMetalGrid");
+  if (!section || !grid) return;
+  const list = (state.bareMetalShapes && state.bareMetalShapes[state.selectedVendor]) || [];
+  if (!list.length) {
+    section.hidden = true;
+    return;
+  }
+  grid.innerHTML = list
+    .map(
+      (bm) => `
+      <div class="bare-metal-card">
+        <span class="bare-metal-name">${escapeHtml(bm.shape)}</span>
+        <span class="bare-metal-spec">${formatNumber(bm.maxOcpu)} OCPU &middot; ${formatNumber(bm.maxMem)} GB RAM</span>
+      </div>`,
+    )
+    .join("");
+  section.hidden = false;
 }
 
 function renderShapeDetail() {
@@ -1521,10 +1543,9 @@ function resolvedCpuUnit() {
   const src = String(f?.cpuSourceLabel || "").toLowerCase();
   if (src.includes("ocpu")) return "ocpu";
   if (src.includes("vcpu") || src.includes("virtual cpu")) return "vcpu";
-  // A "rationalized cores" column is an already-right-sized physical-core count
-  // (1 core = 1 OCPU), so it must be treated as OCPUs, NOT halved like vCPUs.
-  // Mirror the server's detect_cpu_unit so display and pricing agree.
-  if (src.includes("rationalized") && src.includes("core")) return "ocpu";
+  // Physical cores are OCPUs 1:1 (CPU cores per server, physical cores, rationalized cores),
+  // so treat a "core" column as OCPUs, not halved like vCPUs. Mirror server detect_cpu_unit.
+  if (src.includes("core")) return "ocpu";
   return "vcpu";
 }
 function cpuDisplayMult() {
@@ -5658,6 +5679,7 @@ fetch("/api/health")
   .then((response) => response.json())
   .then((payload) => {
     state.rateCards = payload.rateCards || [];
+    state.bareMetalShapes = payload.bareMetalShapes || {};
     state.fullServiceCatalog = payload.fullServiceCatalog || [];
     state.openaiApiEnabled = Boolean(payload.openaiApiEnabled);
     state.openaiApiConfigured = Boolean(payload.openaiApiConfigured);

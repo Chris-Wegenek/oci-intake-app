@@ -1746,6 +1746,46 @@ td input[type="checkbox"] {
   letter-spacing: 0;
 }
 
+.bare-metal-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(120, 120, 120, 0.18);
+}
+.bare-metal-heading span {
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+.bare-metal-heading p {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 720px;
+}
+.bare-metal-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.bare-metal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border: 1px solid rgba(120, 120, 120, 0.22);
+  border-radius: 10px;
+  background: rgba(189, 215, 238, 0.10);
+  min-width: 210px;
+}
+.bare-metal-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+.bare-metal-spec {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .row-remove-btn {
   margin-left: 6px;
   border: none;
