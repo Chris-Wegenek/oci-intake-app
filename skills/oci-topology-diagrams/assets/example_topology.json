@@ -1,6 +1,6 @@
 {
   "name": "oci_network_diagram",
-  "title": "Global Network Connectivity — Customer Sites to OCI Regions",
+  "title": "Global Network Connectivity - Customer Sites to OCI Regions",
   "subtitle": "Site-to-Site VPN & FastConnect into regional DRG/VCN, interconnected over the OCI backbone (DRG remote peering)",
   "backbone_label": "OCI Backbone · DRG Remote Peering",
   "width": 1840,

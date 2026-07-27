@@ -1,7 +1,7 @@
 """Excel BOM exporter.
 
-Reproduces the two sheets created by the "E6 Ax BOM Creator" Office Script
-("BOM w E6 Acceleron" + "Overview") using openpyxl, so the app can export a
+Reproduces the compact two-sheet workbook created by the "E6 Ax BOM Creator"
+Office Script ("Overview" + "Shape") using openpyxl, so the app can export a
 formatted workbook that matches the script's layout, pricing, and formulas.
 
 The pricing rates here intentionally mirror the BOM script exactly:
@@ -10,18 +10,23 @@ The pricing rates here intentionally mirror the BOM script exactly:
   - Block Volume Storage   B91961    $0.0255 / GB-month
   - Block Volume Perf Unit B91962    $0.0017 / unit-month (10 units per GB)
   - Windows OS license     B88318    $0.0920 / OCPU-hour  x 730
-  - FastConnect 1 Gbps     B88326    $0.2125 / port-hour  x 730
+  - FastConnect 1 Gbps     B88325    $0.2125 / port-hour  x 730
 """
 
+import base64
 import json
 import os
 import re
+from copy import copy
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.chart.marker import DataPoint
 from openpyxl.chart.shapes import GraphicalProperties
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.formatting.rule import CellIsRule, Rule
 from openpyxl.styles.differential import DifferentialStyle
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -38,16 +43,23 @@ PERF_UNITS_PER_GB = 10
 WINDOWS_RATE = 0.0920
 FASTCONNECT_RATE = 0.2125
 
-# ---- Colors (hex from the script, ARGB for openpyxl) ----
-HDR_FILL = "C0E6F5"
-NAME_RED = "FF9999"
-BV_PINK = "FFE8E8"
-BORDER = "000000"
-OV_NAVY = "7F1D1D"
-OV_BLUE = "C0504D"
-OV_LIGHT = "F2DCDB"
+# ---- Quick BOM visual system (mirrors the Full BOM workbook) ----
+ORACLE_FONT = "Oracle Sans"
+HDR_FILL = "4F5A64"
+NAME_RED = "D2D6DB"
+BV_PINK = "F4F6F8"
+BORDER = "7F7F7F"
+OV_NAVY = "2F3437"
+OV_BLUE = "4F5A64"
+OV_LIGHT = "F4F6F8"
 OV_INPUT = "FFF2CC"
 OV_INPUT_BORDER = "BF8F00"
+CHART_OCI = "4F5A64"
+CHART_EXISTING = "A7ADB2"
+CHART_REFERENCE = "2F3437"
+
+_BASE_DIR = Path(__file__).resolve().parent
+_FULL_BOM_SPEC = _BASE_DIR / "data" / "bom_template_spec.json"
 
 MONEY2 = '"$"#,##0.00'
 MONEY4 = '"$"#,##0.0000'
@@ -78,6 +90,78 @@ def _fill(hexcolor):
     return PatternFill("solid", fgColor="FF" + hexcolor)
 
 
+@lru_cache(maxsize=1)
+def _oracle_header_bytes():
+    """Return the exact Oracle banner used by the Full BOM workbook."""
+    try:
+        spec = json.loads(_FULL_BOM_SPEC.read_text(encoding="utf-8"))
+        image_spec = next(iter(spec.get("images", {}).values()))
+        return base64.b64decode(image_spec["base64"])
+    except (OSError, ValueError, KeyError, StopIteration):
+        return None
+
+
+def _sheet_pixel_width(ws, end_col):
+    """Approximate the rendered width of a worksheet range in pixels."""
+    width = 0
+    for col in range(1, end_col + 1):
+        letter = get_column_letter(col)
+        chars = ws.column_dimensions[letter].width or 13
+        width += int(chars * 7 + 5)
+    return max(640, min(width, 2400))
+
+
+def _add_oracle_sheet_header(ws, title, end_col):
+    """Apply the Full BOM's Oracle banner and charcoal title band."""
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row <= 2:
+            ws.unmerge_cells(str(merged))
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=end_col)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=end_col)
+    ws.row_dimensions[1].height = 42
+    ws.row_dimensions[2].height = 24
+
+    title_cell = ws.cell(2, 1, title)
+    title_cell.fill = _fill(OV_NAVY)
+    title_cell.font = Font(name=ORACLE_FONT, bold=True, color="FFFFFFFF", size=11)
+    title_cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for col in range(2, end_col + 1):
+        ws.cell(2, col).fill = _fill(OV_NAVY)
+
+    header_bytes = _oracle_header_bytes()
+    if header_bytes:
+        image = XLImage(BytesIO(header_bytes))
+        image.width = _sheet_pixel_width(ws, end_col)
+        image.height = 56
+        ws.add_image(image, "A1")
+
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+
+
+def _apply_quick_workbook_theme(wb):
+    """Finish the Quick BOM with Full BOM typography and workbook metadata."""
+    wb.properties.creator = "OCI BOM + Architecture Generator"
+    wb.properties.lastModifiedBy = "OCI BOM + Architecture Generator"
+    wb.properties.subject = "Oracle Cloud Infrastructure quick bill of materials"
+
+    for ws in wb.worksheets:
+        ws.sheet_view.showGridLines = False
+        ws.sheet_properties.tabColor = "FF" + (
+            OV_NAVY if ws.title == "Overview" else OV_BLUE
+        )
+        for row in ws.iter_rows():
+            for cell in row:
+                if not cell.has_style:
+                    continue
+                font = copy(cell.font)
+                font.name = ORACLE_FONT
+                cell.font = font
+
+
 def _side(color=BORDER, style="medium"):
     return Side(style=style, color="FF" + color)
 
@@ -102,6 +186,15 @@ LEFT = Alignment(horizontal="left")
 RIGHT = Alignment(horizontal="right", vertical="center")
 
 
+def _section_header(ws, row, text, end_col=8):
+    for col in range(1, end_col + 1):
+        ws.cell(row=row, column=col).fill = _fill(OV_BLUE)
+    cell = ws.cell(row=row, column=2, value=text)
+    cell.font = Font(name=ORACLE_FONT, bold=True, color="FFFFFFFF", size=12)
+    cell.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[row].height = 22
+
+
 def _detect_os(server):
     text = " ".join(str(server.get(k, "")) for k in ("os", "name", "environment", "raw")).lower()
     if "windows" in text:
@@ -111,20 +204,39 @@ def _detect_os(server):
     return ""
 
 
-def build_bom_sheet(ws, servers, shape=None, hide_windows=False, hours=HOURS):
+def build_bom_sheet(
+    ws,
+    servers,
+    shape=None,
+    hide_windows=False,
+    hours=HOURS,
+    extra_services=None,
+):
     """Render the BOM sheet for the selected shape. Returns the windows OCPU total."""
     shape = _resolve_shape(shape)
+
+    # The banner is sized from the rendered column widths, so establish the final
+    # worksheet geometry before embedding it. Otherwise the image uses Excel's
+    # default widths and stops well short of the Quick BOM title/header bands.
+    widths = {1: 12, 2: 62, 3: 10, 4: 12, 5: 16, 6: 12, 7: 14, 8: 16, 9: 18, 10: 16}
+    for col, width in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    _add_oracle_sheet_header(ws, f"OCI Quick BOM | {shape['shortLabel']}", 10)
+
     headers = ["Part", "Description", "Part Qty", "Instance Qty", "Usage Qty (Hours)",
                "Unit Price", "Monthly Cost", "VM Cost"]
     for i, text in enumerate(headers, start=1):
         c = ws.cell(row=3, column=i, value=text)
         c.fill = _fill(HDR_FILL)
-        c.font = Font(bold=True, size=11)
+        c.font = Font(name=ORACLE_FONT, bold=True, color="FFFFFFFF", size=11)
         c.alignment = CENTER if i in (5, 7, 8) else Alignment(horizontal="left", vertical="center")
-    ws.cell(row=3, column=9).fill = _fill(HDR_FILL)
+    for col in (9, 10):
+        ws.cell(row=3, column=col).fill = _fill(HDR_FILL)
+    ws.row_dimensions[3].height = 22
 
     # --- Free Tier block ---
-    ws.cell(row=4, column=2, value="Free Tier").font = Font(bold=True, size=17)
+    _section_header(ws, 4, "Free Tier")
     free_rows = [
         "OCI Data Ingress (Inbound Data Transfer)",
         "OCI Data Egress (Outbound) (first 10TB)",
@@ -145,15 +257,15 @@ def build_bom_sheet(ws, servers, shape=None, hide_windows=False, hours=HOURS):
         g.number_format = MONEY2
 
     # --- FastConnect ---
-    ws.cell(row=16, column=2, value="FastConnect").font = Font(bold=True, size=17)
-    _line(ws, 17, "B88326", "          OCI - FastConnect 1 Gbps (Port Hour)", 0, 1, hours, FASTCONNECT_RATE)
+    _section_header(ws, 16, "FastConnect")
+    _line(ws, 17, "B88325", "          OCI - FastConnect 1 Gbps (Port Hour)", 0, 1, hours, FASTCONNECT_RATE)
 
     # --- Windows Licenses (qty filled after blocks) ---
-    ws.cell(row=19, column=2, value="Windows Licenses").font = Font(bold=True, size=17)
+    _section_header(ws, 19, "Windows Licenses")
     _line(ws, 20, "B88318", "          Compute - Windows OS (OCPU Per Hour)", 0, 1, hours, WINDOWS_RATE)
 
     # --- Virtual Machines header ---
-    ws.cell(row=22, column=2, value="Virtual Machines").font = Font(bold=True, size=17)
+    _section_header(ws, 22, "Virtual Machines")
 
     block_size = 7
     first_name_row = 24  # Excel row of the first server name
@@ -225,31 +337,77 @@ def build_bom_sheet(ws, servers, shape=None, hide_windows=False, hours=HOURS):
     if servers:
         ws.cell(row=20, column=3, value=windows_cpu_total).alignment = CENTER
 
-    # --- Totals ---
     total_row = first_name_row + len(servers) * block_size
-    ws.cell(row=total_row, column=7, value="Total Per Month:").font = Font(bold=True, size=15)
+    if extra_services:
+        total_row = _append_extra_services(ws, extra_services, total_row)
+
+    # --- Totals ---
+    ws.cell(row=total_row, column=7, value="Total Monthly:").font = Font(bold=True, size=15)
     g_tot = ws.cell(row=total_row, column=8, value="=SUM(G:G)")
     g_tot.font = Font(bold=True, size=15)
     g_tot.number_format = MONEY2
 
-    # Summary cells in cols I/J referenced by the Overview sheet
-    ws.cell(row=14, column=9, value="Total Per Month:").font = Font(bold=True, size=15)
+    # Compact summary table in cols I/J referenced by the Overview sheet.
+    ws.merge_cells("I14:J14")
+    summary_header = ws.cell(row=14, column=9, value="Cost Summary")
+    summary_header.fill = _fill(OV_NAVY)
+    summary_header.font = Font(
+        name=ORACLE_FONT,
+        bold=True,
+        color="FFFFFFFF",
+        size=11,
+    )
+    summary_header.alignment = CENTER
+    ws.cell(row=14, column=10).fill = _fill(OV_NAVY)
+
+    monthly_label = ws.cell(row=15, column=9, value="Monthly Cost")
+    monthly_label.fill = _fill(OV_BLUE)
+    monthly_label.font = Font(
+        name=ORACLE_FONT,
+        bold=True,
+        color="FFFFFFFF",
+        size=11,
+    )
+    monthly_label.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     j15 = ws.cell(row=15, column=10, value="=SUM(G:G)")
+    j15.fill = _fill(OV_LIGHT)
     j15.font = Font(bold=True, size=15)
     j15.number_format = MONEY2
-    ws.cell(row=17, column=9, value="Total Per Year:").font = Font(bold=True, size=15)
-    j18 = ws.cell(row=18, column=10, value="=J15*12")
-    j18.font = Font(bold=True, size=15)
-    j18.number_format = MONEY0
+    j15.alignment = RIGHT
+
+    annual_label = ws.cell(row=16, column=9, value="Annual Cost")
+    annual_label.fill = _fill(OV_BLUE)
+    annual_label.font = Font(
+        name=ORACLE_FONT,
+        bold=True,
+        color="FFFFFFFF",
+        size=11,
+    )
+    annual_label.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    j16 = ws.cell(row=16, column=10, value="=J15*12")
+    j16.fill = _fill(OV_LIGHT)
+    j16.font = Font(bold=True, size=15)
+    j16.number_format = MONEY2
+    j16.alignment = RIGHT
+
+    ws.row_dimensions[14].height = 22
+    ws.row_dimensions[15].height = 28
+    ws.row_dimensions[16].height = 28
+    _box(ws, 14, 9, 16, 10, OV_NAVY, "medium")
+    divider = _side(BORDER, "thin")
+    for col in (9, 10):
+        ws.cell(row=15, column=col).border = Border(
+            left=ws.cell(row=15, column=col).border.left,
+            right=ws.cell(row=15, column=col).border.right,
+            top=ws.cell(row=15, column=col).border.top,
+            bottom=divider,
+        )
 
     # Column number formats / widths
     for r in range(1, total_row + 2):
         ws.cell(row=r, column=6).number_format = MONEY4
         ws.cell(row=r, column=7).number_format = MONEY2
         ws.cell(row=r, column=8).number_format = MONEY2
-    widths = {1: 12, 2: 62, 3: 10, 4: 12, 5: 16, 6: 12, 7: 14, 8: 16, 9: 18, 10: 16}
-    for col, w in widths.items():
-        ws.column_dimensions[get_column_letter(col)].width = w
 
     return windows_cpu_total
 
@@ -268,33 +426,50 @@ def _line(ws, row, part, desc, qty, instance_qty, hours, unit_price):
     g.number_format = MONEY2
 
 
-def _build_extra_services_sheet(wb, priced, total):
-    """Itemize app-added OCI services on their own sheet in the Quick BOM."""
-    ws = wb.create_sheet("Additional Services")
-    ws.column_dimensions["A"].width = 34
-    for col in "BCDE":
-        ws.column_dimensions[col].width = 16
-    ws["A1"] = "Additional OCI Services (configured in app)"
-    ws["A1"].font = Font(bold=True, size=14)
-    for j, h in enumerate(["Service", "Category", "SKU", "Sizing", "Monthly (USD)"], start=1):
-        c = ws.cell(2, j, h)
-        c.font = Font(bold=True, color="FFFFFFFF")
-        c.fill = _fill(OV_BLUE)
-    for i, s in enumerate(priced):
-        r = 3 + i
-        ws.cell(r, 1, s["name"])
-        ws.cell(r, 2, s["group"])
-        ws.cell(r, 3, s["sku"])
-        ws.cell(r, 4, s["sizing"])
-        ws.cell(r, 5, round(float(s["monthly"] or 0), 2)).number_format = MONEY2
-    tr = 3 + len(priced)
-    ws.cell(tr, 4, "Total Monthly:").font = Font(bold=True)
-    tc = ws.cell(tr, 5, round(float(total or 0), 2))
-    tc.font = Font(bold=True)
-    tc.number_format = MONEY2
+def _append_extra_services(ws, priced, start_row):
+    """Itemize app-added OCI services inside Shape without creating another tab."""
+    row = start_row
+    _section_header(ws, row, "Additional OCI Services")
+    row += 1
+
+    for service in priced:
+        for col in range(1, 9):
+            ws.cell(row=row, column=col).fill = _fill(OV_LIGHT)
+        summary = service.get("name") or "OCI service"
+        if service.get("group"):
+            summary += f" | {service['group']}"
+        if service.get("sizing"):
+            summary += f" | {service['sizing']}"
+        cell = ws.cell(row=row, column=2, value=summary)
+        cell.font = Font(name=ORACLE_FONT, bold=True, size=11)
+        row += 1
+
+        lines = service.get("skus") or [
+            {
+                "sku": service.get("sku") or "",
+                "desc": service.get("name") or "OCI service",
+                "qty": service.get("qty") or 0,
+                "rate": service.get("rate") or 0,
+                "hours": service.get("hours") or "",
+            }
+        ]
+        for line in lines:
+            _line(
+                ws,
+                row,
+                line.get("sku") or "",
+                f" {line.get('desc') or summary}",
+                float(line.get("qty") or 0),
+                1,
+                float(line.get("hours") or 1),
+                float(line.get("rate") or 0),
+            )
+            row += 1
+
+    return row + 1
 
 
-def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="BOM w E6 Acceleron", existing_label="Existing Infra Cost (enter):", oci_discount=0.0, extra_oci=0.0, extra_third_party=0.0):
+def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="Shape", existing_label="Existing Infra Cost (enter):", oci_discount=0.0, extra_oci=0.0, extra_third_party=0.0):
     """Render the 'Overview' sheet, pulling the 5-year utilization ramp from the app.
     oci_discount (0-1) is applied to the OCI totals and shown in a discount cell."""
     BOM = f"'{bom_sheet_name}'"
@@ -316,15 +491,8 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
         c.font = Font(bold=True, color="FFFFFFFF")
         c.alignment = CENTER
 
-    # Title banner
-    ws.merge_cells("A1:H2")
-    t = ws["A1"]
-    t.value = "Cloud Migration Cost Overview"
-    t.fill = _fill(OV_NAVY)
-    t.font = Font(bold=True, color="FFFFFFFF", size=26, name="Calibri")
-    t.alignment = CENTER
-    ws.row_dimensions[1].height = 26
-    ws.row_dimensions[2].height = 26
+    # Oracle header and title band from the Full BOM visual system.
+    _add_oracle_sheet_header(ws, "Cloud Migration Cost Overview", 22)
 
     # OCI discount applied from the app (shown + applied to the OCI totals).
     band("G4", "OCI Discount*")
@@ -351,7 +519,7 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
     ws.merge_cells("E4:F4")
     band("E4", "Total Annual Cost (Full)")
     ws.merge_cells("E5:F6")
-    ws["E5"] = f"={BOM}!J18*(1-$G$5){a_extra}"
+    ws["E5"] = f"={BOM}!J16*(1-$G$5){a_extra}"
     for cell in ("B4", "E4"):
         ws[cell].fill = _fill(OV_BLUE)
     for cell in ("B5", "E5"):
@@ -419,9 +587,9 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
         CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="FF008000", bold=True)),
     )
 
-    # Chart data — comparison table
+    # Chart data - comparison table
     ws.merge_cells("A23:F23")
-    band("A23", "Chart Data — Comparison", size=12)
+    band("A23", "Chart Data - Comparison", size=12)
     for cell, text in (("A24", "Year"), ("B24", "OCI Estimate"), ("C24", "Existing Infra Cost"),
                        ("D24", "Combined Cost"), ("E24", "Current Spend"), ("F24", "Total Savings")):
         colhead(cell, text)
@@ -458,7 +626,7 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
     for col in "TUV":
         ws.column_dimensions[col].width = 18
     ws.merge_cells("T8:V8")
-    band("T8", "Existing Spend — Ramp %", size=12)
+    band("T8", "Existing Spend - Ramp %", size=12)
     for cell, text in (("T9", "Year"), ("U9", "Existing Infra Cost"), ("V9", "Existing Util %")):
         colhead(cell, text)
     for y in range(5):
@@ -494,7 +662,7 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(cats)
     # Set colors on the series AND every data point so Excel can't fall back to a theme.
-    series_colors = ["C00000", "808080"]  # OCI = red, Existing = grey
+    series_colors = [CHART_OCI, CHART_EXISTING]
     for idx, color in enumerate(series_colors):
         if idx >= len(chart.series):
             continue
@@ -510,10 +678,10 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
     line.varyColors = False
     ldata = Reference(ws, min_col=5, max_col=5, min_row=24, max_row=30)
     line.add_data(ldata, titles_from_data=True)
-    # Current Spend = faded red reference line
+    # Current Spend = charcoal reference line
     if line.series:
         lgp = GraphicalProperties()
-        lgp.line.solidFill = "E6A9A9"
+        lgp.line.solidFill = CHART_REFERENCE
         lgp.line.width = 28000  # ~2.2pt so the reference line reads clearly
         line.series[0].graphicalProperties = lgp
         line.series[0].smooth = False
@@ -522,7 +690,7 @@ def build_overview_sheet(ws, util_by_year, existing_infra_cost, bom_sheet_name="
 
     # Small disclaimer note.
     dcell = ws["A32"]
-    dcell.value = ("*Budgetary estimate only — not a quote. The OCI discount shown is "
+    dcell.value = ("*Budgetary estimate only - not a quote. The OCI discount shown is "
                    "applied to the OCI totals on this Overview; detailed sheets list OCI list pricing.")
     dcell.font = Font(italic=True, size=9, color="FF808080")
 
@@ -568,15 +736,8 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
         c.font = Font(bold=True, color="FFFFFFFF")
         c.alignment = CENTER
 
-    # Title banner
-    ws.merge_cells("A1:H2")
-    t = ws["A1"]
-    t.value = f"{_cloudnm} Bill to OCI Cost Overview"
-    t.fill = _fill(OV_NAVY)
-    t.font = Font(bold=True, color="FFFFFFFF", size=26, name="Calibri")
-    t.alignment = CENTER
-    ws.row_dimensions[1].height = 26
-    ws.row_dimensions[2].height = 26
+    # Oracle header and title band from the Full BOM visual system.
+    _add_oracle_sheet_header(ws, f"{_cloudnm} Bill to OCI Cost Overview", 22)
 
     # OCI discount applied from the app (the OCI figures are already net of it).
     band("G4", "OCI Discount*")
@@ -665,9 +826,9 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
         CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="FF008000", bold=True)),
     )
 
-    # Chart data — comparison table (annual figures, ramped over 5 years)
+    # Chart data - comparison table (annual figures, ramped over 5 years)
     ws.merge_cells("A23:F23")
-    band("A23", "Chart Data — Comparison", size=12)
+    band("A23", "Chart Data - Comparison", size=12)
     for cell, text in (("A24", "Year"), ("B24", "OCI Estimate"), ("C24", f"Existing ({_cloudnm}) Cost{_est}"),
                        ("D24", "Combined Cost"), ("E24", "Current Spend"), ("F24", "Total Savings")):
         colhead(cell, text)
@@ -702,11 +863,11 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
         CellIsRule(operator="lessThan", formula=["0"], font=Font(color="FFC00000", bold=True)),
     )
 
-    # Existing-spend ramp adjuster (cols T:V) — annual existing AWS cost per year.
+    # Existing-spend ramp adjuster (cols T:V) - annual existing AWS cost per year.
     for col in "TUV":
         ws.column_dimensions[col].width = 18
     ws.merge_cells("T8:V8")
-    band("T8", "Existing Spend — Ramp %", size=12)
+    band("T8", "Existing Spend - Ramp %", size=12)
     for cell, text in (("T9", "Year"), ("U9", f"Existing ({_cloudnm}) Cost{_est}"), ("V9", "Existing Util %")):
         colhead(cell, text)
     for y in range(5):
@@ -723,7 +884,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     _box(ws, 10, 22, 14, 22, OV_INPUT_BORDER, "thin")
     _box(ws, 9, 20, 14, 22, OV_NAVY, "thin")
 
-    # Comparison chart (stacked columns + reference line) — identical to on-prem.
+    # Comparison chart (stacked columns + reference line) - identical to on-prem.
     chart = BarChart()
     chart.type = "col"
     chart.grouping = "stacked"
@@ -740,7 +901,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(cats)
     # Set colors on the series AND every data point so Excel can't fall back to a theme.
-    series_colors = ["C00000", "808080"]  # OCI = red, Existing = grey
+    series_colors = [CHART_OCI, CHART_EXISTING]
     for idx, color in enumerate(series_colors):
         if idx >= len(chart.series):
             continue
@@ -756,10 +917,10 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
     line.varyColors = False
     ldata = Reference(ws, min_col=5, max_col=5, min_row=24, max_row=30)
     line.add_data(ldata, titles_from_data=True)
-    # Current Spend = faded red reference line
+    # Current Spend = charcoal reference line
     if line.series:
         lgp = GraphicalProperties()
-        lgp.line.solidFill = "E6A9A9"
+        lgp.line.solidFill = CHART_REFERENCE
         lgp.line.width = 28000  # ~2.2pt so the reference line reads clearly
         line.series[0].graphicalProperties = lgp
         line.series[0].smooth = False
@@ -768,7 +929,7 @@ def build_cloud_overview_sheet(ws, util_by_year, oci_monthly, existing_monthly,
 
     # Small disclaimer note.
     dcell = ws["A32"]
-    dcell.value = ("*Budgetary estimate only — not a quote. The OCI discount shown is "
+    dcell.value = ("*Budgetary estimate only - not a quote. The OCI discount shown is "
                    "applied to the OCI totals on this Overview; detailed sheets list OCI list pricing.")
     dcell.font = Font(italic=True, size=9, color="FF808080")
 
@@ -785,7 +946,7 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
       util_by_year = OCI 5-year utilization ramp (list of 5 fractions)
       aws_ramp     = existing-spend ramp per year (default 50% yr1, 0% after),
                      kept as live editable % cells feeding the Combined / Savings math.
-      source_cloud = "aws"/"azure"/"gcp" — names the existing-spend labels.
+      source_cloud = "aws"/"azure"/"gcp" - names the existing-spend labels.
       estimated    = True when the bill had no pricing and aws_monthly is an App Estimate;
                      appends " (App Estimate)" to the existing-cost labels.
     """
@@ -803,7 +964,7 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
     # right columns (K:M), Current-AWS-vs-OCI block lower at s+18, Chart Data at s+26, and the
     # comparison chart floating in the middle band beside the projection.
     sv = s + 18                       # "Current AWS Spend vs. OCI Estimate" band row
-    cd = s + 26                       # "Chart Data — Comparison" band row
+    cd = s + 26                       # "Chart Data - Comparison" band row
     aws_cell = f"$B${sv+1}"           # editable "Current AWS Spend (monthly)" input cell
 
     def band(cell, text, size=13):
@@ -867,10 +1028,10 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
     _box(ws, s+2, 2, s+6, 2, OV_INPUT_BORDER, "thin")
     _box(ws, s+1, 1, tr, 4, OV_NAVY, "thin")
 
-    # ---- Existing-AWS spend ramp % (editable; default 100% yr1, 0% after) — right of the
+    # ---- Existing-AWS spend ramp % (editable; default 100% yr1, 0% after) - right of the
     #      comparison chart (M:O), one column clear of the chart's right edge at K ----
     ws.merge_cells(f"M{s}:O{s}")
-    band(f"M{s}", "Existing Spend — Ramp %", size=12)
+    band(f"M{s}", "Existing Spend - Ramp %", size=12)
     for col, text in (("M", "Year"), ("N", f"Existing ({_cloudnm}) Cost{_est}"), ("O", "Existing Util %")):
         colhead(f"{col}{s+1}", text)
     for y in range(5):
@@ -907,9 +1068,9 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         CellIsRule(operator="greaterThan", formula=["0"], font=Font(color="FF008000", bold=True)),
     )
 
-    # ---- Chart Data — Comparison ----
+    # ---- Chart Data - Comparison ----
     ws.merge_cells(f"A{cd}:F{cd}")
-    band(f"A{cd}", "Chart Data — Comparison", size=12)
+    band(f"A{cd}", "Chart Data - Comparison", size=12)
     for col, text in (("A", "Year"), ("B", "OCI Estimate"), ("C", f"Existing ({_cloudnm}) Cost{_est}"),
                       ("D", "Combined Cost"), ("E", "Current Spend"), ("F", "Total Savings")):
         colhead(f"{col}{cd+1}", text)
@@ -921,11 +1082,11 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         r = cd + 3 + y
         ws[f"A{r}"] = f"Year {y+1}"; ws[f"A{r}"].alignment = CENTER
         ws[f"B{r}"] = f"=C{s+2+y}"          # OCI Estimate (annual, ramped by utilization)
-        ws[f"C{r}"] = f"=N{s+2+y}"          # Existing (AWS) still running — reflects the ramp (M:O table)
+        ws[f"C{r}"] = f"=N{s+2+y}"          # Existing (AWS) still running - reflects the ramp (M:O table)
         ws[f"D{r}"] = f"=B{r}+C{r}"         # Combined migration cost = OCI + remaining AWS
         ws[f"E{r}"] = f"={aws_cell}*12"     # Current Spend = STATIC full annual AWS (do-nothing baseline)
         # Total Savings is PER-YEAR: do-nothing spend minus the combined (OCI + still-running
-        # AWS) migration cost — negative during dual-running, matching the reference overview.
+        # AWS) migration cost - negative during dual-running, matching the reference overview.
         ws[f"F{r}"] = f"=E{r}-D{r}"
     for r in range(cd+2, cd+8):
         for col in "BCDEF":
@@ -976,7 +1137,7 @@ def add_comparison_to_pricing_overview(ws, start_row, oci_monthly_ref, oci_annua
         line.series[0].graphicalProperties = lgp; line.series[0].smooth = False
     chart += line
     # Make the value (Y) axis actually show its dollar scale, and keep the category (X)
-    # axis labels — openpyxl leaves these blank by default on combined charts.
+    # axis labels - openpyxl leaves these blank by default on combined charts.
     chart.x_axis.delete = False
     chart.y_axis.delete = False
     chart.y_axis.numFmt = '"$"#,##0'
@@ -1161,7 +1322,7 @@ def embed_workflow_state(wb, workflow_json):
         return
     ws = wb.create_sheet(WORKFLOW_SHEET)
     ws.sheet_state = "hidden"
-    ws["A1"] = "OCI BOM workflow state — do not edit. Re-import this file to restore your session."
+    ws["A1"] = "OCI BOM workflow state - do not edit. Re-import this file to restore your session."
     text = workflow_json if isinstance(workflow_json, str) else json.dumps(workflow_json)
     row = 2
     for i in range(0, len(text), _WORKFLOW_CHUNK):
@@ -1299,7 +1460,7 @@ def add_cloud_comparison_sheets(wb, pricing, ramp=None, bom_name="", oci_discoun
         sm_extra_rows.append({
             "__group": "3rd-Party Licensing",
             "sourceService": "Windows OS licensing", "ociServiceCategory": "3rd-Party Licensing",
-            "ociProduct": "OCI Windows OS License — B88318 (per OCPU-hr)",
+            "ociProduct": "OCI Windows OS License - B88318 (per OCPU-hr)",
             "monthly": windows_total, "sourceMonthlyCost": 0.0,
             "windowsLicenseMonthly": 0.0, "sqlLicenseMonthly": windows_total, "costAction": "",
             "fullServiceMapping": {"sourceProduct": "Windows OS (bundled into source instance rate)",
@@ -1307,7 +1468,7 @@ def add_cloud_comparison_sheets(wb, pricing, ramp=None, bom_name="", oci_discoun
         })
 
     # Standalone comparison workbook (use_active) keeps Product Breakdown + Cloud Bill Overview.
-    # The Full BOM append (use_active=False) omits both — the Pricing Overview + Service Mapping
+    # The Full BOM append (use_active=False) omits both - the Pricing Overview + Service Mapping
     # already carry the comparison and the per-line breakdown, so those two are redundant there.
     pb = None
     if use_active:
@@ -1753,7 +1914,7 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0, extra_rows=None):
     EGG = "EAF1F8"  # pale blue off-white for the Savings column + total row
     disc = max(0.0, min(1.0, float(oci_discount or 0)))
 
-    # Shared style objects — reused across every one of the (up to ~7,500) detail rows.
+    # Shared style objects - reused across every one of the (up to ~7,500) detail rows.
     # Allocating a fresh Font/Fill per cell here is what made large bills slow to export.
     _EGG_FILL = _fill(EGG)
     _BASE_FONT = Font(name="Calibri", size=11)
@@ -1872,7 +2033,7 @@ def _cloud_service_mapping_sheet(ws, rows, oci_discount=0.0, extra_rows=None):
                 oci_total += o
             r += 1
 
-    # Totals row — eggshell background, dark bold text (Savings stays green/red).
+    # Totals row - eggshell background, dark bold text (Savings stays green/red).
     total_row = r
     egg_dark = Font(name="Calibri", size=12, bold=True, color="FF2E2A27")
     for i in range(2, 11):
@@ -1933,29 +2094,30 @@ def _util_by_year(ramp):
 
 def build_workbook_bytes(servers, ramp=None, existing_infra_cost=0, shape=None, hide_windows=False, hours=HOURS, bom_name="", auto=False, existing_label="Existing Infra Cost (enter):", oci_discount=0.0, extra_services=None):
     shape = _resolve_shape(shape)
-    # Sheet name auto-fills with the chosen shape (e.g. "BOM w E6 Ax"); in
-    # processor-matching mode each workload gets its own best-fit shape, so say that.
-    sheet_name = ("BOM w Matched Shapes" if auto else f"BOM w {shape['shortLabel']}")[:31]
-    wb = Workbook()
-    bom = wb.active
-    bom.title = sheet_name
-    build_bom_sheet(bom, servers, shape, hide_windows, hours)
-    # App-added OCI services: price them and add both an itemized sheet and their totals.
-    # Split into native OCI (eligible for the OCI discount) and 3rd-party licensing (not).
-    extra_oci = extra_tp = 0.0
+    priced = []
     if extra_services:
         import oci_catalog
         priced, _ = oci_catalog.price_extras(extra_services, hours)
-        for s in priced:
-            if s.get("thirdParty"):
-                extra_tp += float(s["monthly"] or 0)
-            else:
-                extra_oci += float(s["monthly"] or 0)
-        _build_extra_services_sheet(wb, priced, extra_oci + extra_tp)
-    overview = wb.create_sheet("Overview")
-    build_overview_sheet(overview, _util_by_year(ramp), float(existing_infra_cost or 0), sheet_name, existing_label, oci_discount, round(extra_oci, 2), round(extra_tp, 2))
+
+    wb = Workbook()
+    bom = wb.active
+    bom.title = "Shape"
+    build_bom_sheet(bom, servers, shape, hide_windows, hours, priced)
+    overview = wb.create_sheet("Overview", 0)
+    build_overview_sheet(
+        overview,
+        _util_by_year(ramp),
+        float(existing_infra_cost or 0),
+        "Shape",
+        existing_label,
+        oci_discount,
+    )
+    _apply_quick_workbook_theme(wb)
     overview.sheet_view.tabSelected = True
-    wb.active = wb.sheetnames.index("Overview")
+    wb.active = 0
+    wb.calculation.calcMode = "auto"
+    wb.calculation.fullCalcOnLoad = True
+    wb.calculation.forceFullCalc = True
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()

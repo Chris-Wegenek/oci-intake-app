@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OCI Intake — Feature Preview</title>
+<title>OCI Intake - Feature Preview</title>
 <style>
   :root{
     --navy:#7F1D1D; --blue:#3399ff; --ink:#243244; --muted:#54616e;
@@ -47,7 +47,7 @@
 </head>
 <body>
 <header>
-  <h1>OCI Intake & Migration Estimator — Feature Preview</h1>
+  <h1>OCI Intake & Migration Estimator - Feature Preview</h1>
   <p>Static mockup. Flip the controls to see how each feature changes the estimate. Numbers use real OCI rates.</p>
 </header>
 <div class="wrap">
@@ -153,7 +153,7 @@ function render(){
       oci += d.disk*DISK + (10*d.disk)*PERF;
       badge=`<span class="flag flag-gpu">GPU</span>`;
     } else {
-      const f=fit(d.vendor,ocpu,mem); shapeName=f.name||"—";
+      const f=fit(d.vendor,ocpu,mem); shapeName=f.name||"-";
       const s=SHAPE[LABEL[d.vendor]];
       oci = ocpu*s.o*HRS + mem*s.m*HRS + d.disk*DISK + (10*d.disk)*PERF;
       if(d.os==="windows" && !hideWin) oci += ocpu*WIN*HRS;

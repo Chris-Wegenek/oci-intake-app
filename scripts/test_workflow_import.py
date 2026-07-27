@@ -71,7 +71,7 @@ check("large xlsx round-trip intact", out == big,
       "len_in=%d len_out=%s" % (len(big["rows"]), len(out.get("rows", [])) if out else "None"))
 
 print("\nEDGE CASE 4: unicode / special chars")
-uni = {"bomName": "Café — Über \"quotes\" \\ 日本語 \n newline", "rows": [{"__id": "u1"}]}
+uni = {"bomName": "Café - Über \"quotes\" \\ 日本語 \n newline", "rows": [{"__id": "u1"}]}
 check("unicode xlsx round-trip", roundtrip_xlsx(uni) == uni)
 check("unicode json round-trip", roundtrip_json(uni) == uni)
 

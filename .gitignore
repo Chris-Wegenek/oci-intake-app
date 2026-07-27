@@ -46,3 +46,4 @@ data/oci_resiliency_best_practices.json
 *.pptx
 # Agent scratch notes (may reference customer names)
 AGENT_READOUT.md
+.vercel

@@ -1,4 +1,4 @@
-"""Full BOM export — the 12-sheet Oracle BOM deliverable.
+"""Full BOM export - the 12-sheet Oracle BOM deliverable.
 
 Rebuilds the customer-facing BOM workbook (Table of Contents, Assumptions, Rate
 Card, Pricing Overview, Compute, Storage, Networking, DR, Security KMS,
@@ -6,15 +6,17 @@ Consumption Ramp, Annexure, Applications Migrated to OCI) from the full-fidelity
 build-spec (data/bom_template_spec.json), then populates its data sheets from the
 app's priced inventory.
 
-The spec carries every style, merge, image, data-validation, conditional format and
-formula, so the rebuilt workbook is visually identical to the reference deliverable.
-Only the DATA rows are replaced with the app's inventory.
+The spec carries the reference workbook's visual system: styles, merges, logo,
+data-validation, and conditional formatting. Every customer-specific value, assumption,
+scenario, server name, formula input, and architecture image is rebuilt from the current
+app state or removed.
 
 Compute sheet contract (from the template):
     A VM/Server  B Tier  C Environment  D Master Application  E Master Description
     F Virtual/Physical  G OS Name  H OS Family  I vCPU/Cores  J OCPU (formula)
     K Memory GB  L Storage GB  M Block VPUs (formula)  N Monthly Hours
-    O RAM $/mo  P OCPU $/mo  Q Block $/mo  R Total $/mo   (O..R formulas)
+    O RAM $/mo  P OCPU $/mo  Q Block $/mo  R Total $/mo  S Total $/year
+    T Source Shape  U OCI Shape
     Rate Card refs: C8=OCPU rate, C9=RAM rate, C10=block rate, C11=VPU rate,
     C12=default VPUs.  Compute!B9 = E6 optimization factor.
 """
@@ -46,7 +48,7 @@ SPEC_PATH = Path(__file__).resolve().parent / "data" / "bom_template_spec.json"
 # openpyxl uses Pillow ONLY to read an image's width/height when embedding. That single
 # dependency kept dropping the architecture diagram (and logos) on machines without Pillow.
 # We don't need Pillow for that: PNG dimensions live in the file header. When Pillow is
-# missing we parse the header ourselves and monkeypatch openpyxl so images embed anyway —
+# missing we parse the header ourselves and monkeypatch openpyxl so images embed anyway -
 # the image bytes are written from the original file, never from PIL.
 try:
     import PIL  # noqa: F401
@@ -56,7 +58,7 @@ except ImportError:
 
 
 def _png_dimensions(src):
-    """(width, height) from a PNG's IHDR header — no Pillow needed. src is a path or bytes."""
+    """(width, height) from a PNG's IHDR header - no Pillow needed. src is a path or bytes."""
     import struct
     if hasattr(src, "read"):
         pos = src.tell(); head = src.read(24); src.seek(pos)
@@ -72,7 +74,7 @@ def _png_dimensions(src):
 
 class _HeaderImage:
     """Stand-in for a PIL image. openpyxl's Image class only touches .size, .format, a
-    readable .fp, and .close() — never any real decoding — so this is all it needs to embed
+    readable .fp, and .close() - never any real decoding - so this is all it needs to embed
     a PNG. The raw bytes are carried through unchanged."""
     def __init__(self, data):
         import io
@@ -118,16 +120,17 @@ COMPUTE_SHEET = "Compute"
 COMPUTE_HEADER_ROW = 13
 COMPUTE_FIRST_ROW = 14
 COMPUTE_LAST_TEMPLATE_ROW = 689          # rows the reference deliverable ships with
-COMPUTE_FORMULA_COLS = ["J", "M", "O", "P", "Q", "R"]
-COMPUTE_ALL_COLS = list("ABCDEFGHIJKLMNOPQR")
+COMPUTE_FORMULA_COLS = ["J", "M", "O", "P", "Q", "R", "S"]
+COMPUTE_ALL_COLS = list("ABCDEFGHIJKLMNOPQRSTU")
 
 APPS_SHEET = "Applications Migrated to OCI"
-APPS_FIRST_ROW = 6
+APPS_FIRST_ROW = 7
 APPS_LAST_TEMPLATE_ROW = 207
 APPS_FORMULA_COLS = list("BCDEFGH")
 
 STORAGE_SHEET = "Storage"
-STORAGE_FIRST_ROW = 10
+STORAGE_HEADER_ROW = 10
+STORAGE_FIRST_ROW = 11
 STORAGE_LAST_TEMPLATE_ROW = 21
 
 
@@ -362,13 +365,38 @@ def _postprocess(path, spec):
             parts.append(f'<color theme="{c["theme"]}"/>')
         return "<font>" + "".join(parts) + "</font>"
 
-    zero_rows = {}
-    for i, sd in enumerate(spec["sheets"], start=1):
-        zr = [r for r, d in sd.get("row_dimensions", {}).items() if d.get("height") == 0]
-        if zr:
-            zero_rows[f"xl/worksheets/sheet{i}.xml"] = zr
-
     tmp = str(path) + ".tmp"
+    with zipfile.ZipFile(path) as zin:
+        # New service tabs are inserted among the reference sheets, so worksheet XML
+        # numbers no longer match the original 12-sheet spec. Resolve each sheet by its
+        # workbook relationship instead of assuming sheet1/sheet2/... positional identity.
+        import xml.etree.ElementTree as ET
+        main_ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        rel_attr = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        rel_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
+        book_root = ET.fromstring(zin.read("xl/workbook.xml"))
+        rel_root = ET.fromstring(zin.read("xl/_rels/workbook.xml.rels"))
+        targets = {
+            rel.get("Id"): rel.get("Target")
+            for rel in rel_root.findall(f"{{{rel_ns}}}Relationship")
+        }
+        sheet_paths = {}
+        for sheet in book_root.findall(f".//{{{main_ns}}}sheet"):
+            target = targets.get(sheet.get(rel_attr), "")
+            if target.startswith("/"):
+                target = target.lstrip("/")
+            elif target and not target.startswith("xl/"):
+                target = f"xl/{target}"
+            sheet_paths[sheet.get("name")] = target
+
+        zero_rows = {}
+        for sd in spec["sheets"]:
+            zr = [r for r, d in sd.get("row_dimensions", {}).items()
+                  if d.get("height") == 0]
+            target = sheet_paths.get(sd["name"])
+            if zr and target:
+                zero_rows[target] = zr
+
     with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             data = zin.read(item.filename)
@@ -434,7 +462,7 @@ def _find_field(fields, *needle_sets):
 
 
 def _distinct_sites(fields, rows):
-    """How many distinct sites the inventory actually names — None when it has no site
+    """How many distinct sites the inventory actually names - None when it has no site
     column at all (most VM exports don't). Drives whether the diagram draws remote sites."""
     key = _find_field(fields, ["site"], ["location"], ["datacenter"], ["data", "center"],
                       ["campus"], ["facility"])
@@ -484,7 +512,7 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     vpu_ref = rate_refs.get("vpu")
     vpus_ref = rate_refs.get("vpus")
     protos["O"] = (f"=ROUND(K{R}*N{R}*'Rate Card'!$C${ram_ref},2)" if ram_ref else 0)
-    # Compute optimization adjusts the OCPU/RAM QUANTITIES (columns J and K) — it must NOT
+    # Compute optimization adjusts the OCPU/RAM QUANTITIES (columns J and K) - it must NOT
     # also discount the price here, or it would double-count. Price flows straight from the
     # optimized sizing.
     protos["P"] = (f"=ROUND(J{R}*N{R}*'Rate Card'!$C${ocpu_ref},2)" if ocpu_ref else 0)
@@ -496,20 +524,39 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     # Block-VPU seed (column M) references the Rate Card default-VPUs cell.
     protos["M"] = (f"=IF($A{R}<>\"\",'Rate Card'!$C${vpus_ref},\"\")" if vpus_ref else '=""')
 
-    # Columns S/T show the shape mapping: what each server maps FROM (source) and TO (OCI).
+    # The Polaris template reserves S for Total Annual. T/U show what each server maps
+    # FROM (source) and TO (OCI) without overwriting that annual-cost formula.
     from copy import copy as _copy_style
     _hdr_style = ws.cell(13, 1)._style
-    ws.cell(13, 19).value = "Source Shape (Mapped From)"
-    ws.cell(13, 19)._style = _copy_style(_hdr_style)
-    ws.cell(13, 20).value = "OCI Shape (Mapped To)"
+    ws.cell(13, 20).value = "Source Shape (Mapped From)"
     ws.cell(13, 20)._style = _copy_style(_hdr_style)
-    ws.column_dimensions["S"].width = 24
-    ws.column_dimensions["T"].width = 22
-    # The O/P/R headers hard-coded "E6"; restate them for whatever shape is used.
-    if shape_label:
-        ws["O13"] = f"{shape_label} RAM Monthly"
-        ws["P13"] = f"{shape_label} OCPU Monthly"
-        ws["R13"] = f"{shape_label} Total Monthly"
+    ws.cell(13, 21).value = "OCI Shape (Mapped To)"
+    ws.cell(13, 21)._style = _copy_style(_hdr_style)
+    ws.column_dimensions["T"].width = 24
+    ws.column_dimensions["U"].width = 22
+    # The reference headers hard-coded E6. Always restate them from this export.
+    target_label = shape_label or "OCI Flex"
+    ws["O13"] = f"{target_label} RAM Monthly"
+    ws["P13"] = f"{target_label} OCPU Monthly"
+    ws["R13"] = f"{target_label} Total Monthly"
+    ws["S13"] = f"{target_label} Total Annual"
+    ws["F5"] = "Compute rows and pricing below are generated from the current estimate."
+    ws["F6"] = (
+        "VM-attached block storage uses the capacity and performance-unit rates listed "
+        "in this export's Rate Card."
+    )
+    ws["F7"] = (
+        "OCPU quantities use the source CPU interpretation selected in the estimator."
+    )
+    ws["F8"] = (
+        "Monthly hours are carried from the current estimate for each workload."
+    )
+    ws["F9"] = (
+        "Rightsizing is reflected only when it is enabled in the current estimate."
+    )
+    ws["F10"] = (
+        "Software licensing is included only when selected or detected by the estimator."
+    )
 
     last_written = COMPUTE_FIRST_ROW - 1
     for i, s in enumerate(servers):
@@ -531,17 +578,17 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
         ws[f"L{r}"] = s.get("storage_gb") or None
         # Per-row hours from the data source (falls back to the global hours).
         ws[f"N{r}"] = s.get("hours") or hours
-        ws[f"S{r}"] = s.get("source_shape") or None          # Mapped From (source)
-        ws[f"T{r}"] = s.get("shape") or shape_label or None   # Mapped To (OCI)
-        ws[f"S{r}"]._style = _copy_style(proto_styles["A"])
+        ws[f"T{r}"] = s.get("source_shape") or None          # Mapped From (source)
+        ws[f"U{r}"] = s.get("shape") or shape_label or None  # Mapped To (OCI)
         ws[f"T{r}"]._style = _copy_style(proto_styles["A"])
+        ws[f"U{r}"]._style = _copy_style(proto_styles["A"])
         for c in COMPUTE_FORMULA_COLS:
             proto = protos.get(c)
             if proto:
                 ws[f"{c}{r}"] = Translator(
                     proto, origin=f"{c}{COMPUTE_FIRST_ROW}").translate_formula(f"{c}{r}")
         # The source workbook shipped its data rows COLLAPSED (hidden=True on all 1,061 of
-        # them), and the spec reproduces that faithfully — so every server we wrote was
+        # them), and the spec reproduces that faithfully - so every server we wrote was
         # invisible in the export and the sheet looked empty. Show the rows we populate.
         rd = ws.row_dimensions[r]
         rd.hidden = False
@@ -559,23 +606,48 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     return last_written
 
 
-def _populate_apps(ws, apps):
-    """Applications Migrated to OCI: app names in col A; B..H are template formulas."""
+def _populate_apps(ws, apps, servers=None, shape_label=""):
+    """Applications Migrated to OCI: current app names, formulas, and example VMs only."""
     protos = {c: ws[f"{c}{APPS_FIRST_ROW}"].value for c in APPS_FORMULA_COLS}
+    proto_styles = {c: ws[f"{c}{APPS_FIRST_ROW}"]._style for c in "ABCDEFGHI"}
+    _clear_range(ws, APPS_FIRST_ROW, APPS_LAST_TEMPLATE_ROW, list("ABCDEFGHI"))
+    target_label = shape_label or "OCI Flex"
+    ws["C6"] = f"{target_label} Monthly Baseline"
+    ws["D6"] = f"{target_label} Annual Baseline"
+    ws["I6"] = "Example VMs"
+    by_app = {}
+    for server in servers or []:
+        app = _clean(server.get("app"))
+        name = _clean(server.get("server"))
+        if app and name:
+            by_app.setdefault(app, []).append(name)
     last = APPS_FIRST_ROW - 1
     for i, name in enumerate(apps):
         r = APPS_FIRST_ROW + i
         if r > APPS_LAST_TEMPLATE_ROW:
             break
+        for c in "ABCDEFGHI":
+            ws[f"{c}{r}"]._style = proto_styles[c]
+        ws.row_dimensions[r].hidden = False
         ws[f"A{r}"] = name
         for c in APPS_FORMULA_COLS:
             proto = protos.get(c)
             if proto:
                 ws[f"{c}{r}"] = Translator(
                     proto, origin=f"{c}{APPS_FIRST_ROW}").translate_formula(f"{c}{r}")
+        for c in "BCDEFGH":
+            ws[f"{c}{r}"].alignment = Alignment(horizontal="right", vertical="center")
+        ws[f"B{r}"].number_format = "#,##0"
+        for c in "CD":
+            ws[f"{c}{r}"].number_format = '"$"#,##0.00'
+        for c in "EFGH":
+            ws[f"{c}{r}"].number_format = "#,##0.00"
+        ws[f"I{r}"] = ", ".join(by_app.get(name, [])[:6]) or None
         last = r
     if last < APPS_LAST_TEMPLATE_ROW:
-        _clear_range(ws, last + 1, APPS_LAST_TEMPLATE_ROW, list("ABCDEFGH"))
+        _clear_range(ws, last + 1, APPS_LAST_TEMPLATE_ROW, list("ABCDEFGHI"))
+        for r in range(last + 1, APPS_LAST_TEMPLATE_ROW + 1):
+            ws.row_dimensions[r].hidden = True
 
 
 def _populate_storage(ws, storage_rows, rate_refs=None, file_rate=None):
@@ -588,6 +660,17 @@ def _populate_storage(ws, storage_rows, rate_refs=None, file_rate=None):
     rate_refs = rate_refs or {}
     file_ref = rate_refs.get("file")
     proto = ws[f"A{STORAGE_FIRST_ROW}"]._style
+    headers = [
+        "Workload / Service", "Tier", "Environment", "Application", "Source Signal",
+        "OCI Storage Target", "Capacity (GB)", "Unit Rate", "Monthly", "Annual",
+    ]
+    ws["F5"] = "Rows below are populated from storage services in the current estimate."
+    ws["A6"] = "Includes only storage entries present in the current estimator state."
+    ws["F6"] = "VM-attached block storage remains priced on the Compute tab."
+    ws["F7"] = "No capacities or storage scenarios are imported from the styling reference."
+    ws["A8"] = "Storage detail below is generated from the current estimate."
+    for c, value in enumerate(headers, 1):
+        ws.cell(STORAGE_HEADER_ROW, c).value = value
     _clear_range(ws, STORAGE_FIRST_ROW, STORAGE_LAST_TEMPLATE_ROW, list("ABCDEFGHIJ"))
     for i, s in enumerate(storage_rows):
         r = STORAGE_FIRST_ROW + i
@@ -611,6 +694,7 @@ def _populate_storage(ws, storage_rows, rate_refs=None, file_rate=None):
         else:
             ws[f"H{r}"] = rate
             ws[f"I{r}"] = round(float(s.get("monthly") or 0), 2)
+        ws[f"J{r}"] = f"=I{r}*12"
 
 
 def _cloud_storage_rows(pricing):
@@ -641,6 +725,26 @@ def _cloud_storage_rows(pricing):
             "gb": round(v["gb"], 2) or None,
             "rate": round(v["monthly"] / v["gb"], 6) if v["gb"] else None,
             "monthly": round(v["monthly"], 2),
+        })
+    return rows
+
+
+def _extra_storage_rows(extra_priced):
+    """Summarize added Storage-category services in the reference Storage table."""
+    rows = []
+    for service in extra_priced or []:
+        if _service_category(service.get("group"), service.get("name")) != "Storage":
+            continue
+        qty = float(service.get("qty") or 0)
+        unit = _norm(service.get("unit"))
+        gb = qty if "gb" in unit else None
+        rows.append({
+            "server": service.get("name"),
+            "signal": "Added in service catalog",
+            "target": service.get("name"),
+            "gb": round(gb, 2) if gb else None,
+            "rate": float(service.get("rate") or 0) or None,
+            "monthly": round(float(service.get("monthly") or 0), 2),
         })
     return rows
 
@@ -700,7 +804,7 @@ def _collect_rate_card_entries(shape, block_rate, vpu_rate, default_vpus, hours,
     # Every distinct mapped-service SKU that appears in the priced line items (covers
     # cloud-bill services: OIC, ADW, Load Balancer, WAF, DNS, Object Storage, etc.). A SKU
     # can appear on many lines (e.g. OIC's single priced anchor plus zero-cost consolidated
-    # rows) — keep the line with the highest unit rate so the rate card shows the real rate.
+    # rows) - keep the line with the highest unit rate so the rate card shows the real rate.
     core_skus = {e["sku"] for e in entries if e["sku"] and e["sku"] != "N/A"}
     info = {}
 
@@ -725,8 +829,19 @@ def _collect_rate_card_entries(shape, block_rate, vpu_rate, default_vpus, hours,
         try:
             import oci_catalog
             priced, _ = oci_catalog.price_extras(extra_services, hours)
-            for e in priced:
-                note_used(_clean(e.get("sku")), _clean(e.get("name")), _clean(e.get("unit")), None)
+            for service in priced:
+                service_lines = service.get("skus") or [{
+                    "sku": service.get("sku"),
+                    "desc": service.get("name"),
+                    "rate": service.get("rate"),
+                }]
+                for line in service_lines:
+                    note_used(
+                        _clean(line.get("sku")),
+                        _clean(line.get("desc")) or _clean(service.get("name")),
+                        _clean(service.get("unit")),
+                        line.get("rate"),
+                    )
         except Exception:
             pass
 
@@ -753,7 +868,7 @@ def _write_rate_card(ws, entries):
         for i in range(1, 7):
             ws.cell(r, i).value = None
 
-    ws.cell(4, 1).value = "RATE CARD — ONLY THE SKUS / RATES USED IN THIS BUILD"
+    ws.cell(4, 1).value = "RATE CARD - ONLY THE SKUS / RATES USED IN THIS BUILD"
     headers = ["SKU", "Input", "Value", "Unit", "Workbook Use / Note"]
     for i, (c, h) in enumerate(zip(cols, headers), 1):
         cell = ws.cell(RATE_CARD_HDR_ROW, i)
@@ -789,7 +904,7 @@ def _write_rate_card(ws, entries):
 def embed_architecture(ws_po, png_path, anchor_spec=None):
     """Drop this BOM's generated diagram into the Pricing Overview's architecture slot.
 
-    The template no longer carries an architecture picture — only its ANCHOR (the cell
+    The template no longer carries an architecture picture - only its ANCHOR (the cell
     footprint the picture occupied), kept in the spec as `architecture_anchor`. The image
     itself was the source workbook's own architecture drawing: 637 KB of another customer's
     diagram, decoded and inserted on every export just to be overwritten. Storing the
@@ -856,7 +971,7 @@ CUSTOMER_TOKEN = "{{CUSTOMER}}"
 def _apply_customer_name(wb, bom_name):
     """Swap the template's {{CUSTOMER}} token for the BOM name the user typed.
 
-    The template is deliberately customer-neutral — it must never ship one client's name
+    The template is deliberately customer-neutral - it must never ship one client's name
     (or servers, or numbers) inside another client's deliverable. Every customer-specific
     string in the spec is the token; this is the only place a real name enters the
     workbook. With no BOM name, it degrades to a generic "the customer".
@@ -880,10 +995,60 @@ def _apply_customer_name(wb, bom_name):
 
 
 def _set_toc(ws, bom_name):
-    if bom_name:
-        ws["B5"] = bom_name
-        ws["A1"] = f"{bom_name} — OCI Migration BOM"
+    name = (bom_name or "").strip()
+    title = name or "OCI Bill of Materials"
+    ws["A1"] = f"{title} - OCI BOM"
+    ws["B5"] = title
+    ws["B6"] = f"{title} OCI estimate"
+    ws["B7"] = "OCI BOM + Architecture Generator"
+    ws["A8"] = "Generated On"
     ws["B8"] = datetime.date.today().isoformat()
+    ws.row_dimensions[8].hidden = False
+    ws.row_dimensions[8].height = 20
+    ws["A10"] = "Workbook Status"
+    ws["B10"] = "Generated from current estimate"
+    ws["B11"] = (
+        "Includes only workloads, services, pricing selections, and ramp inputs present "
+        "in the current estimator session."
+    )
+    ws["B12"] = "Oracle Cloud Infrastructure"
+
+
+def _set_assumptions(ws, servers, shape_label="", hours=None):
+    """Replace the reference customer's narrative with facts from this export."""
+    compute_count = len(servers or [])
+    ws["A5"] = (
+        f"• This export contains {compute_count:,} priced compute workload "
+        f"{'row' if compute_count == 1 else 'rows'} from the current estimate."
+    )
+    ws["A6"] = (
+        "• Service, application, storage, and architecture details are populated only "
+        "when they exist in the current estimator state."
+    )
+    ws["A7"] = (
+        "• No workload names, capacities, migration waves, site counts, or scope "
+        "assumptions are inherited from the styling reference."
+    )
+    ws["A8"] = (
+        "• Pricing remains a planning estimate and should be validated against the "
+        "current Oracle ordering documents."
+    )
+    assumptions = [
+        ("Scope", "Only current estimator workloads and selected OCI services are included."),
+        ("Pricing catalog", "SKU rates are copied from the application's current OCI catalog at export time."),
+        ("Selected compute shape", shape_label or "No compute shape was selected."),
+        ("Monthly usage", (
+            f"The default is {float(hours):g} hours per month; workload-specific values "
+            "from the estimate take precedence." if hours else
+            "Monthly usage is carried from each current estimate row."
+        )),
+        ("Licensing", "Licensing is included only when selected or detected in the current estimate."),
+        ("Optional services", "Unselected services contribute no quantity or cost."),
+        ("Reference workbook", "Used for visual styling only; its customer data and assumptions are excluded."),
+    ]
+    for row, (label, value) in enumerate(assumptions, 11):
+        ws[f"A{row}"] = label
+        ws[f"C{row}"] = value
 
 
 # One-line purpose / primary-use blurbs for the Table of Contents, keyed by sheet name.
@@ -898,22 +1063,32 @@ _TOC_DESC = {
                         "See how each source service maps and prices; the total ties to the Pricing Overview."),
     "Compute": ("VM inventory with source-to-OCI shape mapping and compute pricing.",
                 "Review each server's shape mapping and adjust monthly hours."),
-    "Storage": ("Storage BOM candidates and storage estate inputs.",
-                "Review object, file, block, and backup storage."),
-    "Networking": ("FastConnect, load balancing, VPN, DNS, and egress planning.",
-                   "Review private connectivity and included network costs."),
-    "DR": ("Disaster-recovery pattern, tier fit, and cost-range planning.",
-           "Compare backup/restore, pilot-light, warm, and hot standby options."),
-    "Security KMS": ("OCI key-management options for external HSM / PKI needs.",
-                     "Review the key-management model and included KMS pricing."),
+    "Storage": ("Storage services populated by the current estimate.",
+                "Review mapped storage quantities, rates, and cost."),
+    "Networking": ("Networking services populated by the current estimate.",
+                   "Review mapped networking quantities, rates, and cost."),
+    "DR": ("Disaster-recovery services populated by the current estimate.",
+           "Review mapped DR quantities, rates, and cost."),
+    "Security KMS": ("Security services populated by the current estimate.",
+                     "Review mapped security quantities, rates, and cost."),
     "Consumption Ramp": ("Month-by-month consumption ramp and 5-year projection.",
-                         "See the migration-wave ramp and cumulative cost."),
-    "Annexure Addendum to Storage": ("Detailed storage scenarios and backup sizing.",
-                                     "Optional storage detail."),
+                         "See the configured ramp and cumulative cost."),
+    "Annexure Addendum to Storage": ("Optional storage detail from the current estimate.",
+                                     "Review only when current storage inputs populate it."),
     "Applications Migrated to OCI": ("Application-level migration summary.",
                                      "Filter by application for VM counts, tier mix, and cost."),
     "Database": ("Database service mapping and pricing detail.",
                  "Review DB shapes, editions, and storage."),
+    "Integration": ("Integration service SKU mapping and pricing detail.",
+                    "Review OIC, API, event, and messaging services."),
+    "Observability": ("Observability and management service detail.",
+                      "Review logging, monitoring, and management usage."),
+    "AI and Machine Learning": ("AI and machine-learning service detail.",
+                                "Review GPU, AI, and model-service mappings."),
+    "Licensing": ("Third-party licensing SKU detail.",
+                  "Review license quantities and non-discountable cost."),
+    "Other Services": ("Additional OCI service mapping and pricing detail.",
+                       "Review services outside the core infrastructure tabs."),
     "Notes + Assumptions": ("Per-service mapping notes and assumptions.",
                             "Reference for how each source service was mapped."),
 }
@@ -1027,7 +1202,7 @@ def _cloud_effective_hours(pr):
 
 def _add_cloud_bill_services(wb, pricing):
     """Set the Pricing Overview lines from the app's EXACT per-row monthly so the whole
-    cloud bill ties out — every service, not just compute.
+    cloud bill ties out - every service, not just compute.
 
     Each bill line's monthly is allocated to one Overview line by category. Compute rows
     carry non-OCPU/RAM costs too (attached storage, data transfer...), so compute is split
@@ -1142,7 +1317,7 @@ def _add_product_group_topics(wb, pricing):
         ws2.column_dimensions["B"].width = 46
         ws2.column_dimensions["C"].width = 18
         ws2.column_dimensions["D"].width = 18
-        ws2["A1"] = f"{grp} — OCI mapped services"
+        ws2["A1"] = f"{grp} - OCI mapped services"
         ws2["A1"].font = Font(name="Calibri", size=14, bold=True)
         for c, txt in ((1, "AWS Service"), (2, "OCI Product"),
                        (3, "AWS Monthly"), (4, "OCI Monthly")):
@@ -1173,7 +1348,7 @@ def _add_product_group_topics(wb, pricing):
 def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, is_ax=False):
     """Relabel and fill the Compute-optimization block.
 
-    The optimization does NOT discount the price directly — it shrinks each VM's OCPU and
+    The optimization does NOT discount the price directly - it shrinks each VM's OCPU and
     RAM quantities (columns J/K) via ceil(value*(1-pct)), floored at 2, and the price then
     flows from the smaller sizing. B9 is a record of what was applied ("% approximation"),
     not a live multiplier. For Ax shapes the base %% deepens with the source instance's
@@ -1186,7 +1361,7 @@ def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, i
         ws_compute["B9"] = f"{lo}–{hi}%" if lo != hi else f"{hi}%"
         if is_ax:
             ws_compute["C9"] = (
-                f"% approximation — Ax base OCPU ~{int(round(ocpu_pct*100))}%, RAM ~"
+                f"% approximation - Ax base OCPU ~{int(round(ocpu_pct*100))}%, RAM ~"
                 f"{int(round(ram_pct*100))}%, doubled (×2) for each generation the source "
                 "instance is behind the newest OCI generation (1 gen = base, 2 gens = ×2, "
                 "3 gens = ×4, …), capped at 95%. Applied to the sizing in columns J and K "
@@ -1195,7 +1370,7 @@ def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, i
             )
         else:
             ws_compute["C9"] = (
-                f"% approximation — OCPU reduced ~{int(round(ocpu_pct*100))}%, RAM ~"
+                f"% approximation - OCPU reduced ~{int(round(ocpu_pct*100))}%, RAM ~"
                 f"{int(round(ram_pct*100))}%, applied to the sizing in columns J and K as "
                 "ceil(value × (1 − %)) with a floor of 2. Price follows the reduced "
                 "sizing; this % is not a direct price discount."
@@ -1203,9 +1378,12 @@ def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, i
     else:
         ws_compute["B9"] = "0%"
         ws_compute["C9"] = (
-            "% approximation — no compute optimization applied (Rightsize off, or the "
+            "% approximation - no compute optimization applied (Rightsize off, or the "
             "selected shape is not eligible). Sizing is carried over as-is."
         )
+    ws_compute["F9"] = (
+        "Rightsizing is reflected only when it is enabled in the current estimate."
+    )
     # Strip any hidden note/comment or data-validation input prompt the template attached
     # to B9 (it shows as a tooltip on the cell and is separate from the visible C9 text).
     _clear_cell_note(ws_compute, "B9")
@@ -1238,7 +1416,7 @@ def _add_extra_services(wb, extra_priced):
     Security -> B19, everything else -> B16), by appending its monthly cost to that line's
     formula. Those lines all sit inside the Total's SUM(B13:B21), so the workbook total
     picks the extras up automatically and still ties out. The added services are also
-    itemized on a dedicated sheet for traceability.
+    itemized on their matching service tabs for traceability.
 
     `extra_priced` is the authoritative list from oci_catalog.price_extras().
     """
@@ -1249,7 +1427,9 @@ def _add_extra_services(wb, extra_priced):
     sums = {}
     non_storage_into_16 = False
     for s in extra_priced:
-        row = oci_catalog.GROUP_TO_OVERVIEW_ROW.get(s["group"], 16)
+        category = _service_category(s.get("group"), s.get("name"), s.get("name"))
+        row = 20 if category == "DR" else oci_catalog.GROUP_TO_OVERVIEW_ROW.get(
+            s["group"], 16)
         sums[row] = sums.get(row, 0.0) + float(s["monthly"] or 0)
         if row == 16 and s["group"] not in ("Storage", "Database"):
             non_storage_into_16 = True
@@ -1266,62 +1446,331 @@ def _add_extra_services(wb, extra_priced):
     if 16 in sums and non_storage_into_16:
         ws["A16"] = "Storage / Other OCI Services:"
 
-    _itemize_extra_services(wb, extra_priced)
+_SERVICE_SHEETS = {
+    "Compute": "Compute",
+    "Storage": "Storage",
+    "Networking": "Networking",
+    "Database": "Database",
+    "Integration": "Integration",
+    "Security": "Security KMS",
+    "Observability": "Observability",
+    "AI & Machine Learning": "AI and Machine Learning",
+    "Licensing": "Licensing",
+    "Other Services": "Other Services",
+    "DR": "DR",
+}
 
 
-def _itemize_extra_services(wb, extra_priced):
-    """Write a dedicated 'Added OCI Services' sheet listing EVERY constituent SKU of each
-    app-added service (the estimator's 'Pricing Details'). Pure paper trail — the amounts
-    already flow to the Pricing Overview category lines via _add_extra_services, so nothing
-    here is summed into any total that feeds the BOM (no double-counting)."""
-    if not extra_priced:
+def _service_category(category, product="", source_service=""):
+    """Normalize app/catalog and cloud-bill group names to the service tabs used by the BOM."""
+    raw = _clean(category)
+    key = _norm(raw)
+    aliases = {
+        "compute": "Compute",
+        "storage": "Storage",
+        "networking": "Networking",
+        "database": "Database",
+        "integration": "Integration",
+        "devops": "Integration",
+        "security": "Security",
+        "observability": "Observability",
+        "obs management": "Observability",
+        "ai machine learning": "AI & Machine Learning",
+        "ai and machine learning": "AI & Machine Learning",
+        "licensing": "Licensing",
+        "other services": "Other Services",
+        "support": "Other Services",
+        "marketplace": "Other Services",
+    }
+    combined = _norm(f"{product} {source_service}")
+    if "full stack disaster recovery" in combined or "full stack dr" in combined:
+        return "DR"
+    return aliases.get(key, "Other Services")
+
+
+def _service_detail_lines(pricing, extra_priced):
+    """Return a full, per-SKU paper trail grouped by the app's service categories."""
+    import bom_export
+    grouped = {}
+
+    def add(category, line):
+        grouped.setdefault(category, []).append(line)
+
+    source_cloud = _clean((pricing or {}).get("sourceCloud")).upper()
+    for row in (pricing or {}).get("rows", []):
+        if (row.get("costAction") or "") == "remove":
+            continue
+        # VM rows already have their complete compute/storage contract on the Compute
+        # sheet. Some on-prem estimates do not set ociServiceCategory, so category text
+        # alone cannot be used to recognize them. Keep only third-party license line
+        # items from those rows for the Licensing tab; never duplicate the VM's OCPU,
+        # RAM, and block SKUs into Other Services.
+        if (row.get("specs") or {}).get("ocpus"):
+            source = _clean(row.get("sourceService")) or "uploaded inventory"
+            for item in row.get("lineItems") or []:
+                description = _clean(item.get("description"))
+                if not any(term in _norm(description)
+                           for term in ("windows", "sql server", "license", "licence")):
+                    continue
+                note = f"Mapped from {source_cloud + ' ' if source_cloud else ''}{source}."
+                mapping = _clean(item.get("mapping"))
+                if mapping:
+                    note += f" {mapping}"
+                add("Licensing", {
+                    "component": description or _clean(row.get("ociProduct")),
+                    "sku": _clean(item.get("sku")),
+                    "unit": _clean(item.get("unit")) or "usage",
+                    "rate": float(item.get("rate") or 0),
+                    "qty": item.get("quantity"),
+                    "hours": item.get("hours"),
+                    "monthly": float(item.get("monthly") or 0),
+                    "notes": note,
+                })
+            continue
+        raw_cat = row.get("ociServiceCategory")
+        if not raw_cat:
+            raw_cat = bom_export._cloud_product_group(
+                raw_cat, row.get("sourceService"), row.get("ociProduct"))
+        category = _service_category(
+            raw_cat, row.get("ociProduct"), row.get("sourceService"))
+        items = row.get("lineItems") or [{
+            "sku": (row.get("fullServiceMapping") or {}).get("sku"),
+            "description": row.get("ociProduct"),
+            "quantity": 1,
+            "unit": "month",
+            "rate": row.get("monthly"),
+            "monthly": row.get("monthly"),
+        }]
+        for i, item in enumerate(items):
+            source = _clean(row.get("sourceService")) or "uploaded inventory"
+            mapping = _clean(item.get("mapping"))
+            note = f"Mapped from {source_cloud + ' ' if source_cloud else ''}{source}."
+            if mapping:
+                note += f" {mapping}"
+            add(category, {
+                "component": _clean(row.get("ociProduct")) if i == 0 else "",
+                "sku": _clean(item.get("sku")),
+                "unit": _clean(item.get("unit")) or "usage",
+                "rate": float(item.get("rate") or 0),
+                "qty": item.get("quantity"),
+                "hours": item.get("hours"),
+                "monthly": float(item.get("monthly") or 0),
+                "notes": note,
+            })
+
+    for service in extra_priced or []:
+        category = _service_category(
+            service.get("group"), service.get("name"), service.get("name"))
+        skus = service.get("skus") or [{
+            "sku": service.get("sku"), "desc": service.get("name"),
+            "qty": service.get("qty"), "rate": service.get("rate"),
+            "hours": service.get("hours"), "monthly": service.get("monthly"),
+        }]
+        for i, item in enumerate(skus):
+            note = "Added in the Networking and Other Services step."
+            sizing = _clean(service.get("sizing"))
+            if sizing:
+                note += f" {sizing}"
+            add(category, {
+                "component": _clean(service.get("name")) if i == 0 else _clean(item.get("desc")),
+                "sku": _clean(item.get("sku")),
+                "unit": _clean(service.get("unit")) or _clean(service.get("basis")),
+                "rate": float(item.get("rate") or 0),
+                "qty": item.get("qty"),
+                "hours": item.get("hours"),
+                "monthly": float(item.get("monthly") or 0),
+                "notes": note,
+            })
+    return grouped
+
+
+def _add_spec_sheet_images(ws, spec, source_sheet):
+    """Copy the reference workbook's presentation-only banner onto a generated sheet."""
+    source = next((s for s in spec.get("sheets", []) if s.get("name") == source_sheet), None)
+    if not source:
         return
-    name = "Added OCI Services"
-    ws = wb[name] if name in wb.sheetnames else wb.create_sheet(name)
-    for col, w in (("A", 30), ("B", 14), ("C", 42), ("D", 12), ("E", 16),
-                   ("F", 14), ("G", 16), ("H", 20)):
-        ws.column_dimensions[col].width = w
-    ws["A1"] = "Added OCI Services — full SKU breakdown"
-    ws["A1"].font = Font(name="Calibri", size=14, bold=True)
-    headers = ["Service", "SKU", "SKU Description", "Unit Rate", "Qty / Input",
-               "Hours / Month", "Est. Monthly", "Category"]
-    hdr_fill = PatternFill("solid", fgColor="FF4472C4")
-    for j, h in enumerate(headers, start=1):
-        c = ws.cell(3, j, h)
-        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFFFF")
-        c.fill = hdr_fill
-    # One row per constituent SKU so every service's full SKU list is documented.
-    r = 4
-    first = r
-    for s in extra_priced:
-        skus = s.get("skus") or [{"sku": s.get("sku"), "desc": s.get("name"),
-                                  "qty": s.get("qty"), "rate": s.get("rate"),
-                                  "hours": s.get("hours"), "monthly": s.get("monthly")}]
-        for k, sk in enumerate(skus):
-            ac = ws.cell(r, 1, s["name"] if k == 0 else "  ↳")
-            if k == 0:
-                ac.font = Font(name="Calibri", size=11, bold=True)
-            ws.cell(r, 2, sk.get("sku"))
-            ws.cell(r, 3, sk.get("desc"))
-            rc = ws.cell(r, 4, round(float(sk.get("rate") or 0), 4)); rc.number_format = "#,##0.0000"
-            ws.cell(r, 5, sk.get("qty"))
-            hrs = sk.get("hours")
-            ws.cell(r, 6, hrs if isinstance(hrs, (int, float)) and hrs else None)
-            mc = ws.cell(r, 7, round(float(sk.get("monthly") or 0), 2)); mc.number_format = "#,##0.00"
-            ws.cell(r, 8, s.get("group"))
-            r += 1
-    tc = ws.cell(r, 1, "Total Added OCI Services"); tc.font = Font(name="Calibri", size=12, bold=True)
-    tot = ws.cell(r, 7, f"=SUM(G{first}:G{r - 1})")
-    tot.number_format = "#,##0.00"; tot.font = Font(name="Calibri", size=12, bold=True)
-    ws.freeze_panes = "A4"
+    for im in source.get("images", []):
+        data = base64.b64decode(spec["images"][im["image_ref"]]["base64"])
+        img = XLImage(io.BytesIO(data))
+        anchor = im["anchor"]
+        fr = anchor["from"]
+        m1 = AnchorMarker(
+            col=fr["col"], colOff=fr["colOff"], row=fr["row"], rowOff=fr["rowOff"])
+        if anchor["type"] == "TwoCellAnchor" and "to" in anchor:
+            to = anchor["to"]
+            m2 = AnchorMarker(
+                col=to["col"], colOff=to["colOff"], row=to["row"], rowOff=to["rowOff"])
+            img.anchor = TwoCellAnchor(_from=m1, to=m2)
+        else:
+            ext = anchor.get("ext_emu")
+            img.anchor = OneCellAnchor(
+                _from=m1,
+                ext=XDRPositiveSize2D(cx=ext["cx"], cy=ext["cy"]) if ext else None)
+        ws.add_image(img)
+
+
+def _service_style_prototype(wb):
+    """Capture the reference Networking styles before that sheet is repopulated."""
+    from copy import copy
+    src = wb["Networking"]
+    return {
+        "header": [copy(src.cell(10, c)._style) for c in range(1, 9)],
+        "odd": [copy(src.cell(11, c)._style) for c in range(1, 9)],
+        "even": [copy(src.cell(12, c)._style) for c in range(1, 9)],
+        "summary": {coord: copy(src[coord]._style)
+                    for coord in ("A4", "A5", "B5", "C5", "D5", "F4", "F5", "A6", "A9")},
+    }
+
+
+def _write_service_region(ws, sheet_name, lines, styles, start_row=10, replace=False):
+    """Populate one template-styled service detail table without feeding BOM totals twice."""
+    from copy import copy
+    end_clear = max(120, start_row + len(lines) + 4)
+    if replace:
+        # The reference tabs carried include/exclude dropdowns and conditional formatting
+        # for that customer's scenarios. The generated per-SKU table does not use them.
+        ws.data_validations.dataValidation = []
+        try:
+            ws.conditional_formatting._cf_rules.clear()
+        except Exception:
+            pass
+        for merged in list(ws.merged_cells.ranges):
+            if merged.min_row >= 4 and merged.max_row <= end_clear:
+                ws.unmerge_cells(str(merged))
+        clear_cols = max(16, ws.max_column)
+        for r in range(4, end_clear + 1):
+            for c in range(1, clear_cols + 1):
+                cell = ws.cell(r, c)
+                if not isinstance(cell, MergedCell):
+                    cell.value = None
+        ws["A1"] = sheet_name
+        ws["A2"] = sheet_name
+        ws["A4"] = f"{sheet_name} BOM Summary"
+        ws["A4"]._style = copy(styles["summary"]["A4"])
+        ws["A5"] = "Mapped Monthly"
+        ws["A5"]._style = copy(styles["summary"]["A5"])
+        ws["C5"] = "Mapped Annual"
+        ws["C5"]._style = copy(styles["summary"]["C5"])
+        ws["F4"] = "Mapping Notes / Assumptions"
+        ws["F4"]._style = copy(styles["summary"]["F4"])
+        ws["F5"] = (
+            "These rows are the complete per-SKU mapping from the app. They are a detail "
+            "view only; Pricing Overview remains the workbook total."
+        )
+        ws["F5"]._style = copy(styles["summary"]["F5"])
+        ws["A6"] = (
+            "Every populated service, source mapping, unit rate, quantity, and monthly "
+            "amount is carried from the estimator output."
+        )
+        ws["A6"]._style = copy(styles["summary"]["A6"])
+        ws["A9"] = "Service pricing rows below reconcile to the mapped monthly summary."
+        ws["A9"]._style = copy(styles["summary"]["A9"])
+        header_row = start_row
+    else:
+        for r in range(start_row, end_clear + 1):
+            for c in range(1, 9):
+                cell = ws.cell(r, c)
+                if not isinstance(cell, MergedCell):
+                    cell.value = None
+        ws.cell(start_row, 1).value = f"{sheet_name} - mapped service detail"
+        ws.cell(start_row, 1)._style = copy(styles["summary"]["A4"])
+        header_row = start_row + 1
+
+    headers = ["Component", "SKU", "Unit", "Unit Rate", "Qty / Input",
+               "Hours / Volume", "Est. Monthly", "Source Mapping / Notes"]
+    for c, value in enumerate(headers, start=1):
+        cell = ws.cell(header_row, c, value)
+        cell._style = copy(styles["header"][c - 1])
+
+    first = header_row + 1
+    for i, line in enumerate(lines):
+        r = first + i
+        row_styles = styles["odd"] if i % 2 == 0 else styles["even"]
+        values = [
+            line.get("component"), line.get("sku"), line.get("unit"),
+            round(float(line.get("rate") or 0), 6), line.get("qty"),
+            line.get("hours"), round(float(line.get("monthly") or 0), 2),
+            line.get("notes"),
+        ]
+        for c, value in enumerate(values, start=1):
+            cell = ws.cell(r, c, value)
+            cell._style = copy(row_styles[c - 1])
+        ws.cell(r, 4).number_format = "#,##0.000000"
+        ws.cell(r, 7).number_format = "#,##0.00"
+        ws.row_dimensions[r].hidden = False
+
+    total_row = first + len(lines)
+    for c in range(1, 9):
+        ws.cell(total_row, c)._style = copy(styles["header"][c - 1])
+    ws.cell(total_row, 1).value = f"Total {sheet_name}"
+    ws.cell(total_row, 7).value = (
+        f"=SUM(G{first}:G{total_row - 1})" if lines else 0)
+    ws.cell(total_row, 7).number_format = "#,##0.00"
+    ws.row_dimensions[header_row].hidden = False
+    ws.row_dimensions[total_row].hidden = False
+    if replace:
+        ws["B5"] = f"=G{total_row}"
+        ws["B5"]._style = copy(styles["summary"]["B5"])
+        ws["D5"] = "=B5*12"
+        ws["D5"]._style = copy(styles["summary"]["D5"])
+        ws.freeze_panes = f"A{first}"
+        for r in range(total_row + 1, end_clear + 1):
+            ws.row_dimensions[r].hidden = True
+    ws.sheet_state = "visible"
+    return total_row
+
+
+def _write_service_tabs(wb, pricing, extra_priced, spec, compute_last, storage_count):
+    """Map every non-VM service into the matching Polaris-styled workbook tab."""
+    grouped = _service_detail_lines(pricing, extra_priced)
+    if not grouped:
+        return
+    styles = _service_style_prototype(wb)
+    source = wb["Networking"]
+
+    # Create missing category tabs from the reference Networking layout before that
+    # source sheet is repopulated. copy_worksheet preserves its cells/styles/merges;
+    # images are copied explicitly from the build spec.
+    for category in grouped:
+        name = _SERVICE_SHEETS[category]
+        if name in wb.sheetnames:
+            continue
+        ws = wb.copy_worksheet(source)
+        ws.title = name
+        _add_spec_sheet_images(ws, spec, "Networking")
+
+    for category, lines in grouped.items():
+        name = _SERVICE_SHEETS[category]
+        ws = wb[name]
+        if name in ("Networking", "Security KMS") or name not in {
+                "Compute", "Storage", "DR"}:
+            _write_service_region(ws, name, lines, styles, start_row=10, replace=True)
+        elif name == "Compute":
+            _write_service_region(
+                ws, name, lines, styles, start_row=max(compute_last + 3, 20), replace=False)
+        elif name == "Storage":
+            _write_service_region(
+                ws, name, lines, styles,
+                start_row=max(STORAGE_FIRST_ROW + storage_count + 2, 24), replace=False)
+        elif name == "DR":
+            _write_service_region(ws, name, lines, styles, start_row=10, replace=True)
+
+    # Keep service tabs together and in the same order as the app's service selector.
+    after = "Compute"
+    for name in ("Storage", "Networking", "Database", "Integration", "Security KMS",
+                 "Observability", "AI and Machine Learning", "Licensing",
+                 "Other Services", "DR"):
+        if name in wb.sheetnames:
+            _place_after(wb, name, after)
+            after = name
 
 
 def _repoint_ramp_refs(ws_po, months, include_windows=False):
     """The cost-profile's Year-1 columns sum the ramp's consumption %. Re-point those
-    ranges at the actual number of ramp months the app is set to (the template hardcodes
-    F12:F23 = 12 months). Year 1 uses at most the first 12 ramp months."""
+    ranges at the actual number of ramp months the app is set to. Year 1 uses at most
+    the first 12 ramp months from the generated Consumption % column."""
     y1_last = RAMP_FIRST_MONTH_ROW + min(12, max(1, months)) - 1
-    rng = f"'Consumption Ramp'!$F${RAMP_FIRST_MONTH_ROW}:$F${y1_last}"
+    rng = f"'Consumption Ramp'!$B${RAMP_FIRST_MONTH_ROW}:$B${y1_last}"
     # Core infrastructure = compute; Windows 3rd-party licensing (B21) is folded in and
     # ramped alongside it only when it's present in the BOM.
     core = "SUM($B$13:$B$15,$B$21)" if include_windows else "SUM($B$13:$B$15)"
@@ -1333,7 +1782,7 @@ def _repoint_ramp_refs(ws_po, months, include_windows=False):
 
 # A cross-sheet reference token (quoted or bare sheet name + '!' + a cell/range). These
 # are captured and stashed so the row-shift below never rewrites another sheet's rows
-# (Consumption Ramp F12:F23, Compute!$A$14:..., DR!$B$5, Annexure ...).
+# (Consumption Ramp B12:B23, Compute!$A$14:..., DR!$B$5, Annexure ...).
 _CROSS_SHEET_REF = re.compile(
     r"(?:'[^']*'|[A-Za-z_][\w.]*)!\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?")
 # A bare (same-sheet) A1 reference: optional $ before column and row.
@@ -1397,7 +1846,7 @@ def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
     # Give SQL Server licensing a real home instead of a magic number: move it OUT of the
     # discountable service cells (Compute SQL from B11, Database SQL from B12) and fold it into
     # the 3rd-party licensing line (B17), relabeled "Windows + SQL". Every discount formula can
-    # then reference cells only — no embedded constants — and B17 (Windows + SQL) is never
+    # then reference cells only - no embedded constants - and B17 (Windows + SQL) is never
     # discounted. Only what's actually removed is folded in, so nothing is double-counted.
     moved = 0.0
     for ref, amt in (("B11", sqlc), ("B12", sqld)):
@@ -1414,7 +1863,7 @@ def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
     ws["B18"] = "=SUM(B9:B16)*(1-$B$7)+B17"
     ws["B19"] = "=B18*12"
 
-    # OCI Cost Profile (D:H, rows 10-13): mirror the same math — discount the service refs,
+    # OCI Cost Profile (D:H, rows 10-13): mirror the same math - discount the service refs,
     # leave the licensing ref ($B$17) at list. Cell references only. String substitution keeps
     # each formula's Consumption-Ramp range intact.
     subs = [
@@ -1526,27 +1975,39 @@ def _place_overview_notes(ws, start_row, notes):
 
 
 def _zero_unmodeled_sheets(wb):
-    """The app doesn't model Networking, Security/KMS, DR or Storage-Backups yet, so the
-    reference deliverable's hardcoded numbers are cleared — otherwise they'd inject cost
-    the app never shows. Sheet structure + architecture notes are preserved."""
-    net = wb["Networking"]
-    for r in range(11, 19):            # component rows -> Networking!G19 total becomes 0
+    """Reset inherited scenario sheets to clean, current-data-only service tables."""
+    styles = _service_style_prototype(wb)
+    for name in ("Networking", "Security KMS", "DR"):
+        ws = wb[name]
+        _write_service_region(ws, name, [], styles, start_row=10, replace=True)
+        # Preserve the original alternating detail-row styles as the prototype for any
+        # current services written later in this build.
+        from copy import copy
         for c in range(1, 9):
-            net.cell(r, c).value = None
-    kms = wb["Security KMS"]
-    for r in range(11, 13):            # -> 'Security KMS'!B5 becomes 0
-        for c in range(1, 10):
-            kms.cell(r, c).value = None
-    dr = wb["DR"]
-    for r in list(range(12, 16)) + list(range(19, 23)) + list(range(26, 30)):
-        dr.cell(r, 2).value = "No"     # "Include in Price" -> DR!B5 becomes 0
+            ws.cell(11, c)._style = copy(styles["odd"][c - 1])
+            ws.cell(12, c)._style = copy(styles["even"][c - 1])
+
     anx = wb["Annexure Addendum to Storage"]
-    anx["D6"] = None                   # drop the reference capacity input
-    anx["J6"] = "No"
-    anx["J7"] = "No"                   # -> Pricing Overview!B17 (SUMIF) becomes 0
+    anx.data_validations.dataValidation = []
+    try:
+        anx.conditional_formatting._cf_rules.clear()
+    except Exception:
+        pass
+    for r in (6, 7, 8, 12, 13, 17, 18):
+        for c in range(1, 12):
+            cell = anx.cell(r, c)
+            if not isinstance(cell, MergedCell):
+                cell.value = None
+    for r, label in (
+            (8, "Backup Storage Total"),
+            (13, "File Storage Total"),
+            (18, "Enterprise Storage Total")):
+        anx.cell(r, 1).value = label
+        anx.cell(r, 8).value = 0
+        anx.cell(r, 9).value = 0
 
 
-# Sheets that always stay visible even when "empty" — they carry the deliverable's
+# Sheets that always stay visible even when "empty" - they carry the deliverable's
 # framing, rates, totals and ramp, so they're meaningful regardless of inventory.
 _CORE_SHEETS = {
     "Table of Contents", "Assumptions", "Rate Card", "Pricing Overview",
@@ -1599,16 +2060,14 @@ def _hide_empty_sheets(wb, apps, storage_rows):
     if not storage_rows:
         hide("Storage")
     if "Networking" in wb.sheetnames and not _sheet_has_values(
-            wb["Networking"], range(11, 19), range(1, 9)):
+            wb["Networking"], range(12, 140), range(1, 9)):
         hide("Networking")
     if "Security KMS" in wb.sheetnames and not _sheet_has_values(
-            wb["Security KMS"], range(11, 13), range(1, 10)):
+            wb["Security KMS"], range(12, 140), range(1, 10)):
         hide("Security KMS")
     if "DR" in wb.sheetnames:
         dr = wb["DR"]
-        included = any(str(dr.cell(r, 2).value).strip().lower() == "yes"
-                       for r in list(range(12, 16)) + list(range(19, 23)) + list(range(26, 30)))
-        if not included:
+        if not _sheet_has_values(dr, range(12, 140), range(1, 9)):
             hide("DR")
     if "Annexure Addendum to Storage" in wb.sheetnames:
         if wb["Annexure Addendum to Storage"]["D6"].value in (None, "", 0):
@@ -1635,8 +2094,8 @@ RAMP_MAX_MONTHS = 60
 # Rows here are the ON-PREM layout positions. In cloud-bill mode the baseline band is shifted
 # UP by po_delta rows (see _relayout_pricing_overview), so every row is reduced by po_delta.
 # `rows` can list two cells (Networking + Security/KMS are one ramp line). `discountable` marks
-# the lines the OCI discount (Pricing Overview $B$7) applies to — everything except 3rd-party
-# licensing — so the grid ties to Total Monthly = SUM(discountable)*(1-discount) + licensing.
+# the lines the OCI discount (Pricing Overview $B$7) applies to - everything except 3rd-party
+# licensing - so the grid ties to Total Monthly = SUM(discountable)*(1-discount) + licensing.
 _GRID_COMPONENTS = [
     ("Compute (OCPUs)", [13], True),
     ("RAM", [14], True),
@@ -1670,13 +2129,13 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
       - discount_cell (Pricing Overview $B$7) is applied to the discountable lines so the grid
         total equals Total Monthly = SUM(discountable)*(1-discount) + licensing.
 
-    Returns the month count so the Pricing Overview's F-range refs can be re-pointed.
+    Returns the month count so the Pricing Overview's ramp references can be re-pointed.
     """
     from copy import copy
     from openpyxl.utils import get_column_letter
 
     # Windows licensing is ramped as its own component only when it's actually in the BOM.
-    # (Not discountable — the OCI discount never applies to 3rd-party licensing.)
+    # (Not discountable - the OCI discount never applies to 3rd-party licensing.)
     components = list(_GRID_COMPONENTS)
     if include_windows:
         components.append(("3rd Party Licensing", [21], False))
@@ -1694,18 +2153,22 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
         return copy(ws.cell(r, c)._style)
 
     # ---- capture prototypes from the reference layout BEFORE clearing ----
-    month_sty = {c: sty(12, c) for c in range(1, 9)}
-    wave_text = [[ws.cell(r, c).value for c in range(2, 6)] for r in range(12, 24)]
+    # Reuse the reference styles, but collapse the inherited eight-column migration-wave
+    # table to four current-data columns: Month, Consumption %, Monthly, Cumulative.
+    month_sty = {
+        1: sty(12, 1),
+        2: sty(12, 6),
+        3: sty(12, 7),
+        4: sty(12, 8),
+    }
     grid_sty = {r: {c: sty(r, c) for c in (1, 2)} for r in range(27, 39)}
     grid_title = ws.cell(27, 1).value
-    wave_block = [([ws.cell(r, c).value for c in range(1, 8)],
-                   {c: sty(r, c) for c in range(1, 8)}) for r in range(40, 47)]
     chart_hdr = ([ws.cell(50, c).value for c in (1, 2)], {c: sty(50, c) for c in (1, 2)})
     chart_sty = {c: sty(51, c) for c in (1, 2)}
 
     # ---- clear everything below the month header ----
     # Reset BOTH value and style: the reference layout has dark/blue header fills at
-    # fixed rows (e.g. the wave-sequencing and chart headers). When the month table
+    # fixed rows (e.g. the old sequencing and chart headers). When the month table
     # grows past 12 months the layout shifts, so any fill we don't overwrite would be
     # left behind as an orphan block. Blanking the style first prevents that; every
     # cell we actually use gets its style re-applied below.
@@ -1716,29 +2179,26 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
                 cell.value = None
                 cell.style = "Normal"
 
-    # ---- layout: months -> grid -> wave sequencing -> chart source ----
+    # ---- layout: months -> component grid -> chart source ----
     m_first, m_last = RAMP_FIRST_MONTH_ROW, RAMP_FIRST_MONTH_ROW + n - 1
     g_title = m_last + 4
     g_head, g_pct = g_title + 1, g_title + 2
     g_first = g_pct + 1
     g_last = g_first + len(components) - 1
     g_cum = g_last + 1
-    w_title = g_cum + 3
-    c_head = w_title + len(wave_block) + 2
+    c_head = g_cum + 3
     total_col = 2 + n
 
     # months
     for i in range(n):
         r = m_first + i
         cl = get_column_letter(2 + i)
-        for c in range(1, 9):
+        for c in range(1, 5):
             ws.cell(r, c)._style = copy(month_sty[c])
         ws.cell(r, 1).value = i + 1
-        for j, v in enumerate(wave_text[min(i, len(wave_text) - 1)]):
-            ws.cell(r, 2 + j).value = v
-        ws.cell(r, 6).value = round(pcts[i], 6) if pcts else None
-        ws.cell(r, 7).value = f"=SUM({cl}${g_first}:{cl}${g_last})"
-        ws.cell(r, 8).value = f"=SUM($G${m_first}:G{r})"
+        ws.cell(r, 2).value = round(pcts[i], 6) if pcts else None
+        ws.cell(r, 3).value = f"=SUM({cl}${g_first}:{cl}${g_last})"
+        ws.cell(r, 4).value = f"=SUM($C${m_first}:C{r})"
 
     # component grid
     ws.cell(g_title, 1).value = grid_title
@@ -1751,7 +2211,7 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
         c = 2 + i
         ws.cell(g_head, c).value = f"Month {i + 1}"
         ws.cell(g_head, c)._style = copy(grid_sty[28][2])
-        ws.cell(g_pct, c).value = f"=F{m_first + i}"
+        ws.cell(g_pct, c).value = f"=B{m_first + i}"
         ws.cell(g_pct, c)._style = copy(grid_sty[29][2])
     ws.cell(g_head, total_col).value = "Total"
     ws.cell(g_head, total_col)._style = copy(grid_sty[28][2])
@@ -1788,13 +2248,6 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
     ws.cell(g_cum, total_col).value = f"={last_month_col}{g_cum}"
     ws.cell(g_cum, total_col)._style = copy(grid_sty[37][2])
 
-    # wave sequencing reference table (static)
-    for j, (vals, styles) in enumerate(wave_block):
-        r = w_title + j
-        for c in range(1, 8):
-            ws.cell(r, c).value = vals[c - 1]
-            ws.cell(r, c)._style = copy(styles[c])
-
     # chart-source table: Month / Cumulative Total, re-pointed at the new cumulative row
     for c in (1, 2):
         ws.cell(c_head, c).value = chart_hdr[0][c - 1]
@@ -1808,6 +2261,27 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
         ws.cell(r, 2)._style = copy(chart_sty[2])
 
     ws["A10"] = f"{n}-Month Consumption Ramp"
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row == 10 and merged.max_row == 10:
+            ws.unmerge_cells(str(merged))
+    ws.merge_cells("A10:D10")
+    ws["A11"] = "Month"
+    ws["B11"] = "Consumption %"
+    ws["C11"] = "Modeled Monthly"
+    ws["D11"] = "Cumulative"
+    for c in range(5, 10):
+        ws.cell(11, c).value = None
+        ws.cell(11, c).style = "Normal"
+    ws.column_dimensions["A"].width = 28
+    for c in range(2, total_col + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 14
+    ws["F5"] = "Costs use the current Pricing Overview total as the steady-state baseline."
+    ws["F6"] = "Consumption percentages are copied from the ramp configured in the app."
+    ws["F7"] = "No workload sequencing assumptions are imported from the styling reference."
+    ws["A9"] = (
+        "Monthly costs below are formula-driven from the current BOM and configured "
+        "consumption percentages."
+    )
     # Steady-State Monthly / Annual come straight from the Pricing Overview Total Monthly (B22
     # on-prem, B18 in the cloud-bill relayout) and Total Annual (B23 / B19) so the summary ties
     # to the same total the grid ramps.
@@ -1850,6 +2324,23 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         windows_sku = _app.WINDOWS_LICENSE_SKU if windows_sku is None else windows_sku
     spec = load_spec()
     wb = build_workbook(spec)
+    wb.properties.creator = "OCI BOM + Architecture Generator"
+    wb.properties.lastModifiedBy = "OCI BOM + Architecture Generator"
+    wb.properties.title = (bom_name or "OCI Bill of Materials").strip()
+    wb.properties.subject = "Oracle Cloud Infrastructure bill of materials"
+    # These floating notes were commercial/project statements in the reference workbook,
+    # not styling. Never carry them into a generated estimate.
+    ws_overview = wb["Pricing Overview"]
+    for merged in list(ws_overview.merged_cells.ranges):
+        if str(merged) == "D23:H25":
+            ws_overview.unmerge_cells(str(merged))
+    for r in range(23, 26):
+        for c in range(4, 9):
+            ws_overview.cell(r, c).value = None
+            ws_overview.cell(r, c).style = "Normal"
+    for r in range(24, 26):
+        ws_overview.cell(r, 2).value = None
+        ws_overview.cell(r, 2).style = "Normal"
 
     keys = _resolve_inventory_keys(fields or [])
     raw_by_id = {}
@@ -1887,7 +2378,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
 
         # Only use a REAL application column. If the inventory has none, leave Master
         # Application blank (and the Applications sheet empty) rather than duplicating
-        # the server name — no invented data. Cloud bills have no application grouping,
+        # the server name - no invented data. Cloud bills have no application grouping,
         # so never carry an "app" here (the inventory-key match can otherwise land on an
         # unrelated column like mapping confidence).
         app_name = "" if is_cloud_bill else rv("app")
@@ -1900,7 +2391,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             "virt": virt,
             "os_name": rv("os_name"),
             "os_family": rv("os_family"),
-            # Full precision — rounding here would put the workbook a few cents off the
+            # Full precision - rounding here would put the workbook a few cents off the
             # app's total across hundreds of rows, and the two must tie out exactly.
             "vcpu": float(vcpu) if vcpu else None,
             "memory_gb": float(specs.get("memoryGb") or 0) or None,
@@ -1913,7 +2404,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             # Per-row monthly hours from the data source (the app already priced each row at
             # its own hours). Falls back to the global hours only when the row has none.
             # Cloud-bill: use the EFFECTIVE hours implied by the bill's metered usage
-            # (OCPU-hours / OCPU) so OCPU x hours x rate reproduces the app's actual cost —
+            # (OCPU-hours / OCPU) so OCPU x hours x rate reproduces the app's actual cost -
             # a bill line can cover far more than one instance's 730 hours.
             "hours": (_cloud_effective_hours(pr) if is_cloud_bill
                       else float(pr.get("hoursPerMonth") or 0) or None),
@@ -1933,14 +2424,19 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             })
 
     # Cloud-bill: itemize the storage services on the Storage sheet (the compute-loop above
-    # skipped them). This is display only — the Storage line total is set on the Pricing
+    # skipped them). This is display only - the Storage line total is set on the Pricing
     # Overview by _add_cloud_bill_services, so there's no double count.
     if cloud_comparison:
         storage_rows = _cloud_storage_rows(cloud_comparison.get("pricing") or pricing)
+    _extra_priced = None
+    if extra_services:
+        import oci_catalog
+        _extra_priced, _ = oci_catalog.price_extras(extra_services, hours)
+        storage_rows.extend(_extra_storage_rows(_extra_priced))
     windows_monthly = sum(float(r.get("windowsLicenseMonthly") or 0)
                           for r in (pricing or {}).get("rows", []))
-    # Build the Rate Card FIRST — from only the SKUs/rates used in this build, sorted
-    # alphabetically — so the Compute/Storage formulas can reference the exact cells it
+    # Build the Rate Card FIRST - from only the SKUs/rates used in this build, sorted
+    # alphabetically - so the Compute/Storage formulas can reference the exact cells it
     # placed each rate on (transparency, and it ties out to the app).
     shape_label = (shape or {}).get("shortLabel") or (shape or {}).get("label") or ""
     rate_entries = _collect_rate_card_entries(
@@ -1948,10 +2444,12 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         windows_sku, windows_monthly > 0, servers, storage_rows, pricing,
         extra_services, is_cloud_bill)
     rate_refs = _write_rate_card(wb["Rate Card"], rate_entries)
-    _populate_compute(wb[COMPUTE_SHEET], servers, hours, rate_refs, shape_label)
-    _populate_apps(wb[APPS_SHEET], apps)
+    _compute_last = _populate_compute(
+        wb[COMPUTE_SHEET], servers, hours, rate_refs, shape_label)
+    _populate_apps(wb[APPS_SHEET], apps, servers, shape_label)
     _populate_storage(wb[STORAGE_SHEET], storage_rows, rate_refs, file_rate)
     _set_toc(wb["Table of Contents"], bom_name)
+    _set_assumptions(wb["Assumptions"], servers, shape_label, hours)
     _apply_customer_name(wb, bom_name)
     # Compute optimization: record the % the app's Rightsize applied. Ax = 15% OCPU /
     # 20% RAM, regular E6 = 10% / 15%; the app already shrank the quantities to match.
@@ -1969,18 +2467,16 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
     _add_licensing_line(wb["Pricing Overview"], windows_monthly)
     # App-added OCI services roll into the matching Pricing Overview lines (which sit inside
     # the total) and are itemized on the Networking sheet.
-    _extra_priced = None
-    if extra_services:
-        import oci_catalog
-        _extra_priced, _ = oci_catalog.price_extras(extra_services, hours)
+    if _extra_priced:
         _add_extra_services(wb, _extra_priced)
     # Cloud-bill mode: roll the non-compute mapped services into the Pricing Overview lines
     # so the template total covers the whole bill, not just compute.
     if cloud_comparison:
         _add_cloud_bill_services(wb, cloud_comparison.get("pricing") or pricing)
-        # Summarize all 11 product-group topics on the Pricing Overview and add a detail
-        # sheet for each group that has cost and lacks a dedicated sheet.
-        _add_product_group_topics(wb, cloud_comparison.get("pricing") or pricing)
+    _service_pricing = (
+        cloud_comparison.get("pricing") if cloud_comparison else pricing) or pricing
+    _write_service_tabs(
+        wb, _service_pricing, _extra_priced, spec, _compute_last, len(storage_rows))
     # Cloud-bill mode shifts the Pricing Overview baseline up by 4 rows (relayout below) and
     # exposes an editable OCI discount at $B$7; feed both to the ramp so its lines point at the
     # right cells and tie to Total Monthly. On-prem keeps the template layout (no shift/discount).
@@ -2000,7 +2496,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         _relayout_notes = _relayout_pricing_overview(wb["Pricing Overview"], delta=4)
         # OCI discount input (A7 label / B7 editable %). The Total Monthly applies it LIVE to
         # the discountable OCI services and leaves 3rd-party licensing (Windows + SQL Server) at
-        # list — matching the app's headline math. Everything downstream (Total Annual, the
+        # list - matching the app's headline math. Everything downstream (Total Annual, the
         # comparison blocks, chart) references B18/B19, so editing B7 re-flows the whole sheet.
         # SQL licensing is bundled in service categories, so split it by group (Compute -> B11,
         # Database/other -> B12) so the discount can exclude it exactly.
@@ -2033,19 +2529,29 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             source_cloud=_cc_pricing.get("sourceCloud") or "aws",
             estimated=bool(_cc_pricing.get("sourceCostEstimated")))
 
-    # Architecture diagram generated from THIS BOM (deterministic; no model call).
-    # If the diagram toolchain isn't available the export still succeeds — the template's
+    # Architecture diagram generated from THIS BOM. The optional AI plan is constrained
+    # metadata; graph geometry, quantities, rendering, and validation remain deterministic.
+    # If the diagram toolchain isn't available the export still succeeds - the template's
     # reference picture just stays in place.
     arch_png = None
     if include_diagram:
         try:
             import bom_diagram
-            _, arch_png = bom_diagram.build_architecture(
+            arch_drawio, arch_png = bom_diagram.build_architecture(
                 pricing, rows, keys, bom_name,
                 (shape or {}).get("shortLabel") or (shape or {}).get("label") or "",
                 sites=_distinct_sites(fields or [], rows or []),
                 extra_priced=_extra_priced, diagram_options=diagram_options or {})
             if arch_png:
+                import app as _app_qa
+                _architecture_qa = _app_qa.architecture_artifact_qa(
+                    arch_drawio, arch_png
+                )
+                if not _architecture_qa["passed"]:
+                    raise ValueError(
+                        "Architecture output failed validation: "
+                        + " ".join(_architecture_qa["issues"])
+                    )
                 # Drop the diagram to the BOTTOM of the sheet, below the comparison blocks.
                 # The spec anchor sits at Excel rows 29-72; shift it down so it starts at
                 # ~row 52 (2 rows below the comparison area) and keeps its 43-row height.
@@ -2067,7 +2573,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
                 if cloud_comparison and _relayout_notes and _diag_bottom:
                     _place_overview_notes(wb["Pricing Overview"], _diag_bottom + 1, _relayout_notes)
         except Exception:
-            # Don't swallow the reason silently — a missing diagram was undebuggable.
+            # Don't swallow the reason silently - a missing diagram was undebuggable.
             import traceback
             traceback.print_exc()
             arch_png = None
@@ -2075,9 +2581,13 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         # Nothing to show: the template ships no architecture picture of its own, so the
         # slot is simply empty. Clear its caption too.
         ws_po = wb["Pricing Overview"]
-        if isinstance(ws_po["D27"].value, str):
-            ws_po["D27"] = None
-        # No diagram to anchor to — still place the re-homed footnotes just below the
+        for merged in list(ws_po.merged_cells.ranges):
+            if str(merged) == "D27:P27":
+                ws_po.unmerge_cells(str(merged))
+        for c in range(4, 17):
+            ws_po.cell(27, c).value = None
+            ws_po.cell(27, c).style = "Normal"
+        # No diagram to anchor to - still place the re-homed footnotes just below the
         # comparison blocks so they aren't lost.
         if cloud_comparison and _relayout_notes:
             _place_overview_notes(ws_po, 52, _relayout_notes)
@@ -2121,7 +2631,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         traceback.print_exc()
 
     # Embed the app workflow (hidden _workflow sheet) so this Full BOM can be re-imported
-    # via "Load previous BOM" — same as the Quick/comparison export.
+    # via "Load previous BOM" - same as the Quick/comparison export.
     if workflow_json:
         try:
             import bom_export

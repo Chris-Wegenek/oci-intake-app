@@ -2,7 +2,7 @@
 
 Used to price the AWS side of the cross-cloud estimate with real, current rates.
 Credentials come from the standard AWS chain (env vars, ~/.aws/credentials, or an
-instance role) — they are never stored by or exposed to this app. The Query API
+instance role) - they are never stored by or exposed to this app. The Query API
 endpoint lives only in us-east-1 / ap-south-1 but returns pricing for all regions.
 
 Everything here fails soft: if boto3 isn't installed, there are no credentials, or

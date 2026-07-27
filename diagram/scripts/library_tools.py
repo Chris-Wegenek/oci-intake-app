@@ -5,7 +5,7 @@ The library is a JSON array wrapped in <mxlibrary> tags. Each entry:
   {"xml": <deflate-compressed base64 mxGraphModel>, "w": int, "h": int,
    "aspect": "fixed", "title": "Compute - Virtual Machine VM"}
 The decompressed xml is a group of mxCells whose styles carry
-shape=stencil(...) vector data — cloning those cells into a diagram
+shape=stencil(...) vector data - cloning those cells into a diagram
 reproduces the icon exactly as draw.io renders it.
 
 Usage:
@@ -24,7 +24,8 @@ DEFAULT_LIB = os.path.join(os.path.dirname(__file__), '..', 'assets',
 
 class Library:
     def __init__(self, path=DEFAULT_LIB):
-        raw = open(path, encoding='utf-8').read()
+        with open(path, encoding='utf-8') as library_file:
+            raw = library_file.read()
         body = raw[raw.index('>') + 1: raw.rfind('</mxlibrary>')]
         self.entries = {e['title']: e for e in json.loads(body) if e.get('title')}
 

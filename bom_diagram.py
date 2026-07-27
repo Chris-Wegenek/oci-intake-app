@@ -8,7 +8,9 @@ sheet; the .drawio is the editable source of truth.
 Layout follows diagram/layout-conventions.md: tenancy -> governance band -> region ->
 hub VCN + one spoke VCN per workload segment -> subnets, with the DRG as the anchor.
 
-This is deterministic Python — no model call. Requires `pillow` for the PNG preview.
+Rendering is deterministic Python. The app may supply a validated OpenAI architecture
+plan, but the model never writes graph XML, geometry, quantities, or pricing. Requires
+`pillow` for the PNG preview.
 """
 
 import json
@@ -18,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 DIAGRAM_DIR = Path(__file__).resolve().parent / "diagram"
-# The vendored skills expect the scripts/ + assets/ sibling layout — export_png resolves
+# The vendored skills expect the scripts/ + assets/ sibling layout - export_png resolves
 # the stencil library relative to its own file, so don't flatten these folders.
 SCRIPTS_DIR = DIAGRAM_DIR / "scripts"
 LIB_PATH = DIAGRAM_DIR / "assets" / "OCI Library.xml"
@@ -81,7 +83,8 @@ def collect_segments(pricing, rows, keys):
         raw = raw_by_id.get(str(p.get("rowId"))) or {}
         name = _segment_key(raw, keys) or "Workloads"
         s = segs.setdefault(name, {"name": name, "vms": 0, "winvms": 0, "ocpu": 0.0,
-                                   "ram": 0.0, "block": 0.0, "win": 0.0})
+                                   "ram": 0.0, "block": 0.0, "win": 0.0,
+                                   "compute_skus": set()})
         s["vms"] += 1
         _win = float(p.get("windowsLicenseMonthly") or 0)
         if _win > 0:
@@ -90,16 +93,28 @@ def collect_segments(pricing, rows, keys):
         s["ram"] += float(specs.get("memoryGb") or 0)
         s["block"] += float(specs.get("blockStorageGb") or 0)
         s["win"] += _win
+        for item in (p.get("lineItems") or []):
+            if not isinstance(item, dict):
+                continue
+            unit = _clean(item.get("unit")).lower()
+            desc = _norm(item.get("description"))
+            if unit in {"ocpu-hour", "gb-hour"} or "ocpu hr rate" in desc or "memory gb hr" in desc:
+                sku = _clean(item.get("sku"))
+                if sku:
+                    s["compute_skus"].add(sku)
 
     out = sorted(segs.values(), key=lambda s: -s["vms"])
     if len(out) > MAX_SPOKES:                       # fold the tail into one "Other" spoke
         head, tail = out[:MAX_SPOKES - 1], out[MAX_SPOKES - 1:]
         merged = {"name": "Other workloads", "vms": 0, "winvms": 0, "ocpu": 0.0,
-                  "ram": 0.0, "block": 0.0, "win": 0.0}
+                  "ram": 0.0, "block": 0.0, "win": 0.0, "compute_skus": set()}
         for t in tail:
             for k in ("vms", "winvms", "ocpu", "ram", "block", "win"):
                 merged[k] += t[k]
+            merged["compute_skus"].update(t.get("compute_skus") or set())
         out = head + [merged]
+    for segment in out:
+        segment["compute_skus"] = tuple(sorted(segment.get("compute_skus") or ()))
     return out
 
 
@@ -110,8 +125,11 @@ _SERVICE_STENCILS = {
     "Database": ("Database", "Database"),
     "Networking": ("Networking - Flexible Load Balancer", "Networking /\nLoad Balancer"),
     "Security": ("Identity and Security - Vault", "Security /\nKMS"),
+    "Observability": ("Observability and Management - Monitoring", "Observability"),
     "Obs. & Management": ("Observability and Management - Monitoring", "Observability"),
+    "Integration": ("Developer Services - Integrations", "Integration"),
     "AI & Machine Learning": ("Analytics and AI", "AI /\nMachine Learning"),
+    "Licensing": ("Compute - Virtual Machine VM", "Licensing"),
     "DevOps": ("Developer Services - Container Engine for Kubernetes", "DevOps /\nContainers"),
     "Other Services": ("Compute - Functions", "PaaS /\nFunctions"),
     "Marketplace": ("Marketplace", "Marketplace"),
@@ -140,59 +158,117 @@ def _row_group(r, group_of):
     return group_of(cat, r.get("sourceService")) if group_of else (cat or "")
 
 
-# Add-in group -> diagram category vocabulary.
-_ADDIN_GRP = {"Observability": "Obs. & Management", "Integration": "Other Services"}
-
-
 def _addins_as_rows(extra_priced):
     """Priced 'Add OCI services' items -> synthetic diagram rows, so the diagram reflects
     EVERYTHING the app priced (bill + add-ins), not just the bill. The group comes straight
-    from the add-in; a SQL Server license add-in is treated as a database, and Windows
-    licensing is skipped (it's already drawn as the Windows OS icon)."""
+    from the add-in's architecture mapping; SQL Server licensing is treated as a database,
+    while other licensing remains visible as a distinct service."""
     rows = []
     for s in (extra_priced or []):
-        g = s.get("group") or "Other Services"
+        g = s.get("architectureGroup") or s.get("group") or "Other Services"
         name = s.get("name") or ""
         if g == "Licensing":
             if "sql" in name.lower():
                 g = "Database"
-            else:
-                continue
-        g = _ADDIN_GRP.get(g, g)
         mo = float(s.get("monthly") or 0)
+        sku_lines = [
+            dict(line)
+            for line in (s.get("skus") or [])
+            if isinstance(line, dict)
+        ]
+        if not sku_lines:
+            sku_lines = [{"sku": s.get("sku") or "N/A", "monthly": mo}]
         rows.append({"ociServiceCategory": g, "ociProduct": name, "__addinGroup": g,
                      "sourceService": "Add-in OCI service", "monthly": mo,
-                     "lineItems": [{"monthly": mo}]})
+                     "sku": s.get("sku") or "N/A", "lineItems": sku_lines,
+                     "architectureIcon": s.get("architectureIcon"),
+                     "architectureResolution": s.get("architectureResolution")
+                     or "category-fallback"})
     return rows
 
 
-def collect_services(pricing, max_items=12):
-    """Which OCI service groups the priced BOM actually contains (bill + add-ins), biggest
-    $ first, mapped to a stencil. Compute is excluded (it's the VM boxes). Only real,
-    present services — nothing invented. Returns [(stencil, label, monthly), ...]."""
+def _row_skus(row):
+    skus = []
+    for value in (row.get("architectureSkus") or []):
+        if isinstance(value, str) and value.strip():
+            skus.append(value.strip())
+        elif isinstance(value, dict) and _clean(value.get("sku")):
+            skus.append(_clean(value.get("sku")))
+    for item in (row.get("lineItems") or []):
+        if isinstance(item, dict) and _clean(item.get("sku")):
+            skus.append(_clean(item.get("sku")))
+    mapping = row.get("fullServiceMapping") or {}
+    if isinstance(mapping, dict) and _clean(mapping.get("sku")):
+        skus.append(_clean(mapping.get("sku")))
+    for key in ("sku", "ociSku"):
+        if _clean(row.get(key)):
+            skus.append(_clean(row.get(key)))
+    return tuple(dict.fromkeys(skus)) or ("N/A",)
+
+
+def _sku_caption(skus, limit=1):
+    values = list(skus or ("N/A",))
+    shown = ", ".join(values[:limit])
+    if len(values) > limit:
+        shown += f" +{len(values) - limit}"
+    return f"SKU{'s' if len(values) > 1 else ''} {shown}"
+
+
+def _service_stencil(row, group):
+    explicit = _clean(row.get("architectureIcon"))
+    if explicit:
+        return explicit, _clean(row.get("architectureResolution")) or "direct"
+    from oci_catalog import architecture_mapping
+
+    return architecture_mapping(
+        row.get("ociProduct") or row.get("sourceService"),
+        group,
+    )
+
+
+def collect_services(pricing):
+    """Return every distinct non-compute, non-database OCI service in the priced BOM.
+
+    Duplicate bill rows for the same service/SKU set are aggregated, but no service is
+    dropped because of a display cap or because it lands inside a free allowance.
+    """
     group_of = _cloud_group_of()
-    totals = {}
+    services = {}
     for r in (pricing or {}).get("rows", []):
         if (r.get("costAction") or "") == "remove":
             continue
+        if (
+            (r.get("specs") or {}).get("ocpus")
+            and not _clean(r.get("ociProduct"))
+            and not _clean(r.get("sourceService"))
+        ):
+            continue
         grp = _row_group(r, group_of)
-        if not grp or grp == "Compute" or grp not in _SERVICE_STENCILS:
+        if not grp or grp in {"Compute", "Database"}:
             continue
-        totals[grp] = totals.get(grp, 0.0) + float(r.get("monthly") or 0)
-    out = []
-    for grp, mo in sorted(totals.items(), key=lambda kv: -kv[1]):
-        if mo <= 0:
-            continue
-        stencil, label = _SERVICE_STENCILS[grp]
-        out.append((stencil, label, mo))
-    return out[:max_items]
+        name = _clean(r.get("ociProduct") or r.get("sourceService")) or grp
+        skus = _row_skus(r)
+        stencil, resolution = _service_stencil(r, grp)
+        key = (name, grp, stencil, skus)
+        item = services.setdefault(
+            key,
+            {"shape": stencil, "label": name, "group": grp, "monthly": 0.0,
+             "skus": skus, "resolution": resolution},
+        )
+        item["monthly"] += float(r.get("monthly") or 0)
+    return sorted(
+        services.values(),
+        key=lambda item: (-item["monthly"], item["group"], item["label"]),
+    )
 
 
 # OCI database product -> (stencil, short label). Order matters: most specific first.
 _DB_TYPE_STENCILS = [
     ("autonomous data warehouse", "Database - Autonomous Data Warehouse ADW", "Autonomous DW"),
     ("autonomous transaction",    "Database - Autonomous Transaction Processing ATP", "Autonomous TP"),
-    ("autonomous",                "Database - ADB", "Autonomous DB"),
+    ("autonomous recovery",       "Storage - Object Storage", "Autonomous Recovery"),
+    ("database backup",           "Storage - Object Storage", "Database Backup"),
+    ("autonomous",                "Database - Autonomous DB", "Autonomous DB"),
     ("exadata",                   "Database - Exadata", "Exadata"),
     ("exadb",                     "Database - Exadata", "Exadata"),
     ("goldengate",                "Database - GoldenGate", "GoldenGate"),
@@ -207,7 +283,7 @@ _DB_TYPE_STENCILS = [
 
 def _db_dr_mechanism(label):
     """The correct DR / replication mechanism for a database type. Data Guard is
-    Oracle-only — SQL Server on a VM uses OCI Full Stack DR, and the managed non-Oracle
+    Oracle-only - SQL Server on a VM uses OCI Full Stack DR, and the managed non-Oracle
     databases replicate cross-region their own way."""
     l = (label or "").lower()
     if "autonomous" in l:
@@ -225,7 +301,7 @@ def _db_dr_mechanism(label):
     return "Data Guard"          # Oracle Base Database / Exadata
 
 
-def collect_databases(pricing, max_items=5):
+def collect_databases(pricing):
     """Split the priced Database spend by product TYPE -> [(stencil, label, monthly), ...]
     biggest $ first, so the diagram can show each managed-database type where it lives
     (Autonomous, Base DB, MySQL, Exadata, GoldenGate, SQL Server ...). Only present,
@@ -244,10 +320,20 @@ def collect_databases(pricing, max_items=5):
             if kw in prod:
                 stencil, label = st, lb
                 break
+        skus = _row_skus(r)
         key = (stencil, label)
-        totals[key] = totals.get(key, 0.0) + mo
-    out = [(st, lb, mo) for (st, lb), mo in sorted(totals.items(), key=lambda kv: -kv[1]) if mo > 0]
-    return out[:max_items]
+        item = totals.setdefault(
+            key,
+            {"shape": stencil, "label": label, "monthly": 0.0, "skus": []},
+        )
+        item["monthly"] += mo
+        for sku in skus:
+            if sku not in item["skus"]:
+                item["skus"].append(sku)
+    out = sorted(totals.values(), key=lambda item: (-item["monthly"], item["label"]))
+    for item in out:
+        item["skus"] = tuple(item["skus"])
+    return out
 
 
 def service_group_totals(pricing):
@@ -283,8 +369,8 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     inspection / shared-services subnets, one spoke VCN per workload segment with app and
     data subnets, object-storage backup, and (optionally) a DR region.
 
-    Everything numeric — VM counts, OCPU, RAM, storage, licensing, segment names, site
-    counts — comes from the priced BOM and the uploaded inventory. Nothing is invented.
+    Everything numeric - VM counts, OCPU, RAM, storage, licensing, segment names, site
+    counts - comes from the priced BOM and the uploaded inventory. Nothing is invented.
     Landing-zone components that carry no cost in this BOM are drawn as the target
     pattern and called out as such in the notes.
     """
@@ -293,6 +379,7 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     n = max(1, len(segments))
     # Diagram options (region names + availability-domain split) from the app menu.
     _opts = diagram_options or {}
+    _ai_plan = _opts.get("aiPlan") if isinstance(_opts.get("aiPlan"), dict) else None
     primary_region = _region_label(_opts.get("primaryRegion"))
     dr_region = _region_label(_opts.get("drRegion"))
     # AD capability is authoritative from the region, not the client. A named region
@@ -327,9 +414,13 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     # band. Only shown when there's a real spread of services (cloud-bill imports); a lone
     # storage entry on an on-prem BOM is already represented by the VM/storage boxes.
     services = collect_services(pricing)
-    if len(services) < 2:
-        services = []
-    SVC_DY = 190 if services else 0
+    service_columns = min(6, len(services)) if services else 0
+    service_rows = (
+        (len(services) + service_columns - 1) // service_columns
+        if service_columns else 0
+    )
+    service_row_height = 154
+    SVC_DY = 60 + service_rows * service_row_height if services else 0
     # Full presence map so real services can be placed WHERE they live in the topology:
     # databases + data-platform services in the spoke data subnets, KMS/monitoring/WAF in
     # the hub shared/edge tiers. Driven by the priced BOM (nothing invented).
@@ -337,12 +428,15 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     db_types = collect_databases(pricing)          # managed databases split by type
     _has_db = bool(db_types)
     _has_sec = svc_present.get("Security", 0) > 0
-    _has_obs = svc_present.get("Obs. & Management", 0) > 0
+    _has_obs = (
+        svc_present.get("Obs. & Management", 0) > 0
+        or svc_present.get("Observability", 0) > 0
+    )
     _has_ai = svc_present.get("AI & Machine Learning", 0) > 0
     _waf_present = any(
         "web application firewall" in _norm(r.get("ociProduct")) or "waf" in _norm(r.get("sourceService"))
         for r in (pricing or {}).get("rows", []) if (r.get("costAction") or "") != "remove")
-    # FastConnect present anywhere in the priced BOM (bill line OR add-in) — the diagram
+    # FastConnect present anywhere in the priced BOM (bill line OR add-in) - the diagram
     # (incl. DR) must reflect dedicated FastConnect connectivity when the user prices it.
     _has_fc = any(
         "fastconnect" in _norm(r.get("ociProduct")) or "fast connect" in _norm(r.get("ociProduct"))
@@ -355,7 +449,10 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     tenancy_w = region_w + 64
     bottom = (DR_Y + DR_H) if dr_enabled else (VCN_Y + VCN_H + 60)
     notes_y = bottom + 50                 # base position; the draw offset SVC_DY is added later
-    page_h = notes_y + SVC_DY + 300
+    ai_note_count = 0
+    if _ai_plan:
+        ai_note_count = 1 + (1 if (_ai_plan.get("warnings") or []) else 0)
+    page_h = notes_y + SVC_DY + 300 + ai_note_count * 38
     page_w = REGION_X + region_w + 140
 
     C, N, E = [], [], []          # containers, nodes, edges
@@ -364,18 +461,39 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     def box(i, label, x, y, w, h, style="plain"):
         C.append({"id": i, "label": label, "style": style, "x": x, "y": y + dy[0], "w": w, "h": h})
 
-    def icon(i, shape, label, x, y, s=88):
-        N.append({"id": i, "shape": shape, "label": label, "x": x, "y": y + dy[0], "w": s, "h": s})
+    def icon(i, shape, label, x, y, s=88, **metadata):
+        node = {"id": i, "shape": shape, "label": label,
+                "x": x, "y": y + dy[0], "w": s, "h": s}
+        node.update(metadata)
+        N.append(node)
 
     def text(i, s, x, y, w, h):
         N.append({"id": i, "text": s, "x": x, "y": y + dy[0], "w": w, "h": h})
 
-    def link(a, b, label="", style="solid"):
-        E.append({"source": a, "target": b, "label": label, "style": style})
+    def link(
+        a,
+        b,
+        label="",
+        style="solid",
+        source_anchor=None,
+        target_anchor=None,
+        waypoints=None,
+    ):
+        edge = {"source": a, "target": b, "label": label, "style": style}
+        if source_anchor:
+            edge["sourceAnchor"] = source_anchor
+        if target_anchor:
+            edge["targetAnchor"] = target_anchor
+        if waypoints:
+            edge["waypoints"] = [
+                [float(point[0]), float(point[1]) + dy[0]]
+                for point in waypoints
+            ]
+        E.append(edge)
 
     # ---- tenancy / governance band -----------------------------------------
     box("tenancy", f"{cust} OCI Tenancy", 340, 20, tenancy_w, page_h - 250, "tenancy")
-    gov_band_h = 206 + (132 if services else 0)
+    gov_band_h = 220 + service_rows * service_row_height
     box("gov", "Landing zone compartments\nnetwork hub · workload spokes · shared services · security",
         REGION_X, 62, region_w, gov_band_h, "compartment")
     N.append({"id": "govttl", "text": "Common governance and regional services",
@@ -398,10 +516,23 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     if services:
         text("svcttl", "OCI services mapped from this BOM",
              REGION_X + region_w // 2 - 200, 250, 400, 20)
-        sstep = region_w // (len(services) + 1)
-        for i, (shape, label, mo) in enumerate(services):
-            icon(f"svc{i}", shape, f"{label}\n${mo:,.0f}/mo",
-                 REGION_X + sstep * (i + 1) - 40, 276, 80)
+        for i, service in enumerate(services):
+            row, col = divmod(i, service_columns)
+            row_start = row * service_columns
+            row_count = min(service_columns, len(services) - row_start)
+            sstep = region_w // (row_count + 1)
+            icon(
+                f"svc{i}",
+                service["shape"],
+                f"{service['label']}\n{_sku_caption(service['skus'])}\n"
+                f"${service['monthly']:,.0f}/mo",
+                REGION_X + sstep * (col + 1) - 40,
+                276 + row * service_row_height,
+                80,
+                serviceName=service["label"],
+                skus=list(service["skus"]),
+                mappingResolution=service["resolution"],
+            )
 
     # Everything below (external actors, region, hub, spokes, DR, notes) shifts down to
     # clear the services band.
@@ -418,11 +549,19 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         link("sites", "cpe", "Site-to-Site VPN", "dashed")
     link("users", "igw", "HTTPS", "solid")
     link("onprem", "cpe", "WAN", "solid")
-    link("cpe", "drg", "FastConnect (priced)" if _has_fc else "FastConnect / IPSec VPN", "solid")
+    link(
+        "cpe",
+        "drg",
+        "FastConnect (priced)" if _has_fc else "FastConnect / IPSec VPN",
+        "solid",
+        source_anchor=(1, 0.5),
+        target_anchor=(0, 0.5),
+        waypoints=[[360, 734], [360, 1136]],
+    )
 
     # ---- region + hub -------------------------------------------------------
     box("region",
-        (f"Primary OCI Region{(' — ' + primary_region) if primary_region else ''}\n"
+        (f"Primary OCI Region{(' - ' + primary_region) if primary_region else ''}\n"
          f"{int(sum(s['vms'] for s in segments)):,} migrated VMs · "
          f"{totals.get('ocpus', 0):,.0f} OCPU · "
          f"{totals.get('memoryGb', 0):,.0f} GB RAM · "
@@ -436,9 +575,10 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     box("hub_insp", "Private Routing + Inspection Subnet\n10.10.2.0/24", sx, 640, sw, 200, "subnet")
     box("hub_shared", "Shared Services Subnet\n10.10.3.0/24", sx, 860, sw, 220, "subnet")
 
-    icon("igw", "Networking - Internet Gateway", "Internet\nGateway", GW_X - 12, 424)
-    icon("natgw", "Networking - NAT Gateway", "NAT\nGateway", GW_X - 12, 644)
-    icon("svcgw", "Networking - Service Gateway", "Service\nGateway", GW_X - 12, 864)
+    gateway_x = HUB_X - 44
+    icon("igw", "Networking - Internet Gateway", "Internet\nGateway", gateway_x, 424)
+    icon("natgw", "Networking - NAT Gateway", "NAT\nGateway", gateway_x, 644)
+    icon("svcgw", "Networking - Service Gateway", "Service\nGateway", gateway_x, 864)
 
     icon("lb", "Networking - Flexible Load Balancer", "Public app\nload balancer",
          sx + sw // 2 - 44, 484)
@@ -457,9 +597,26 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
              sx + sw // 2 - 44, 922)
 
     link("igw", "lb", "Ingress", "solid")
-    link("lb", "fw", "Inspect", "solid")
-    link("fw", "drg", "Routed inspection", "solid")
-    link("dns", "lb", "DNS lookup", "dashed")
+    link(
+        "lb",
+        "fw",
+        "Inspect",
+        "solid",
+        source_anchor=(1, 0.5),
+        target_anchor=(1, 0.5),
+        waypoints=[[940, 528], [940, 746]],
+    )
+    link(
+        "fw",
+        "drg",
+        "Routed inspection",
+        "solid",
+        source_anchor=(1, 0.5),
+        target_anchor=(1, 0.5),
+        waypoints=[[812, 746], [812, 1136]],
+    )
+    text("dnsnote", "Public DNS resolves the application endpoint",
+         REGION_X + 36, 228, 360, 22)
 
     # ---- workload spokes ----------------------------------------------------
     for i, seg in enumerate(segments):
@@ -467,9 +624,33 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         sid = f"s{i}"
         third = 20 + 10 * i
         ax, aw = x + 24, SPOKE_W - 48
+        compute_sku_line = (
+            f"\n{_sku_caption(seg.get('compute_skus'), limit=2)}"
+            if seg.get("compute_skus") else ""
+        )
         box(f"{sid}vcn",
             f"{seg['name']} Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
             x, VCN_Y, SPOKE_W, VCN_H, "vcn")
+        # A DRG attaches to the spoke VCN, not to every VM. Anchor the connection below
+        # the VCN so the shared transit line stays outside its Availability Domains.
+        transit_x = HUB_X + HUB_W - 120 + 20 * i
+        transit_y = VCN_Y + VCN_H + 20 + 8 * i
+        attachment_x = x + SPOKE_W * 0.08
+        source_fraction = min(0.8, 0.25 + 0.25 * i)
+        source_y = 1092 + 88 * source_fraction
+        link(
+            "drg",
+            f"{sid}vcn",
+            "",
+            "plain",
+            source_anchor=(1, source_fraction),
+            target_anchor=(0.08, 1),
+            waypoints=[
+                [transit_x, source_y],
+                [transit_x, transit_y],
+                [attachment_x, transit_y],
+            ],
+        )
         if ad_split:
             # ---- AD layout: EVERY compute/DB object lives inside an Availability Domain box.
             #      Multiple ADs when a resource type is split across them; otherwise ONE big AD.
@@ -485,8 +666,8 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             # sit INSIDE an AD (one big AD, or spread across the VM ADs).
             ad_dbs = [[] for _ in range(n_ad)]
             if db_types:
-                sql_dbs = [d for d in db_types if "sql" in _norm(d[1])]
-                other_dbs = [d for d in db_types if "sql" not in _norm(d[1])]
+                sql_dbs = [d for d in db_types if "sql" in _norm(d["label"])]
+                other_dbs = [d for d in db_types if "sql" not in _norm(d["label"])]
                 if n_ad == 1:
                     db_ads = [0]
                 elif split_dbs and not split_vms:
@@ -509,8 +690,9 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 yy = ad_top + 56
                 if split_vms:
                     icon(f"{sid}vm{j}", "Compute - Virtual Machine VM",
-                         f"{_even_share(reg_vms, n_ad, j):,} VMs", adx + adw // 2 - 30, yy, 60)
-                    link("drg", f"{sid}vm{j}", "AD transit", "solid")
+                         f"{_even_share(reg_vms, n_ad, j):,} VMs{compute_sku_line}",
+                         adx + adw // 2 - 30, yy, 60,
+                         serviceName="Compute", skus=list(seg.get("compute_skus") or ()))
                     yy += 104
                     if win_vms > 0:
                         icon(f"{sid}winvm{j}", "Compute - Virtual Machine VM",
@@ -520,32 +702,67 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 elif j == 0:
                     # VMs NOT split -> the entire compute footprint sits in the main AD (AD 1).
                     icon(f"{sid}vm", "Compute - Virtual Machine VM",
-                         f"{reg_vms:,} {seg['name']} VMs\n{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB",
-                         adx + adw // 2 - 30, yy, 60)
-                    link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
+                         f"{reg_vms:,} {seg['name']} VMs\n"
+                         f"{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB"
+                         f"{compute_sku_line}",
+                         adx + adw // 2 - 30, yy, 60,
+                         serviceName="Compute", skus=list(seg.get("compute_skus") or ()))
                     yy += 104
                     if win_vms > 0:
                         icon(f"{sid}winvm", "Compute - Virtual Machine VM",
                              f"{win_vms:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
                              adx + adw // 2 - 30, yy, 60)
-                        link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
                         yy += 110
                 # Databases INSIDE the AD: one big AD lays them in a row (uses the full width);
                 # narrow split ADs stack them below the VMs.
                 dbs = ad_dbs[j]
                 if n_ad == 1 and dbs:
                     dcw = adw // len(dbs)
-                    for di, (stencil, label, mo) in enumerate(dbs):
-                        icon(f"{sid}ad{j}db{di}", stencil, f"{label}\n${mo:,.0f}/mo",
-                             adx + di * dcw + (dcw - 60) // 2, yy, 60)
+                    for di, database in enumerate(dbs):
+                        icon(
+                            f"{sid}ad{j}db{di}",
+                            database["shape"],
+                            f"{database['label']}\n{_sku_caption(database['skus'])}\n"
+                            f"${database['monthly']:,.0f}/mo",
+                            adx + di * dcw + (dcw - 60) // 2,
+                            yy,
+                            60,
+                            serviceName=database["label"],
+                            skus=list(database["skus"]),
+                        )
                 else:
-                    for di, (stencil, label, mo) in enumerate(dbs):
-                        icon(f"{sid}ad{j}db{di}", stencil, f"{label}\n${mo:,.0f}/mo",
-                             adx + adw // 2 - 30, yy, 60)
+                    for di, database in enumerate(dbs):
+                        icon(
+                            f"{sid}ad{j}db{di}",
+                            database["shape"],
+                            f"{database['label']}\n{_sku_caption(database['skus'])}\n"
+                            f"${database['monthly']:,.0f}/mo",
+                            adx + adw // 2 - 30,
+                            yy,
+                            60,
+                            serviceName=database["label"],
+                            skus=list(database["skus"]),
+                        )
                         yy += 96
+            # Regional subnets span all AD placement lanes. The AD boxes remain the
+            # fault-domain background while these outlines show the network boundary.
+            box(f"{sid}_app", "",
+                ax + 10, 420, aw - 20, 270, "subnet")
+            text(
+                f"{sid}_app_label",
+                f"{seg['name']} Regional Private App Subnet | 10.{third}.1.0/24",
+                ax + 24, 675, aw - 48, 20,
+            )
+            box(f"{sid}_data", "",
+                ax + 10, 705, aw - 20, 290, "subnet")
+            text(
+                f"{sid}_data_label",
+                f"{seg['name']} Regional Private Data / Storage Subnet | 10.{third}.2.0/24",
+                ax + 24, 968, aw - 48, 20,
+            )
             icon(f"{sid}bkt", "Storage - Object Storage",
                  f"{seg['name']} backup bucket\nObject Storage",
-                 ax + aw // 2 - 44, VCN_Y + VCN_H - 116, 84)
+                 ax + aw // 2 - 44, VCN_Y + VCN_H - 205, 84)
         else:
             # ---- single layout (no AD split) ----
             box(f"{sid}_app", f"{seg['name']} Private App Subnet\n10.{third}.1.0/24",
@@ -557,34 +774,44 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             icon(f"{sid}vm", "Compute - Virtual Machine VM",
                  (f"{_rv:,} {seg['name']} VMs\n"
                   f"{seg['ocpu']:,.0f} OCPU · {seg['ram']:,.0f} GB RAM"
-                  + (f"\n{shape_label} flex" if shape_label else "")),
-                 ax + 60, 500, 96)
+                  + (f"\n{shape_label} flex" if shape_label else "")
+                  + compute_sku_line),
+                 ax + 60, 500, 96,
+                 serviceName="Compute", skus=list(seg.get("compute_skus") or ()))
             # Windows-licensed servers are their own VM image (not a standalone license icon).
             if _wv > 0:
                 icon(f"{sid}winvm", "Compute - Virtual Machine VM",
                      f"{_wv:,} Windows VMs\n${seg['win']:,.0f}/mo licensing",
                      ax + aw - 156, 500, 96)
-                link("drg", f"{sid}winvm", "Hub-spoke transit", "solid")
             if db_types:
-                n = len(db_types)
-                per_row = min(3, n)
-                nrows = (n + per_row - 1) // per_row
+                db_count = len(db_types)
+                per_row = min(3, db_count)
+                nrows = (db_count + per_row - 1) // per_row
                 avail = aw - 170
                 cellw = avail // per_row
-                dsz = 84 if n <= 3 else 68
+                dsz = 84 if db_count <= 3 else 68
                 y0 = 800 if nrows == 1 else 758
-                for k, (stencil, label, mo) in enumerate(db_types):
+                for k, database in enumerate(db_types):
                     col, row = k % per_row, k // per_row
                     cx = ax + 20 + col * cellw + (cellw - dsz) // 2
                     nid = f"{sid}db{k}"
-                    icon(nid, stencil, f"{label}\n${mo:,.0f}/mo", cx, y0 + row * 116, dsz)
+                    icon(
+                        nid,
+                        database["shape"],
+                        f"{database['label']}\n{_sku_caption(database['skus'])}\n"
+                        f"${database['monthly']:,.0f}/mo",
+                        cx,
+                        y0 + row * 116,
+                        dsz,
+                        serviceName=database["label"],
+                        skus=list(database["skus"]),
+                    )
                     if k == 0:
                         link(f"{sid}vm", nid, "App -> DB", "solid")
             icon(f"{sid}bkt", "Storage - Object Storage",
                  f"{seg['name']} backup bucket\nObject Storage",
                  ax + aw // 2 - 44, VCN_Y + VCN_H - 130, 88)
-            link("drg", f"{sid}vm", "Hub-spoke transit", "solid")
-        # The attached block volume needs no backup edge — backups live at the DR site.
+        # The attached block volume needs no backup edge - backups live at the DR site.
 
     # ---- DR region (only when the app's Enable DR toggle is on) --------------
     if dr_enabled:
@@ -593,7 +820,7 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         if rep_dbs: _rep_bits.append("database replicas")
         if rep_obj: _rep_bits.append("object / block backups")
         _rep_txt = ", ".join(_rep_bits) if _rep_bits else "region shell only"
-        _dr_head = f"Secondary OCI Region for DR{(' — ' + dr_region) if dr_region else ''}"
+        _dr_head = f"Secondary OCI Region for DR{(' - ' + dr_region) if dr_region else ''}"
         _dr_sub = (f"Replicating: {_rep_txt}"
                    + ("  ·  Full Stack DR priced in this BOM"
                       if dr_priced else
@@ -605,7 +832,7 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             HUB_X, DR_Y + 90, HUB_W, DR_H - 150, "vcn")
         box("drorch", "OCI Full Stack DR orchestration",
             HUB_X + 28, DR_Y + 150, HUB_W - 56, 190, "plain")
-        # Orchestration bullets reflect what's ACTUALLY priced/selected — so an added
+        # Orchestration bullets reflect what's ACTUALLY priced/selected - so an added
         # FastConnect port or a managed DB (bill or add-in) shows up here, not a fixed list.
         _dr_bullets = ["DR protection groups per workload spoke",
                        "Prechecks, drills and switchover / failover plans"]
@@ -621,7 +848,7 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
              HUB_X + HUB_W // 2 - 44, DR_Y + 470)
         link("drg", "drdrg", "DRG remote peering / DR routing", "dashed")
         # When FastConnect is priced, the customer edge reaches the DR region over
-        # FastConnect too — draw that so DR reflects the added connectivity.
+        # FastConnect too - draw that so DR reflects the added connectivity.
         if _has_fc:
             link("cpe", "drdrg", "FastConnect to DR region", "solid")
 
@@ -630,12 +857,22 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             sid = f"s{i}"
             third = 120 + 10 * i
             ax, aw = x + 24, SPOKE_W - 48
+            compute_sku_line = (
+                f"\n{_sku_caption(seg.get('compute_skus'), limit=2)}"
+                if seg.get("compute_skus") else ""
+            )
             box(f"{sid}drvcn", f"{seg['name']} DR Spoke VCN\n10.{third}.0.0/16 | DRG attachment",
                 x, DR_Y + 90, SPOKE_W, DR_H - 150, "vcn")
+            link("drdrg", f"{sid}drvcn", "", "plain",
+                 source_anchor=(1, 0.5), target_anchor=(0.08, 1))
+            if rep_obj:
+                text(
+                    f"{sid}replnote", "Object Storage cross-region replication",
+                    ax + aw - 340, DR_Y + 116, 320, 24)
             # Only the resource types the user chose to replicate are drawn in the DR
             # region. Compute standbys, managed-DB replicas, and object/block backups are
             # each independently gated by the app's "Replicate to DR" selection.
-            db_slots = db_types[:6] if (rep_dbs and db_types) else []
+            db_slots = db_types if (rep_dbs and db_types) else []
             if ad_split and (rep_vms or db_slots):
                 # ---- DR standby objects live inside an Availability Domain too (one big AD).
                 #      Regional object/block backups stay OUTSIDE the AD (they aren't AD-bound). ----
@@ -647,26 +884,49 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                 _dbcols = 3
                 if rep_vms:
                     icon(f"{sid}drvm", "Compute - Virtual Machine VM",
-                         f"{seg['vms']:,} {seg['name']}\nstandby VMs", ad_x + 40, yy, 88)
-                    link("drdrg", f"{sid}drvm", "DR transit", "dashed")
+                         f"{seg['vms']:,} {seg['name']}\nstandby VMs{compute_sku_line}",
+                         ad_x + 40, yy, 88,
+                         serviceName="Compute", skus=list(seg.get("compute_skus") or ()))
                     _dbx0 = ad_x + 210      # DB replicas sit to the right of the standby VMs
                     _dbcols = 2             # fewer, wider columns so the long DR labels fit
                 if db_slots:
                     percol = min(_dbcols, len(db_slots))
                     avail = (ad_x + ad_w - 20) - _dbx0
                     cw = max(120, avail // percol)
-                    for k, (stencil, label, mo) in enumerate(db_slots):
+                    for k, database in enumerate(db_slots):
                         col, row = k % percol, k // percol
                         cx = _dbx0 + col * cw + (cw - 56) // 2
-                        icon(f"{sid}drdb{k}", stencil,
-                             f"(Opt.) {label}\n{_db_dr_mechanism(label)}",
-                             cx, yy + row * 106, 56)
+                        icon(
+                            f"{sid}drdb{k}",
+                            database["shape"],
+                            f"(Opt.) {database['label']}\n"
+                            f"{_sku_caption(database['skus'])}\n"
+                            f"{_db_dr_mechanism(database['label'])}",
+                            cx,
+                            yy + row * 106,
+                            56,
+                            serviceName=database["label"],
+                            skus=list(database["skus"]),
+                        )
                 if rep_obj:
                     icon(f"{sid}drbkt", "Storage - Object Storage",
                          f"{seg['name']} DR target\nbucket", ax + 56, ad_y + ad_h + 22, 84)
                     icon(f"{sid}drblk", "Storage - Block Storage",
                          f"(Opt.) block backups\n{seg['block']:,.0f} GB", ax + aw - 156, ad_y + ad_h + 22, 84)
-                    link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
+                box(f"{sid}dr_app", "",
+                    ax + 10, DR_Y + 160, aw - 20, 160, "subnet")
+                text(
+                    f"{sid}dr_app_label",
+                    f"{seg['name']} DR Regional App Subnet | 10.{third}.1.0/24",
+                    ax + 24, DR_Y + 292, aw - 48, 20,
+                )
+                box(f"{sid}dr_data", "",
+                    ax + 10, DR_Y + 330, aw - 20, 170, "subnet")
+                text(
+                    f"{sid}dr_data_label",
+                    f"{seg['name']} DR Regional Data / Restore Subnet | 10.{third}.2.0/24",
+                    ax + 24, DR_Y + 472, aw - 48, 20,
+                )
             else:
                 # ---- DR subnet layout (AD feature off) ----
                 box(f"{sid}dr_app", f"{seg['name']} DR App Subnet\n10.{third}.1.0/24",
@@ -675,19 +935,29 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                     ax, DR_Y + 380, aw, 250, "subnet")
                 if rep_vms:
                     icon(f"{sid}drvm", "Compute - Virtual Machine VM",
-                         f"{seg['vms']:,} {seg['name']}\nstandby VMs", ax + 56, DR_Y + 212, 88)
-                    link("drdrg", f"{sid}drvm", "DR transit", "dashed")
+                         f"{seg['vms']:,} {seg['name']}\nstandby VMs{compute_sku_line}",
+                         ax + 56, DR_Y + 212, 88,
+                         serviceName="Compute", skus=list(seg.get("compute_skus") or ()))
                 if db_slots:
                     nd = len(db_slots)
                     pr = min(3, nd)
                     avail = aw - (150 if rep_obj else 40)   # reserve right margin for backups
                     cw = avail // pr
-                    for k, (stencil, label, mo) in enumerate(db_slots):
+                    for k, database in enumerate(db_slots):
                         col, row = k % pr, k // pr
                         cx = ax + 14 + col * cw + (cw - 56) // 2
-                        icon(f"{sid}drdb{k}", stencil,
-                             f"(Opt.) {label}\n{_db_dr_mechanism(label)}",
-                             cx, DR_Y + 412 + row * 106, 56)
+                        icon(
+                            f"{sid}drdb{k}",
+                            database["shape"],
+                            f"(Opt.) {database['label']}\n"
+                            f"{_sku_caption(database['skus'])}\n"
+                            f"{_db_dr_mechanism(database['label'])}",
+                            cx,
+                            DR_Y + 412 + row * 106,
+                            56,
+                            serviceName=database["label"],
+                            skus=list(database["skus"]),
+                        )
                 if rep_obj:
                     if db_slots:
                         icon(f"{sid}drbkt", "Storage - Object Storage",
@@ -700,14 +970,15 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
                              f"(Optional) Backups\n{seg['block']:,.0f} GB", ax + 56, DR_Y + 442, 88)
                         icon(f"{sid}drbkt", "Storage - Object Storage",
                              f"{seg['name']} DR target\nbucket", ax + aw - 144, DR_Y + 442, 88)
-                    link(f"{sid}bkt", f"{sid}drbkt", "Cross-region bucket replication", "backup")
 
     # ---- notes --------------------------------------------------------------
     win_total = sum(s["win"] for s in segments)
     seg_src = {"tier": "Tier", "env": "Environment", "os_family": "OS family",
                "app": "Application"}.get(segment_source, segment_source or "OS family")
-    box("notes", "Notes and assumptions — everything numeric on this page comes from the "
-                 "uploaded inventory and the priced BOM", REGION_X, notes_y, region_w, 240, "note")
+    notes_height = 240 + ai_note_count * 38
+    box("notes", "Notes and assumptions - everything numeric on this page comes from the "
+                 "uploaded inventory and the priced BOM", REGION_X, notes_y, region_w,
+        notes_height, "note")
     notes = [
         "Sizing: OCPU = vCPU / 2 for virtual rows; physical rows map 1 core = 1 OCPU. "
         "Memory and block storage carry over from the source inventory, at 10 VPUs/GB.",
@@ -717,54 +988,426 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
          "No Windows OS licensing is priced here (no Windows workloads, or licensing is excluded)."),
         f"Workloads are split into {n} spoke VCN(s) using the inventory's own {seg_src} column. "
         "Add a Tier / Environment column to split them further.",
-        "Hub networking, Security/KMS, DR and backup capacity carry NO cost in this BOM — the "
+        "Hub networking, Security/KMS, DR and backup capacity carry NO cost in this BOM - the "
         "source inventory has no data for them. They are the target pattern, not costed lines.",
         ("Remote sites come from the inventory's site / location column."
          if sites else
          "No site / location column was found, so no site-to-region topology is drawn."),
     ]
+    if _ai_plan:
+        summary = _clean(_ai_plan.get("summary")).replace("—", "-").replace("–", "-")
+        if summary:
+            notes.append(f"AI architecture plan: {summary[:260]}")
+        warnings = [
+            _clean(item).replace("—", "-").replace("–", "-")
+            for item in (_ai_plan.get("warnings") or [])
+            if _clean(item)
+        ]
+        if warnings:
+            notes.append(f"AI planning warning: {warnings[0][:240]}")
     for i, note_line in enumerate(notes):
         text(f"n{i}", note_line, REGION_X + 28, notes_y + 52 + i * 38, region_w - 60, 26)
 
     return {
-        "title": f"{cust} OCI Target Architecture — derived from the priced BOM",
+        "title": f"{cust} OCI Target Architecture - derived from the priced BOM",
         "page": {"width": page_w, "height": page_h},
         "containers": C, "nodes": N, "edges": E,
     }
 
 
-def render(spec, out_dir, name="oci_architecture"):
-    """Render the spec to .drawio + .png. Returns (drawio_path, png_path|None)."""
-    sys.path.insert(0, str(SCRIPTS_DIR))
-    import build_diagram  # vendored from the oci-architecture-diagrams skill
+class _PillowOciIconRenderer:
+    """Render the bundled Oracle draw.io stencil library without native Cairo."""
+
+    def __init__(self):
+        import base64
+        import urllib.parse
+        import xml.etree.ElementTree as ET
+        import zlib
+
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from library_tools import Library
+
+        self.lib = Library(str(LIB_PATH))
+        self.cache = {}
+        self.base64 = base64
+        self.urllib_parse = urllib.parse
+        self.etree = ET
+        self.zlib = zlib
+
+    def _decode_stencil(self, blob):
+        xml = self.zlib.decompress(self.base64.b64decode(blob), -15).decode()
+        return self.etree.fromstring(self.urllib_parse.unquote(xml))
+
+    def _parts(self, title):
+        resolved = self.lib.resolve(title)
+        if resolved in self.cache:
+            return self.cache[resolved]
+        xml, width, height = self.lib.shape_xml(resolved)
+        root = self.etree.fromstring(xml).find("root")
+        cells = {cell.get("id"): cell for cell in root.findall("mxCell")}
+        parts = []
+
+        def absolute_geometry(cell):
+            gx = gy = 0.0
+            current = cell
+            while current is not None:
+                geometry = current.find("mxGeometry")
+                if geometry is not None:
+                    gx += float(geometry.get("x", 0))
+                    gy += float(geometry.get("y", 0))
+                current = cells.get(current.get("parent"))
+            geometry = cell.find("mxGeometry")
+            return (
+                gx,
+                gy,
+                float(geometry.get("width", 0)) if geometry is not None else 0,
+                float(geometry.get("height", 0)) if geometry is not None else 0,
+            )
+
+        for cell in cells.values():
+            style = cell.get("style", "")
+            stencil_match = re.search(r"shape=stencil\(([^)]+)\)", style)
+            if not stencil_match:
+                continue
+            fill_match = re.search(r"fillColor=(#[0-9A-Fa-f]{6})", style)
+            if fill_match:
+                fill = fill_match.group(1)
+            elif "fillColor=none" in style:
+                continue
+            else:
+                fill = "#333333"
+            gx, gy, part_width, part_height = absolute_geometry(cell)
+            parts.append(
+                (
+                    self._decode_stencil(stencil_match.group(1)),
+                    gx,
+                    gy,
+                    part_width,
+                    part_height,
+                    fill,
+                )
+            )
+        if not parts:
+            raise ValueError(f"OCI stencil {title!r} contains no drawable vector paths.")
+        self.cache[resolved] = (parts, width, height)
+        return self.cache[resolved]
+
+    @staticmethod
+    def _path_subpaths(path):
+        subpaths = []
+        points = []
+        current = None
+        start = None
+
+        def finish():
+            nonlocal points
+            if len(points) >= 3:
+                subpaths.append(points)
+            points = []
+
+        for operation in path:
+            if operation.tag == "move":
+                finish()
+                current = (float(operation.get("x")), float(operation.get("y")))
+                start = current
+                points = [current]
+            elif operation.tag == "line" and current is not None:
+                current = (float(operation.get("x")), float(operation.get("y")))
+                points.append(current)
+            elif operation.tag == "curve" and current is not None:
+                p0 = current
+                p1 = (float(operation.get("x1")), float(operation.get("y1")))
+                p2 = (float(operation.get("x2")), float(operation.get("y2")))
+                p3 = (float(operation.get("x3")), float(operation.get("y3")))
+                for step in range(1, 17):
+                    t = step / 16
+                    inv = 1 - t
+                    points.append(
+                        (
+                            inv**3 * p0[0]
+                            + 3 * inv**2 * t * p1[0]
+                            + 3 * inv * t**2 * p2[0]
+                            + t**3 * p3[0],
+                            inv**3 * p0[1]
+                            + 3 * inv**2 * t * p1[1]
+                            + 3 * inv * t**2 * p2[1]
+                            + t**3 * p3[1],
+                        )
+                    )
+                current = p3
+            elif operation.tag == "close" and start is not None:
+                if points and points[-1] != start:
+                    points.append(start)
+                current = start
+        finish()
+        return subpaths
+
+    def _draw_stencil(self, image, shape_root, x, y, width, height, fill):
+        from PIL import Image, ImageChops, ImageDraw, ImageColor
+
+        source_width = float(shape_root.get("w", 100))
+        source_height = float(shape_root.get("h", 100))
+        scale_x = width / source_width
+        scale_y = height / source_height
+        pad = 2
+        mask_size = (
+            max(1, int(round(width)) + pad * 2),
+            max(1, int(round(height)) + pad * 2),
+        )
+        drew_path = False
+        for path in shape_root.iter("path"):
+            path_mask = Image.new("1", mask_size, 0)
+            for subpath in self._path_subpaths(path):
+                polygon = [
+                    (px * scale_x + pad, py * scale_y + pad)
+                    for px, py in subpath
+                ]
+                if len(polygon) < 3:
+                    continue
+                subpath_mask = Image.new("1", mask_size, 0)
+                ImageDraw.Draw(subpath_mask).polygon(polygon, fill=1)
+                path_mask = ImageChops.logical_xor(path_mask, subpath_mask)
+                drew_path = True
+            if path_mask.getbbox():
+                color = Image.new("RGB", mask_size, ImageColor.getrgb(fill))
+                image.paste(
+                    color,
+                    (int(round(x)) - pad, int(round(y)) - pad),
+                    path_mask.convert("L"),
+                )
+        return drew_path
+
+    def draw(self, image, title, x, y, width, height):
+        parts, library_width, library_height = self._parts(title)
+        scale_x = width / library_width
+        scale_y = height / library_height
+        drew_any = False
+        for shape_root, gx, gy, part_width, part_height, fill in parts:
+            drew_any = self._draw_stencil(
+                image,
+                shape_root,
+                x + gx * scale_x,
+                y + gy * scale_y,
+                part_width * scale_x,
+                part_height * scale_y,
+                fill,
+            ) or drew_any
+        if not drew_any:
+            raise ValueError(f"OCI stencil {title!r} did not render any visible paths.")
+
+
+def _render_png_pillow(spec, out_png):
+    """Portable PNG renderer used when pycairo is unavailable (notably on Vercel).
+
+    The editable .drawio remains the icon-perfect source. This renderer preserves the
+    same topology, container hierarchy, anchors, labels, and Oracle visual language so
+    the Pricing Overview always receives a readable architecture image.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    import textwrap
+
+    page = spec.get("page") or {}
+    width = max(800, int(page.get("width") or 2600))
+    height = max(600, int(page.get("height") or 2050))
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    icon_renderer = _PillowOciIconRenderer()
+
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+    bold_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    ]
+
+    def font(size, bold=False):
+        for path in (bold_paths if bold else font_paths):
+            try:
+                return ImageFont.truetype(path, size)
+            except (OSError, IOError):
+                pass
+        return ImageFont.load_default()
+
+    container_style = {
+        "tenancy": ("#9E9892", "#FFFFFF", 20),
+        "region": ("#C6C1BC", "#F5F4F2", 19),
+        "compartment": ("#BB501C", "#FFFFFF", 17),
+        "vcn": ("#AE562C", "#FFFFFF", 16),
+        "subnet": ("#AE562C", "#FFFFFF", 15),
+        "ad": ("#5E7D82", "#E9F0F0", 15),
+        "plain": ("#9E9892", "#FFFFFF", 16),
+        "note": ("#B5B0AA", "#FFFFFF", 15),
+        "external": ("#9E9892", "#FFFFFF", 16),
+    }
+    dashed_styles = {"tenancy", "compartment", "vcn", "subnet", "external"}
+
+    def dashed_rect(box, color, radius=8, dash=8, gap=5, line_width=2):
+        x1, y1, x2, y2 = box
+        # Pillow has no portable dashed rounded rectangle; short segments keep the
+        # hierarchy legible and avoid depending on a native graphics library.
+        for x in range(int(x1 + radius), int(x2 - radius), dash + gap):
+            draw.line((x, y1, min(x + dash, x2 - radius), y1), fill=color, width=line_width)
+            draw.line((x, y2, min(x + dash, x2 - radius), y2), fill=color, width=line_width)
+        for y in range(int(y1 + radius), int(y2 - radius), dash + gap):
+            draw.line((x1, y, x1, min(y + dash, y2 - radius)), fill=color, width=line_width)
+            draw.line((x2, y, x2, min(y + dash, y2 - radius)), fill=color, width=line_width)
+
+    def wrapped(value, max_chars):
+        lines = []
+        for raw in str(value or "").splitlines() or [""]:
+            lines.extend(textwrap.wrap(raw, width=max(8, max_chars)) or [""])
+        return "\n".join(lines)
+
+    bounds = {}
+    for con in spec.get("containers", []):
+        x, y, w, h = (int(con[k]) for k in ("x", "y", "w", "h"))
+        bounds[con.get("id", "")] = (x, y, w, h)
+        style = con.get("style", "plain")
+        stroke, fill, size = container_style.get(style, container_style["plain"])
+        if style != "subnet":
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=8, fill=fill)
+        if style in dashed_styles:
+            dashed_rect((x, y, x + w, y + h), stroke)
+        else:
+            draw.rounded_rectangle((x, y, x + w, y + h), radius=8, outline=stroke, width=2)
+        if con.get("label"):
+            label = wrapped(con["label"], max(12, int(w / 9)))
+            draw.multiline_text(
+                (x + 12, y + 10), label, fill=stroke if style in {"compartment", "vcn", "ad"} else "#312D2A",
+                font=font(size, bold=style in {"region", "compartment", "vcn", "ad"}),
+                spacing=3)
+
+    for node in spec.get("nodes", []):
+        bounds[node.get("id", "")] = (
+            int(node["x"]), int(node["y"]), int(node.get("w", 84)), int(node.get("h", 84)))
+
+    def anchor(node_id, explicit, toward_id):
+        x, y, w, h = bounds[node_id]
+        if isinstance(explicit, (list, tuple)) and len(explicit) == 2:
+            return (x + w * float(explicit[0]), y + h * float(explicit[1]))
+        tx, ty, tw, th = bounds[toward_id]
+        dx = (tx + tw / 2) - (x + w / 2)
+        dy = (ty + th / 2) - (y + h / 2)
+        if abs(dx) > abs(dy):
+            return (x + (w if dx > 0 else 0), y + h / 2)
+        return (x + w / 2, y + (h if dy > 0 else 0))
+
+    edge_styles = {
+        "solid": ("#55504B", 3),
+        "dashed": ("#55504B", 2),
+        "backup": ("#8B857F", 2),
+        "plain": ("#55504B", 3),
+    }
+    for edge in spec.get("edges", []):
+        source, target = edge.get("source"), edge.get("target")
+        if source not in bounds or target not in bounds:
+            continue
+        a = anchor(source, edge.get("sourceAnchor"), target)
+        b = anchor(target, edge.get("targetAnchor"), source)
+        color, line_width = edge_styles.get(
+            edge.get("style", "solid"), edge_styles["solid"])
+        explicit_waypoints = edge.get("waypoints")
+        if isinstance(explicit_waypoints, list) and explicit_waypoints:
+            points = [
+                a,
+                *[
+                    (float(point[0]), float(point[1]))
+                    for point in explicit_waypoints
+                    if isinstance(point, (list, tuple)) and len(point) == 2
+                ],
+                b,
+            ]
+        elif abs(a[0] - b[0]) < 10 or abs(a[1] - b[1]) < 10:
+            points = [a, b]
+        elif abs(a[1] - b[1]) > abs(a[0] - b[0]):
+            mid = (a[1] + b[1]) / 2
+            points = [a, (a[0], mid), (b[0], mid), b]
+        else:
+            mid = (a[0] + b[0]) / 2
+            points = [a, (mid, a[1]), (mid, b[1]), b]
+        draw.line(points, fill=color, width=line_width, joint="curve")
+        bx, by = b
+        draw.polygon([(bx, by), (bx - 9, by - 5), (bx - 9, by + 5)], fill=color)
+        if edge.get("label"):
+            label = edge["label"]
+            mx, my = points[len(points) // 2]
+            bbox = draw.textbbox((0, 0), label, font=font(13))
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            draw.rectangle((mx - tw / 2 - 4, my - th - 4, mx + tw / 2 + 4, my + 4),
+                           fill="white")
+            draw.text((mx - tw / 2, my - th), label, fill="#312D2A", font=font(13))
+
+    for node in spec.get("nodes", []):
+        x, y, w, h = bounds[node.get("id", "")]
+        if "text" in node:
+            draw.multiline_text(
+                (x + 4, y + 3), wrapped(node["text"], max(12, int(w / 8))),
+                fill="#312D2A", font=font(15), spacing=3)
+            continue
+        icon_renderer.draw(image, node["shape"], x, y, w, h)
+        if node.get("label"):
+            label = wrapped(node["label"], max(10, int(max(w + 90, 130) / 8)))
+            label_box = draw.multiline_textbbox((0, 0), label, font=font(14), spacing=2,
+                                                align="center")
+            label_w = label_box[2] - label_box[0]
+            draw.multiline_text(
+                (x + w / 2 - label_w / 2, y + h + 7), label,
+                fill="#312D2A", font=font(14), spacing=2, align="center")
+
+    image.save(out_png, "PNG", optimize=True)
+
+
+def render(spec, out_dir, name="oci_architecture", diagram_options=None):
+    """Render through the Boeing OCI authoring and review pipeline."""
+    from architecture_engine.integration import (
+        build_boeing_spec,
+        render_boeing_drawio,
+        review_preview,
+        write_architecture_review,
+    )
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    spec_path = out_dir / f"{name}_spec.json"
-    spec_path.write_text(json.dumps(spec, indent=2))
-    drawio = out_dir / f"{name}.drawio"
     png = out_dir / f"{name}.png"
+    options = diagram_options or {}
+    ai_plan = options.get("aiPlan") if isinstance(options.get("aiPlan"), dict) else None
+    boeing_spec = build_boeing_spec(spec, options=options, plan=ai_plan)
+    artifacts = render_boeing_drawio(boeing_spec, out_dir, name=name)
+    drawio = artifacts["drawio"]
+
     try:
-        build_diagram.build(str(spec_path), str(drawio), str(png), str(LIB_PATH))
-    except Exception as exc:
-        # The PNG raster needs pycairo (system cairo libs). The .drawio still builds.
-        import sys as _sys
-        if isinstance(exc, ModuleNotFoundError) and "cairo" in str(exc):
-            print("=" * 72, file=_sys.stderr)
-            print("[diagram] PNG not rendered: pycairo is not installed in this Python "
-                  f"({_sys.executable}).", file=_sys.stderr)
-            print("[diagram] Install it to get the rendered diagram:", file=_sys.stderr)
-            print("[diagram]     macOS:  brew install cairo pkg-config && "
-                  f"{_sys.executable} -m pip install pycairo", file=_sys.stderr)
-            print("[diagram]     Linux:  apt-get install -y libcairo2-dev && "
-                  f"{_sys.executable} -m pip install pycairo", file=_sys.stderr)
-            print("[diagram] The editable .drawio is still produced.", file=_sys.stderr)
-            print("=" * 72, file=_sys.stderr)
-        else:
-            import traceback
-            traceback.print_exc()
-        build_diagram.build(str(spec_path), str(drawio), None, str(LIB_PATH))
+        _render_png_pillow(spec, png)
+        visual_path = out_dir / f"{name}_visual_review.json"
+        review_preview(
+            png,
+            artifacts["report"],
+            artifacts["spec"],
+            visual_path,
+        )
+        write_architecture_review(
+            artifacts["spec"],
+            artifacts["report"],
+            artifacts["quality"],
+            visual_path,
+            out_dir / f"{name}_review.json",
+        )
+    except Exception:
+        import traceback
+        print("[diagram] Architecture PNG or visual review failed; the editable draw.io is still available.",
+              file=sys.stderr)
+        traceback.print_exc()
         png = None
+        write_architecture_review(
+            artifacts["spec"],
+            artifacts["report"],
+            artifacts["quality"],
+            None,
+            out_dir / f"{name}_review.json",
+        )
     return drawio, (png if png and png.exists() else None)
 
 
@@ -806,7 +1449,7 @@ def build_architecture(pricing, rows, fields_keys, bom_name="", shape_label="", 
     """Convenience: BOM -> segments -> spec -> (drawio, png). Returns (drawio, png).
 
     `sites` is the number of DISTINCT sites found in the inventory's site/location column,
-    or None when the inventory has no such column — in which case the diagram says so
+    or None when the inventory has no such column - in which case the diagram says so
     rather than drawing sites that don't exist.
     `extra_priced` is the priced 'Add OCI services' list (oci_catalog.price_extras output);
     it's folded into the pricing the diagram reads so the picture matches the whole BOM.
@@ -821,14 +1464,19 @@ def build_architecture(pricing, rows, fields_keys, bom_name="", shape_label="", 
                       segment_source=segment_source(rows, fields_keys), sites=sites,
                       diagram_options=diagram_options or {})
     out_dir = out_dir or tempfile.mkdtemp(prefix="ocidiag_")
-    return render(spec, out_dir, name="oci_architecture")
+    return render(
+        spec,
+        out_dir,
+        name="oci_architecture",
+        diagram_options=diagram_options or {},
+    )
 
 
 # ---------------------------------------------------------------------------
 # Site / region topology  (sites -> OCI regions, DRG/VCN/VPN/FastConnect + costs)
 # ---------------------------------------------------------------------------
 def load_site_regions(path):
-    """Customer sites grouped by target OCI region. `path` is REQUIRED — there is no
+    """Customer sites grouped by target OCI region. `path` is REQUIRED - there is no
     repo-default site file, because site data is customer-specific and must never be
     picked up implicitly for a different customer's BOM."""
     if not path:
@@ -845,7 +1493,7 @@ def load_site_regions(path):
 
 def _network_cost_block():
     """Networking rates for the topology's cost panel, taken from the app's OCI price
-    data — never from memory. On OCI the DRG/VCN/subnets/VPN/gateways are free; the only
+    data - never from memory. On OCI the DRG/VCN/subnets/VPN/gateways are free; the only
     recurring charges are FastConnect ports and egress beyond the 10 TB/month allowance."""
     block = {"hours_mo": 730, "fastconnect_port_hr": 1.275,
              "egress_free_tb": 10, "egress_per_gb": 0.0085}
@@ -867,7 +1515,7 @@ def _network_cost_block():
 def topology_spec_from_sites(regions, title="", subtitle=""):
     """Adapt data/customer_sites.json into the topology renderer's spec (a dict with a
     regions list). Regions sharing a regionId are merged by the renderer into ONE region
-    card (one DRG, one VCN) — the correct picture — so don't pre-merge here.
+    card (one DRG, one VCN) - the correct picture - so don't pre-merge here.
     """
     out = []
     for r in regions:
@@ -900,7 +1548,7 @@ def topology_spec_from_sites(regions, title="", subtitle=""):
 
     return {
         "name": "oci_topology",
-        "title": title or "Global Network Connectivity — Customer Sites to OCI Regions",
+        "title": title or "Global Network Connectivity - Customer Sites to OCI Regions",
         "subtitle": subtitle or ("Site-to-Site VPN & FastConnect into regional DRG/VCN, "
                                  "interconnected over the OCI backbone (DRG remote peering)"),
         "backbone_label": "OCI Backbone · DRG Remote Peering",
@@ -967,7 +1615,7 @@ def build_all(pricing, rows, fields_keys, bom_name="", shape_label="", out_dir=N
     except Exception:
         pass
 
-    if sites_path:                       # explicit opt-in only — never a repo default
+    if sites_path:                       # explicit opt-in only - never a repo default
         try:
             regions = load_site_regions(sites_path)
             if regions:

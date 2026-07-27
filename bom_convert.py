@@ -2,7 +2,7 @@
 line items, quantities and pricing) into the app's pricing-result structure.
 
 The converter recognizes every line item against the OCI SKU catalog
-(data/oci_price_list.json — 617 SKUs with pay-as-you-go rates, units and product
+(data/oci_price_list.json - 617 SKUs with pay-as-you-go rates, units and product
 names), re-prices recognized SKUs at the app's own known rate, recovers sizing
 (OCPU / RAM / storage) from the recognized resource type, and emits the same
 `pricing` dict shape that calculate_pricing produces so the frontend can load it
@@ -196,6 +196,235 @@ def _read_sheets(path):
             for name in names}
 
 
+def _comparison_summary_columns(raw):
+    """Find the paired source-cloud/OCI summary columns used by finished comparison files."""
+    for row_index in range(min(18, len(raw.index))):
+        cells = [_norm(value) for value in raw.iloc[row_index].tolist()]
+
+        def find(*labels):
+            return next((index for index, cell in enumerate(cells) if cell in labels), None)
+
+        group_col = find("product group")
+        offer_col = find("offer name")
+        source_cost_col = find("invoice costs")
+        if source_cost_col is None:
+            source_cost_col = find("list costs")
+        oci_cost_col = find("total discounted")
+        if oci_cost_col is None:
+            oci_cost_col = find("total list")
+        source_service_col = next(
+            (
+                index
+                for index, cell in enumerate(cells)
+                if cell.endswith(" service") and cell != "cloud service"
+            ),
+            None,
+        )
+        if None not in (group_col, source_service_col, source_cost_col, offer_col, oci_cost_col):
+            return row_index, {
+                "group": group_col,
+                "source_service": source_service_col,
+                "source_cost": source_cost_col,
+                "offer": offer_col,
+                "oci_cost": oci_cost_col,
+            }
+    return None, {}
+
+
+def _comparison_provider(raw, header_row):
+    for row_index in range(max(0, header_row - 4), header_row + 1):
+        for value in raw.iloc[row_index].tolist():
+            normalized = _norm(value)
+            if normalized == "aws":
+                return "aws", "AWS"
+            if normalized == "azure":
+                return "azure", "Microsoft Azure"
+    return "", "Source cloud"
+
+
+def _convert_comparison_summary(sheets):
+    """Import a finished AWS/Azure comparison as summary service rows.
+
+    These files contain valid source-cloud and OCI totals but not the raw usage records
+    required to re-price another cloud or generate workload topology. Import the numbers
+    they actually contain and explicitly mark the missing architecture detail.
+    """
+    candidates = []
+    for name, raw in sheets.items():
+        header_row, columns = _comparison_summary_columns(raw)
+        if not columns:
+            continue
+        normalized_name = _norm(name)
+        if "new comparison" in normalized_name:
+            priority = 4
+        elif "product breakdown" in normalized_name and "ax compute" not in normalized_name:
+            priority = 3
+        elif "expansion commit" in normalized_name:
+            priority = 2
+        elif "comparison" in normalized_name:
+            priority = 1
+        else:
+            priority = 0
+        candidates.append((priority, name, raw, header_row, columns))
+    if not candidates:
+        return None
+
+    _, sheet_name, raw, header_row, columns = max(candidates, key=lambda item: item[0])
+    provider_key, provider_label = _comparison_provider(raw, header_row)
+    rows = []
+    source_monthly_total = 0.0
+    oci_monthly_total = 0.0
+
+    for row_index in range(header_row + 1, len(raw.index)):
+        values = raw.iloc[row_index].tolist()
+
+        def value(key):
+            column = columns[key]
+            return values[column] if column < len(values) else ""
+
+        group = _clean(value("group"))
+        source_service = _clean(value("source_service"))
+        offer = _clean(value("offer"))
+        summary_label = _norm(f"{source_service} {offer}")
+        if "monthly" in summary_label and "cost" in summary_label:
+            break
+        if "annual costs" in summary_label:
+            continue
+        source_monthly = _to_float(value("source_cost"), 0.0)
+        oci_monthly = _to_float(value("oci_cost"), 0.0)
+        free_offer = _norm(value("oci_cost")) in {"free", "included", "no charge"}
+        if not (group or source_service or offer):
+            continue
+        if not (source_monthly or oci_monthly or free_offer):
+            continue
+
+        category = group or classify_resource(offer or source_service, "")[1]
+        name = offer or source_service or category
+        row_id = f"comparison-{len(rows) + 1}"
+        specs = {
+            "applicationServers": 0.0,
+            "databaseServers": 0.0,
+            "vcpus": 0.0,
+            "ocpus": 0.0,
+            "memoryGb": 0.0,
+            "blockStorageGb": 0.0,
+            "fileStorageGb": 0.0,
+        }
+        rows.append({
+            "rowId": row_id,
+            "sourceRow": row_index + 1,
+            "name": name[:120],
+            "environment": "",
+            "region": "",
+            "sizeCheck": {"status": "ok"},
+            "mappingFlag": "Imported comparison summary",
+            "costAction": "price",
+            "ociServiceCategory": category,
+            "ociProduct": offer or name,
+            "sourceService": source_service or provider_label,
+            "sourceMonthlyCost": round(source_monthly, 4),
+            "windowsLicenseMonthly": 0.0,
+            "hoursPerMonth": HOURS_PER_MONTH,
+            "shapeUsed": None,
+            "specs": specs,
+            "fullServiceMapping": {
+                "sku": "",
+                "ociProduct": offer or name,
+                "sourceProvider": provider_label,
+                "sourceService": source_service or provider_label,
+                "sourceProduct": source_service,
+                "sourceMonthlyCost": round(source_monthly, 4),
+                "sourceCurrency": "USD",
+                "quantity": 1.0,
+                "unit": "monthly summary",
+                "confidence": 0.8,
+                "reviewRequired": False,
+            },
+            "lineItems": [{
+                "sku": "",
+                "description": offer or name,
+                "quantity": 1.0,
+                "unit": "monthly summary",
+                "rate": round(oci_monthly, 4),
+                "monthly": round(oci_monthly, 4),
+                "mapping": "Imported from a finished cloud comparison workbook.",
+                "ociServiceUsage": True,
+            }],
+            "monthly": round(oci_monthly, 4),
+            "annual": round(oci_monthly * 12, 4),
+            "assumptions": [
+                "Imported from a finished cloud comparison workbook.",
+                "Workload-level sizing was not present, so architecture generation is unavailable.",
+            ],
+        })
+        source_monthly_total += source_monthly
+        oci_monthly_total += oci_monthly
+
+    if not rows or oci_monthly_total <= 0:
+        return None
+
+    source_monthly_total = round(source_monthly_total, 4)
+    oci_monthly_total = round(oci_monthly_total, 4)
+    source_card = {
+        "label": provider_label,
+        "monthlyTotal": source_monthly_total,
+        "annualTotal": round(source_monthly_total * 12, 4),
+        "priced": True,
+        "basis": "imported comparison total",
+    }
+    cross_cloud = {
+        "sourceCloud": provider_key,
+        "importedComparison": True,
+        "gcp": {
+            "label": "Google Cloud",
+            "priced": False,
+            "note": "Not present in the imported comparison",
+        },
+    }
+    if provider_key:
+        cross_cloud[provider_key] = source_card
+
+    totals = {
+        "ocpus": 0.0,
+        "memoryGb": 0.0,
+        "blockStorageGb": 0.0,
+        "fileStorageGb": 0.0,
+        "cloudStorageGb": 0.0,
+        "fullServiceMonthly": oci_monthly_total,
+        "mappedServiceRows": len(rows),
+        "unpricedServiceRows": 0,
+        "oversizeRows": 0,
+        "impossibleRows": 0,
+        "sourceMonthlyCost": source_monthly_total,
+        "mappedSourceMonthlyCost": source_monthly_total,
+        "unmappedSourceMonthlyCost": 0.0,
+        "monthly": oci_monthly_total,
+        "annual": round(oci_monthly_total * 12, 4),
+    }
+    return {
+        "converted": True,
+        "comparisonSummary": True,
+        "intakeMode": "on_prem",
+        "fullServiceBeta": True,
+        "auto": False,
+        "engine": "imported comparison summary",
+        "sheetName": sheet_name,
+        "hoursPerMonth": HOURS_PER_MONTH,
+        "cpuUnitResolved": "ocpu",
+        "totals": totals,
+        "rows": rows,
+        "recognizedSkus": 0,
+        "unrecognizedSkus": 0,
+        "sourceCloud": provider_key,
+        "crossCloud": cross_cloud,
+        "diagramAvailable": False,
+        "diagramUnavailableReason": (
+            "This comparison workbook has pricing summaries but no workload-level "
+            "CPU, memory, or storage detail for an architecture diagram."
+        ),
+    }
+
+
 _PRICE_LIST_HINTS = ("price list", "rate card", "pricelist", "price catalog", "cpl",
                      "specs", "spec ", "shapes", "exchange", "discounts")
 
@@ -204,7 +433,7 @@ def _pick_bom_sheet(sheets):
     """Choose the actual BOM sheet. The sheet NAME is the most reliable signal: a sheet
     named like a BOM beats a 'price list' / 'rate card' even when the price list has far
     more SKU rows. Within a name tier, prefer the sheet with the most priced line items
-    (SKU rows that also carry a quantity/cost — price lists have rates but no quantities
+    (SKU rows that also carry a quantity/cost - price lists have rates but no quantities
     of their own beyond the unit rate)."""
     best, best_key = None, None
     for name, raw in sheets.items():
@@ -312,10 +541,10 @@ def _make_compute_vm(comp, shape, hours):
     label = (shape or {}).get("shortLabel") or (shape or {}).get("label") or "BOM shape"
     specs = {"applicationServers": 1.0, "databaseServers": 0.0, "vcpus": ocpu * 2,
              "ocpus": ocpu, "memoryGb": mem, "blockStorageGb": 0.0, "fileStorageGb": 0.0}
-    prod = f"OCI Compute VM — {label} ({ocpu:g} OCPU / {mem:g} GB)"
+    prod = f"OCI Compute VM - {label} ({ocpu:g} OCPU / {mem:g} GB)"
     return {
         "rowId": "", "sourceRow": comp.get("sourceRow", 0), "_kind": "vm",
-        "name": f"{comp['section']} — Compute VM" if comp["section"] else "Compute VM",
+        "name": f"{comp['section']} - Compute VM" if comp["section"] else "Compute VM",
         "environment": comp["section"], "region": "",
         "sizeCheck": {"status": "ok"}, "mappingFlag": "", "costAction": "price",
         "ociServiceCategory": "Compute", "ociProduct": prod,
@@ -334,7 +563,7 @@ def _make_compute_vm(comp, shape, hours):
         },
         "lineItems": comp["items"],
         "monthly": monthly, "annual": round(monthly * 12, 4),
-        "assumptions": ["Converted OCI BOM — this server's compute is grouped into a "
+        "assumptions": ["Converted OCI BOM - this server's compute is grouped into a "
                         "re-mappable VM; pick a different OCI shape to re-price it."],
     }
 
@@ -386,9 +615,12 @@ def convert_oci_bom(path):
     """Parse an alternate OCI BOM and return a pricing-result dict for the app."""
     _augment_with_app_shapes()
     sheets = _read_sheets(path)
+    comparison_summary = _convert_comparison_summary(sheets)
+    if comparison_summary:
+        return comparison_summary
     sheet_name, sku_count = _pick_bom_sheet(sheets)
     if not sheet_name or sku_count <= 0:
-        raise ValueError("No OCI SKUs (e.g. B94277) were found in this file — it does not look like an OCI BOM.")
+        raise ValueError("No OCI SKUs (e.g. B94277) were found in this file - it does not look like an OCI BOM.")
     raw = sheets[sheet_name]
     header_row, cols = _detect_columns(raw)
     data_start = (header_row + 1) if header_row is not None else 0
@@ -426,7 +658,7 @@ def convert_oci_bom(path):
             _norm(desc) in {"free tier"} or _norm(cell("monthly")) in {"free", "included"}
 
         # Only SKU rows are priced line items. A row with no SKU is either a section
-        # header (e.g. a server name — becomes the row's grouping) or a free-tier line.
+        # header (e.g. a server name - becomes the row's grouping) or a free-tier line.
         if not sku:
             if free_text and desc:
                 pass  # fall through to emit a $0 free line item
@@ -505,9 +737,9 @@ def convert_oci_bom(path):
             "rate": rate,
             "monthly": monthly,
             "mapping": (f"Recognized OCI SKU {sku}: {product}"
-                        + (f" — re-priced at ${rate}/{unit or 'unit'}." if rate else ".")
+                        + (f" - re-priced at ${rate}/{unit or 'unit'}." if rate else ".")
                         if recognized else
-                        f"SKU {sku or '(none)'} not found in the OCI catalog — carried at the BOM's stated cost for review."),
+                        f"SKU {sku or '(none)'} not found in the OCI catalog - carried at the BOM's stated cost for review."),
             "ociServiceUsage": recognized,
         }
         name = (f"{section} · {product}" if section else product)[:120]
@@ -573,6 +805,11 @@ def convert_oci_bom(path):
         "monthly": monthly_total,
         "annual": round(monthly_total * 12, 4),
     }
+    diagram_available = any(
+        any(_to_float((row.get("specs") or {}).get(key), 0) > 0
+            for key in ("ocpus", "memoryGb", "blockStorageGb"))
+        for row in rows
+    )
     return {
         "converted": True,
         "intakeMode": "on_prem",
@@ -586,4 +823,10 @@ def convert_oci_bom(path):
         "rows": rows,
         "recognizedSkus": totals["recognized"],
         "unrecognizedSkus": totals["unrecognized"],
+        "diagramAvailable": diagram_available,
+        "diagramUnavailableReason": (
+            "" if diagram_available else
+            "This converted BOM has pricing lines but no workload-level CPU, memory, or "
+            "storage detail for an architecture diagram."
+        ),
     }

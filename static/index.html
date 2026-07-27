@@ -3,24 +3,101 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OCI Intake</title>
+    <title>Oracle Cloud Infrastructure BOM + Architecture Generator</title>
     <link rel="icon" href="data:," />
+    <script>
+      try {
+        if (localStorage.getItem("oci-intake-theme") === "dark") {
+          document.documentElement.dataset.theme = "dark";
+        }
+      } catch (error) {
+        // Storage can be unavailable in locked-down browser sessions.
+      }
+    </script>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="app-header">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <div>
-          <h1>Oracle Cloud Infrastructure Intake</h1>
-          <p>Spreadsheet review, SKU mapping, and OCI estimates</p>
+      <div class="header-top">
+        <div class="brand">
+          <img class="brand-mark" src="/static/assets/oracle-o.png" alt="" aria-hidden="true" />
+          <div>
+            <h1>Oracle Cloud Infrastructure BOM + Architecture Generator</h1>
+            <p>Spreadsheet review, SKU mapping, and OCI estimates</p>
+          </div>
+        </div>
+
+        <div id="headerSettings" class="header-settings">
+          <button id="settingsToggle" class="settings-toggle" type="button" aria-label="Settings" title="Settings" aria-haspopup="dialog" aria-expanded="false" aria-controls="settingsMenu">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+
+          <div id="settingsMenu" class="settings-menu" role="dialog" aria-modal="false" aria-labelledby="settingsHeading" hidden>
+            <div class="settings-menu-head">
+              <div>
+                <span>Application</span>
+                <h2 id="settingsHeading">Settings</h2>
+              </div>
+            </div>
+
+            <label class="settings-theme-row" for="darkModeToggle">
+              <span class="settings-row-copy">
+                <strong>Dark Mode</strong>
+                <small>Use a darker workspace and controls</small>
+              </span>
+              <span class="settings-switch">
+                <input id="darkModeToggle" type="checkbox" />
+                <span class="settings-switch-track" aria-hidden="true">
+                  <span class="settings-switch-thumb"></span>
+                </span>
+              </span>
+            </label>
+
+            <div class="settings-divider"></div>
+
+            <div class="settings-load-zone load-prev-bom">
+              <div class="settings-load-copy">
+                <strong>Previous Work</strong>
+                <span>Restore a saved .json workflow or an .xlsx BOM exported from this app.</span>
+              </div>
+              <button type="button" id="loadPrevBom" class="ghost-button settings-load-button" title="Only BOMs previously exported from this app or .json workflows saved here will load.">
+                Load Previous BOM
+              </button>
+              <span class="settings-load-drop">You can also drop the file here.</span>
+              <span class="settings-load-note">Changes made directly in Excel are not restored. The embedded app session is loaded instead.</span>
+              <input id="loadWorkflowFile" type="file" accept=".json,.xlsx" hidden />
+              <div id="loadWorkflowStatus" class="load-workflow-status" hidden>
+                <span class="lws-icon" aria-hidden="true"></span>
+                <span class="lws-name"></span>
+                <span class="lws-state"></span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-      <nav class="steps" aria-label="Workflow progress">
+      <nav class="steps" aria-label="Workflow Progress">
         <button class="step is-active" type="button" data-step="upload" aria-current="step">1 Upload</button>
-        <button class="step" type="button" data-step="review">2 Review</button>
-        <button class="step" type="button" data-step="shape">3 Shape</button>
-        <button class="step" type="button" data-step="price">4 Price</button>
+        <button class="step" type="button" data-step="review" disabled>2 Review</button>
+        <button class="step" type="button" data-step="shape" disabled>3 Shape</button>
+        <button class="step" type="button" data-step="networking" aria-label="Step 4: Services" disabled>
+          <span class="step-networking-full">4 Services</span>
+          <span class="step-networking-short" aria-hidden="true">4 Services</span>
+        </button>
+        <button class="step" type="button" data-step="price" disabled>5 Price</button>
+        <button class="step" type="button" data-step="other-clouds" aria-label="Step 6: Compare" disabled>
+          <span class="step-clouds-full">6 Compare</span>
+          <span class="step-clouds-short" aria-hidden="true">6 Compare</span>
+        </button>
+        <button class="step" type="button" data-step="architecture" aria-label="Step 7: Architecture" disabled>
+          <span class="step-architecture-full">7 Architecture</span>
+          <span class="step-architecture-short" aria-hidden="true">7 Architecture</span>
+        </button>
+        <button class="step" type="button" data-step="deliverables" aria-label="Step 8: Deliverables" disabled>
+          <span class="step-deliverables-full">8 Deliverables</span>
+          <span class="step-deliverables-short" aria-hidden="true">8 Deliverables</span>
+        </button>
       </nav>
     </header>
 
@@ -28,23 +105,23 @@
       <section class="workspace">
         <div id="uploadPanel" class="upload-panel">
           <div class="upload-copy">
-            <span id="modeEyebrow" class="mode-eyebrow">On-prem inventory</span>
-            <h2 id="uploadHeading">Upload inventory</h2>
+            <span id="modeEyebrow" class="mode-eyebrow">On-Prem Inventory</span>
+            <h2 id="uploadHeading">Upload Inventory</h2>
             <p id="uploadDescription">Drop an Excel workbook here. The local parser will choose the inventory table and normalize CPU, RAM, storage, environment, and application fields for review.</p>
-            <div class="mode-selector" aria-label="Choose intake type">
+            <div class="mode-selector" aria-label="Choose Intake Type">
               <button id="modeOnPrem" class="mode-card is-selected" type="button" data-mode="on_prem">
-                <strong>On-prem inventory</strong>
+                <strong>On-Prem Inventory</strong>
                 <span>Server, VM, application, CPU, memory, and storage worksheets.</span>
               </button>
               <button id="modeCloudBill" class="mode-card" type="button" data-mode="cloud_bill">
-                <strong>Cloud bill</strong>
+                <strong>Cloud Bill</strong>
                 <span>AWS, Azure, or GCP bill exports mapped to OCI-equivalent services.</span>
               </button>
             </div>
             <label id="providerControl" class="provider-control is-hidden" for="providerHint">
-              <span>Provider detection</span>
+              <span>Provider Detection</span>
               <select id="providerHint">
-                <option value="auto">Auto-detect</option>
+                <option value="auto">Auto-Detect</option>
                 <option value="aws">AWS</option>
                 <option value="azure">Azure</option>
                 <option value="gcp">GCP</option>
@@ -58,25 +135,15 @@
                 <path d="M12 3v11m0-11 4 4m-4-4-4 4M5 15v3a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-3" />
               </svg>
             </span>
-            <strong>Choose spreadsheet</strong>
+            <strong>Choose Spreadsheet</strong>
             <span id="dropZoneHint">or drag the workbook onto this upload area</span>
           </label>
-          <div class="load-prev-bom">
-            <button type="button" id="loadPrevBom" class="ghost-button" title="Only BOMs previously exported from this app (an .xlsx with the embedded workflow) or .json workflows saved here will load. Other spreadsheets won't work.">Load previous BOM</button>
-            <span class="load-prev-hint">Restore a saved <strong>.json</strong> or exported <strong>.xlsx</strong> workflow — or drop one here</span>
-            <span class="load-prev-note">Note: edits you make directly in the exported Excel file won't carry back into the app — reloading restores the saved session, not your spreadsheet changes.</span>
-          </div>
-          <div class="load-prev-bom">
-            <button type="button" id="convertBomBtn" class="ghost-button" title="Upload an OCI BOM from anywhere (Oracle's BOM tool, a partner, another estimate). The app recognizes every SKU/line item against its OCI catalog, re-prices and recovers sizing, then loads it live into your results.">Convert an alternate OCI BOM</button>
-            <span class="load-prev-hint">Any OCI BOM (<strong>.xlsx</strong> / <strong>.csv</strong>) with OCI SKUs — recognized, re-priced &amp; loaded into results</span>
+          <div class="load-prev-bom is-hidden" aria-hidden="true">
+            <button type="button" id="convertBomBtn" class="ghost-button" title="Upload an OCI BOM from anywhere (Oracle's BOM tool, a partner, another estimate). The app recognizes every SKU/line item against its OCI catalog, re-prices and recovers sizing, then loads it live into your results.">Convert an Alternate OCI BOM</button>
+            <span class="load-prev-hint">Any OCI BOM (<strong>.xlsx</strong> / <strong>.csv</strong>) with OCI SKUs - recognized, re-priced &amp; loaded into results</span>
             <input id="convertBomFile" type="file" accept=".xlsx,.xls,.csv,.tsv" hidden />
           </div>
           <div id="convertBomStatus" class="load-workflow-status" hidden>
-            <span class="lws-icon" aria-hidden="true"></span>
-            <span class="lws-name"></span>
-            <span class="lws-state"></span>
-          </div>
-          <div id="loadWorkflowStatus" class="load-workflow-status" hidden>
             <span class="lws-icon" aria-hidden="true"></span>
             <span class="lws-name"></span>
             <span class="lws-state"></span>
@@ -86,19 +153,22 @@
               <svg viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v4h4"/></svg>
             </span>
             <div class="selected-doc-meta">
-              <strong id="selectedDocName">—</strong>
+              <strong id="selectedDocName">-</strong>
               <span id="selectedDocSub"></span>
             </div>
-            <button type="button" id="selectedDocClear" class="selected-doc-clear" title="Choose a different file" aria-label="Clear selected file">✕</button>
+            <button type="button" id="selectedDocClear" class="selected-doc-clear" title="Choose a different file" aria-label="Clear Selected File">✕</button>
           </div>
           <div id="uploadProgress" class="upload-progress is-hidden" role="status" aria-live="polite">
             <div class="loading-mark" aria-hidden="true"></div>
             <div>
-              <strong>Data cleaning in progress</strong>
+              <strong>Data Cleaning in Progress</strong>
               <p id="uploadProgressDetail">Reading workbook sheets and normalizing server inventory fields.</p>
             </div>
           </div>
           <p id="uploadStatus" class="status-text" role="status"></p>
+          <div class="workflow-page-footer upload-page-footer">
+            <button id="continueToReviewFromUpload" class="primary-button" type="button" disabled>Continue to Review</button>
+          </div>
         </div>
 
         <div id="reviewPanel" class="review-panel is-hidden">
@@ -108,7 +178,7 @@
               <strong>This looks like a server inventory, not a cloud bill.</strong>
               <span>It has CPU/RAM/instance columns but no cost column, so the bill mapping won't produce real costs. Switch to On-prem inventory for accurate sizing and pricing.</span>
             </div>
-            <button type="button" id="switchToOnPrem" class="primary-button">Switch to On-prem inventory</button>
+            <button type="button" id="switchToOnPrem" class="primary-button">Switch to On-Prem Inventory</button>
           </div>
           <div id="comparisonBomNotice" class="inventory-notice" hidden>
             <span class="inventory-notice-icon" aria-hidden="true">⚠</span>
@@ -119,7 +189,7 @@
           </div>
           <div class="toolbar">
             <div>
-              <h2>Adjust your table</h2>
+              <h2>Adjust Your Table</h2>
               <p id="sheetMeta">No workbook loaded</p>
             </div>
             <div class="toolbar-actions">
@@ -127,21 +197,20 @@
                 <input id="missingOnlyToggle" type="checkbox" />
                 <span class="toggle-track" aria-hidden="true"></span>
                 <span class="toggle-copy">
-                  <strong>Missing data only</strong>
+                  <strong>Missing Data Only</strong>
                   <small id="missingOnlySummary">Show rows with blanks</small>
                 </span>
               </label>
-              <button id="priceButton" class="primary-button" type="button">Continue to shape</button>
             </div>
           </div>
 
-          <div class="summary-strip" aria-label="Upload summary">
+          <div class="summary-strip" aria-label="Upload Summary">
             <div>
               <span>Rows</span>
               <strong id="rowCount">0</strong>
             </div>
             <div>
-              <span>Preview fields</span>
+              <span>Preview Fields</span>
               <strong id="columnCount">0</strong>
             </div>
             <div>
@@ -149,14 +218,14 @@
               <strong id="approvedCount">0</strong>
             </div>
             <div>
-              <span>Default sheet</span>
+              <span>Default Sheet</span>
               <strong id="sheetName">-</strong>
             </div>
           </div>
 
           <div class="cpuunit-row" id="cpuUnitRow">
-            <span class="sizing-mode-label">CPU column is</span>
-            <div class="mode-switch cpuunit-switch" role="group" aria-label="CPU column unit" title="What the uploaded CPU column holds. Auto: detect vCPU vs OCPU from the header (defaults to vCPU when unclear). vCPUs: halve it (2 vCPU = 1 OCPU) for OCI. Already OCPUs: use the count as-is. The OCPUs column below updates to match.">
+            <span class="sizing-mode-label">CPU Column Is</span>
+            <div class="mode-switch cpuunit-switch" role="group" aria-label="CPU Column Unit" title="What the uploaded CPU column holds. Auto: detect vCPU vs OCPU from the header (defaults to vCPU when unclear). vCPUs: halve it (2 vCPU = 1 OCPU) for OCI. Already OCPUs: use the count as-is. The OCPUs column below updates to match.">
               <button type="button" class="mode-opt is-active" data-cpuunit="auto">Auto</button>
               <button type="button" class="mode-opt" data-cpuunit="vcpu">vCPUs</button>
               <button type="button" class="mode-opt" data-cpuunit="ocpu">Already OCPUs</button>
@@ -166,37 +235,33 @@
 
           <section class="datacheck" id="dataCheck" hidden>
             <div class="datacheck-head">
-              <h3>Data check</h3>
+              <h3>Data Check</h3>
               <p>What this file actually contains. Anything missing is left blank in the BOM and
-                the architecture diagram — the app never invents it.</p>
+                the architecture diagram - the app never invents it.</p>
             </div>
             <ul class="datacheck-list" id="dataCheckList"></ul>
             <p class="datacheck-note" id="dataCheckNote" hidden></p>
           </section>
 
-          <div class="table-wrap" aria-label="Editable inventory table">
+          <div class="table-wrap" aria-label="Editable Inventory Table">
             <table id="reviewTable"></table>
           </div>
 
           <div class="table-footer">
             <div class="table-footer-actions">
-              <button id="addRow" class="ghost-button add-row-button" type="button">Add row</button>
-              <button id="addColumn" class="ghost-button add-column-button" type="button">Add column</button>
+              <button id="addRow" class="ghost-button add-row-button" type="button">Add Row</button>
+              <button id="addColumn" class="ghost-button add-column-button" type="button">Add Column</button>
             </div>
             <form id="addColumnForm" class="add-column-form is-hidden">
-              <input id="newColumnName" type="text" maxlength="64" placeholder="Column name" aria-label="New column name" />
+              <input id="newColumnName" type="text" maxlength="64" placeholder="Column name" aria-label="New Column Name" required />
               <button class="ghost-button" type="submit">Add</button>
               <button id="cancelAddColumn" class="ghost-button" type="button">Cancel</button>
             </form>
           </div>
 
-          <div class="table-assistant" aria-label="AI table editor">
-            <label class="table-assistant-label" for="tableEditPrompt">Adjust the table</label>
-            <div class="table-assistant-row">
-              <textarea id="tableEditPrompt" rows="3" placeholder="Change dev rows to unapproved, set web servers to 64 GB RAM, or add a new prod database row"></textarea>
-              <button id="applyTableEdit" class="primary-button" type="button">Apply changes</button>
-            </div>
-            <p id="tableEditStatus" class="table-assistant-status" role="status" aria-live="polite"></p>
+          <div class="workflow-page-footer">
+            <button id="backToUploadFromReview" class="ghost-button" type="button">Back to Upload</button>
+            <button id="priceButton" class="primary-button" type="button">Continue to Shape</button>
           </div>
         </div>
       </section>
@@ -204,8 +269,8 @@
       <aside id="pricingRail" class="pricing-rail is-hidden">
         <section class="rail-section">
           <div class="rail-heading">
-            <h2>SKU mapping</h2>
-            <span id="engineStatus">Waiting for upload</span>
+            <h2>SKU Mapping</h2>
+            <span id="engineStatus">Waiting for Upload</span>
           </div>
           <div id="pricingSummary" class="empty-state">
             Upload and approve inventory rows to generate mapped OCI SKUs and monthly estimates.
@@ -217,123 +282,344 @@
     <main id="shapePage" class="shape-page is-hidden">
       <section class="shape-hero">
         <div>
-          <p class="page-kicker">Flex shape selection</p>
-          <h2>Choose the OCI shape for this estimate</h2>
+          <p class="page-kicker">Flex Shape Selection</p>
+          <h2>Choose the OCI Shape for This Estimate</h2>
           <p>Compute and memory rates change by flex shape. Storage rates stay constant across the options.</p>
         </div>
-        <div class="shape-actions">
-          <div class="pricing-options" aria-label="Pricing options">
+        <div class="shape-actions is-hidden" aria-hidden="true">
+          <div class="pricing-options" aria-label="Pricing Options">
             <label class="opt-chip" title="Hide GPU per-GPU-hour pricing in results and the export (GPU shapes still mapped).">
               <input id="hideGpuToggle" type="checkbox" />
-              <span>Hide GPU pricing</span>
+              <span>Hide GPU Pricing</span>
             </label>
             <label class="opt-chip" title="Remove OCI Windows OS licensing (1 license per OCPU) from the OCI estimate, source-cloud estimate, cross-cloud comparison, and export. Use when Windows is BYOL / Azure Hybrid Benefit.">
               <input id="hideWindowsToggle" type="checkbox" />
-              <span>Remove Windows OS licensing</span>
+              <span>Remove Windows OS Licensing</span>
             </label>
             <label class="opt-chip" title="Remove SQL Server licensing from the OCI estimate and export. Use when SQL Server is BYOL.">
               <input id="hideSqlToggle" type="checkbox" />
-              <span>Remove SQL Server licensing</span>
+              <span>Remove SQL Server Licensing</span>
             </label>
-          </div>
-          <div class="shape-action-buttons">
-            <button id="backToReviewFromShape" class="ghost-button" type="button">Back to review</button>
-            <button id="priceShapeButton" class="primary-button" type="button">Price estimate</button>
           </div>
         </div>
       </section>
 
-      <section class="processor-section" aria-label="Processor platform">
+      <section class="processor-section" aria-label="Processor Platform">
         <div class="processor-section-copy">
-          <span>Processor family</span>
-          <p>Choose a processor logo to reveal the matching OCI shapes and rate card, or "Match processor type" to map each workload to the best shape for its own vendor.</p>
+          <span>Processor Family</span>
+          <p>Choose a processor family to reveal its matching OCI shapes and rate card.</p>
         </div>
-        <div id="processorPicker" class="processor-picker" aria-label="Choose processor family"></div>
-        <div class="sizing-mode-row">
-          <span class="sizing-mode-label">Sizing</span>
-          <div class="mode-switch rightsize-switch" role="group" aria-label="Sizing mode" title="1 to 1 carries source CPU/memory as-is. Rightsize trims OCPU &amp; RAM for the efficiency gain of newer OCI generations — Ax shapes -15% OCPU / -20% RAM per generation behind, regular E6 -10% / -15% (rounded down) — to cut cost.">
-            <button type="button" class="mode-opt is-active" data-rightsize="false">1 to 1</button>
-            <button type="button" class="mode-opt" data-rightsize="true">Rightsize &amp; Cut Costs</button>
-          </div>
-        </div>
+        <div id="processorPicker" class="processor-picker" aria-label="Choose Processor Family"></div>
       </section>
 
       <section id="shapeDropdown" class="shape-dropdown" aria-live="polite">
         <div class="shape-dropdown-heading">
           <div>
-            <span id="shapeVendorTitle">AMD shapes</span>
+            <span id="shapeVendorTitle">AMD Shapes</span>
             <p id="shapeVendorDescription">AMD-based flexible shapes available for this estimate.</p>
           </div>
           <em id="shapeVendorCount">0 shapes</em>
         </div>
 
-        <section class="shape-tabs" id="shapeGrid" role="tablist" aria-label="OCI flex shape choices"></section>
+        <section class="shape-tabs" id="shapeGrid" role="tablist" aria-label="OCI Flex Shape Choices"></section>
 
-        <section id="shapeRatePanel" class="shape-detail">
-          <div class="hours-control-box">
-            <label for="hoursPerMonth">Hours per month (all servers)</label>
-            <input id="hoursPerMonth" type="number" min="1" step="1" value="730" />
-            <p class="hours-note">Default 730. If the uploaded file has an "hours running" / "hours per month" column, each server uses its own value.</p>
-          </div>
-        </section>
+        <section id="shapeRatePanel" class="shape-detail"></section>
       </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToReviewFromShape" class="ghost-button" type="button">Back to Review</button>
+        <button id="priceShapeButton" class="primary-button" type="button">Continue to Services</button>
+      </div>
+    </main>
+
+    <main id="networkingPage" class="networking-page is-hidden">
+      <section class="networking-hero">
+        <div>
+          <p class="page-kicker">Complete the BOM</p>
+          <h2>OCI Services</h2>
+          <span id="networkingShape" class="shape-result-pill">E6 Standard Ax</span>
+          <p>Add Storage, Networking, Database, Integration, Security, Observability, Licensing, and Other Services before generating the architecture.</p>
+        </div>
+      </section>
+
+      <p id="networkingPageStatus" class="price-page-status" role="status" aria-live="polite" hidden></p>
+
+      <section class="add-services-section" aria-label="Add OCI Services">
+        <div id="addServicesBody" class="add-services-body">
+          <div class="add-services-search-row">
+            <input id="serviceSearch" type="search" placeholder="Search services, e.g. load balancer, object storage, WAF, Autonomous…" autocomplete="off" aria-label="Search OCI Services" />
+          </div>
+          <div id="serviceChips" class="service-chips" role="group" aria-label="Service Categories"></div>
+
+          <div class="add-services-columns">
+            <div class="service-results-col">
+              <div id="serviceResults" class="service-results" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="serviceCartReview" class="service-cart-review is-empty" aria-labelledby="serviceCartHeading">
+        <header class="service-cart-head">
+          <div class="service-cart-heading">
+            <span>Review</span>
+            <h3 id="serviceCartHeading">Added Services</h3>
+            <p>Confirm the services and monthly costs that will be included in the BOM.</p>
+          </div>
+          <div class="service-cart-count-wrap" aria-label="Services Added">
+            <strong id="serviceCartCount" class="service-cart-count">0</strong>
+            <span>Services Added</span>
+          </div>
+        </header>
+        <div id="serviceCartList" class="service-cart-list" aria-live="polite"></div>
+        <footer class="service-cart-foot">
+          <span>Added Services Monthly</span>
+          <strong id="serviceCartTotal">$0.00</strong>
+        </footer>
+        <p class="service-cart-note">Included in Price and both BOM exports. Networking, Security, DR, and Storage lines are placed on the matching Pricing Overview row.</p>
+      </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToShapeFromNetworking" class="ghost-button" type="button">Back to Shape</button>
+        <button id="continueToPriceFromServices" class="primary-button" type="button">Continue to Price</button>
+      </div>
+    </main>
+
+    <main id="architecturePage" class="architecture-page is-hidden">
+      <section class="architecture-hero">
+        <div>
+          <p class="page-kicker">Target Architecture</p>
+          <h2>Configure the OCI Architecture</h2>
+          <span id="architectureShape" class="shape-result-pill">E6 Standard Ax</span>
+          <p>Set the deployment regions, availability-domain layout, and disaster recovery plan for this estimate.</p>
+        </div>
+      </section>
+
+      <section class="architecture-layout is-config-only" aria-label="Architecture Configuration">
+        <div class="architecture-config">
+          <div class="architecture-section-heading">
+            <div>
+              <p class="page-kicker">Deployment Layout</p>
+              <h3>Regions and Resiliency</h3>
+            </div>
+            <p>These selections are used in the downloadable architecture package.</p>
+          </div>
+
+          <div class="architecture-options-grid">
+            <div class="diagram-card">
+              <div class="diagram-card-head">
+                <span class="diagram-card-title">Primary Region</span>
+                <span class="diagram-card-sub">Where the migrated workloads land</span>
+              </div>
+              <label class="diagram-field">
+                <span class="diagram-field-label">Primary OCI Region</span>
+                <select id="primaryRegion" class="diagram-select" data-searchable="region">
+                  <option value="" data-ads="1" data-pin="auto">Auto (unnamed region - pick a region to enable AD split)</option>
+                  <option value="us-ashburn-1" data-ads="3">US East (Ashburn) - 3 ADs</option>
+                  <option value="us-phoenix-1" data-ads="3">US West (Phoenix) - 3 ADs</option>
+                  <option value="uk-london-1" data-ads="3">UK South (London) - 3 ADs</option>
+                  <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt) - 3 ADs</option>
+                  <option value="ap-sydney-1" data-ads="1">Australia East (Sydney) - 1 AD</option>
+                  <option value="sa-saopaulo-1" data-ads="1">Brazil East (Sao Paulo) - 1 AD</option>
+                  <option value="ca-montreal-1" data-ads="1">Canada Southeast (Montreal) - 1 AD</option>
+                  <option value="ca-toronto-1" data-ads="1">Canada Southeast (Toronto) - 1 AD</option>
+                  <option value="eu-paris-1" data-ads="1">France Central (Paris) - 1 AD</option>
+                  <option value="ap-mumbai-1" data-ads="1">India West (Mumbai) - 1 AD</option>
+                  <option value="ap-osaka-1" data-ads="1">Japan Central (Osaka) - 1 AD</option>
+                  <option value="ap-tokyo-1" data-ads="1">Japan East (Tokyo) - 1 AD</option>
+                  <option value="eu-amsterdam-1" data-ads="1">Netherlands NW (Amsterdam) - 1 AD</option>
+                  <option value="me-jeddah-1" data-ads="1">Saudi Arabia West (Jeddah) - 1 AD</option>
+                  <option value="ap-singapore-1" data-ads="1">Singapore - 1 AD</option>
+                  <option value="ap-seoul-1" data-ads="1">South Korea Central (Seoul) - 1 AD</option>
+                  <option value="eu-madrid-1" data-ads="1">Spain Central (Madrid) - 1 AD</option>
+                  <option value="eu-zurich-1" data-ads="1">Switzerland North (Zurich) - 1 AD</option>
+                  <option value="me-dubai-1" data-ads="1">UAE East (Dubai) - 1 AD</option>
+                  <option value="us-chicago-1" data-ads="1">US Midwest (Chicago) - 1 AD</option>
+                  <option value="us-sanjose-1" data-ads="1">US West (San Jose) - 1 AD</option>
+                </select>
+              </label>
+              <label class="diagram-switch" id="splitAcrossADsRow">
+                <input type="checkbox" id="splitAcrossADs" />
+                <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
+                <span class="diagram-switch-text">
+                  <strong>Split Across Availability Domains</strong>
+                  <small id="adSplitHint">Pick a multi-AD region to enable</small>
+                </span>
+              </label>
+              <div id="adSplitResources" class="diagram-sub" hidden>
+                <div class="diagram-field">
+                  <span class="diagram-field-label">Split These Resources Across ADs</span>
+                  <div class="diagram-chips" id="adSplitChips">
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="adSplitVms" value="vms" checked />
+                      <span>Compute VMs</span>
+                    </label>
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="adSplitDbs" value="dbs" checked />
+                      <span>Databases</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="diagram-card">
+              <div class="diagram-card-head">
+                <span class="diagram-card-title">Disaster Recovery</span>
+                <span class="diagram-card-sub">Add a secondary region when the design requires it</span>
+              </div>
+              <label class="diagram-switch">
+                <input type="checkbox" id="enableDr" />
+                <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
+                <span class="diagram-switch-text">
+                  <strong>Enable a DR Region</strong>
+                  <small>Draw the secondary region and selected replicas</small>
+                </span>
+              </label>
+              <div id="drSubOptions" class="diagram-sub" hidden>
+                <label class="diagram-field">
+                  <span class="diagram-field-label">DR Region</span>
+                  <select id="drRegion" class="diagram-select" data-searchable="region">
+                    <option value="" data-pin="auto">Auto (unnamed secondary region)</option>
+                    <option value="us-ashburn-1" data-ads="3">US East (Ashburn)</option>
+                    <option value="us-phoenix-1" data-ads="3">US West (Phoenix)</option>
+                    <option value="uk-london-1" data-ads="3">UK South (London)</option>
+                    <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt)</option>
+                    <option value="ap-sydney-1">Australia East (Sydney)</option>
+                    <option value="sa-saopaulo-1">Brazil East (Sao Paulo)</option>
+                    <option value="ca-montreal-1">Canada Southeast (Montreal)</option>
+                    <option value="ca-toronto-1">Canada Southeast (Toronto)</option>
+                    <option value="eu-paris-1">France Central (Paris)</option>
+                    <option value="ap-mumbai-1">India West (Mumbai)</option>
+                    <option value="ap-osaka-1">Japan Central (Osaka)</option>
+                    <option value="ap-tokyo-1">Japan East (Tokyo)</option>
+                    <option value="eu-amsterdam-1">Netherlands NW (Amsterdam)</option>
+                    <option value="me-jeddah-1">Saudi Arabia West (Jeddah)</option>
+                    <option value="ap-singapore-1">Singapore</option>
+                    <option value="ap-seoul-1">South Korea Central (Seoul)</option>
+                    <option value="eu-madrid-1">Spain Central (Madrid)</option>
+                    <option value="eu-zurich-1">Switzerland North (Zurich)</option>
+                    <option value="me-dubai-1">UAE East (Dubai)</option>
+                    <option value="us-chicago-1">US Midwest (Chicago)</option>
+                    <option value="us-sanjose-1">US West (San Jose)</option>
+                  </select>
+                </label>
+                <div class="diagram-field">
+                  <span class="diagram-field-label">Replicate to DR</span>
+                  <div class="diagram-chips" id="drReplicateChips">
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="drRepVms" value="vms" checked />
+                      <span>Compute VMs</span>
+                    </label>
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="drRepDbs" value="dbs" checked />
+                      <span>Databases</span>
+                    </label>
+                    <label class="diagram-chip">
+                      <input type="checkbox" id="drRepObj" value="object" checked />
+                      <span>Object Storage Backups</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+      <p id="architectureExportStatus" class="architecture-export-status architecture-page-status" role="status" aria-live="polite">Ready to generate.</p>
+
+      <div class="workflow-page-footer">
+        <button id="backToCompareFromArchitecture" class="ghost-button" type="button">Back to Compare</button>
+        <button id="continueToDeliverables" class="primary-button" type="button">Continue to Deliverables</button>
+      </div>
+    </main>
+
+    <main id="deliverablesPage" class="deliverables-page is-hidden" aria-label="Deliverables">
+      <section class="deliverables-grid" aria-label="Download Deliverables">
+        <article class="deliverable-card">
+          <div class="deliverable-card-heading">
+            <span class="deliverable-icon" aria-hidden="true">XLSX</span>
+            <div>
+              <p class="page-kicker">Workbook</p>
+              <h3>BOM</h3>
+            </div>
+          </div>
+          <p class="deliverable-summary">A compact Overview and Shape workbook with OCI pricing, the consumption ramp, and added services.</p>
+          <div class="deliverable-file">
+            <span>File</span>
+            <strong id="deliverablesBomFilename">OCI_BOM.xlsx</strong>
+          </div>
+          <button id="deliverablesFullBom" class="primary-button deliverable-download" type="button">
+            <span aria-hidden="true">↓</span>
+            Download BOM
+          </button>
+          <p id="deliverablesBomStatus" class="deliverable-status" role="status" aria-live="polite">Ready to generate.</p>
+        </article>
+
+        <article class="deliverable-card">
+          <div class="deliverable-card-heading">
+            <span class="deliverable-icon is-architecture" aria-hidden="true">ZIP</span>
+            <div>
+              <p class="page-kicker">Diagram Package</p>
+              <h3>OCI Architecture</h3>
+            </div>
+          </div>
+          <p class="deliverable-summary">Editable draw.io source plus a rendered PNG when the local renderer is available.</p>
+          <div class="deliverable-file">
+            <span>File</span>
+            <strong id="deliverablesArchitectureFilename">OCI_architecture.zip</strong>
+          </div>
+          <button id="deliverablesDiagram" class="primary-button deliverable-download" type="button">
+            <span aria-hidden="true">↓</span>
+            Download Architecture
+          </button>
+          <p id="deliverablesArchitectureStatus" class="deliverable-status" role="status" aria-live="polite">Ready to generate.</p>
+        </article>
+      </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToArchitectureFromDeliverables" class="ghost-button" type="button">Back to Architecture</button>
+      </div>
     </main>
 
     <main id="resultsPage" class="results-page is-hidden">
       <section class="bom-name-bar">
-        <label for="bomName" class="bom-name-label">BOM name</label>
+        <label for="bomName" class="bom-name-label">BOM Name</label>
         <input id="bomName" type="text" class="bom-name-input" placeholder="Untitled BOM" autocomplete="off" />
       </section>
 
       <section class="results-hero">
         <div>
-          <p class="page-kicker">OCI estimate</p>
-          <h2>OCI cost breakdown</h2>
+          <p class="page-kicker">OCI Estimate</p>
+          <h2>OCI Cost Breakdown</h2>
           <span id="resultsShape" class="shape-result-pill">E6 Standard Ax</span>
           <p id="resultsSubtitle">Pricing is ready for review.</p>
         </div>
         <div class="results-actions">
-          <div class="export-menu" id="exportMenu">
-            <button id="exportFullBom" class="primary-button export-menu-main" type="button" title="Full BOM — the 12-sheet customer deliverable: Table of Contents, Assumptions, Rate Card, Pricing Overview, Compute, Storage, Networking, DR, Security KMS, Consumption Ramp, Annexure and Applications Migrated to OCI. Includes the OCI architecture diagram generated from this BOM. Takes a few seconds to build.">Full BOM</button>
-            <button id="exportMenuToggle" class="primary-button export-menu-caret" type="button" aria-haspopup="true" aria-expanded="false" aria-label="More export options">▾</button>
-            <div id="exportMenuList" class="export-menu-list" role="menu" hidden>
-              <button id="exportExcel" class="export-menu-item" type="button" role="menuitem" title="Quick BOM — the compact workbook: the BOM sheet plus the Overview/ramp sheet.">Quick BOM</button>
-              <button id="exportJson" class="export-menu-item" type="button" role="menuitem">Export .json</button>
-              <button id="downloadDiagram" class="export-menu-item" type="button" role="menuitem" title="Download just the OCI architecture diagram generated from this BOM — the rendered PNG and the editable draw.io file, zipped together. No workbook.">Download diagram</button>
-            </div>
-          </div>
-          <input id="loadWorkflowFile" type="file" accept=".json,.xlsx" hidden />
+          <button id="exportFullBom" class="primary-button" type="button" title="Download the compact customer workbook with Overview and Shape tabs.">Download BOM</button>
         </div>
       </section>
 
-      <section id="resultsKpis" class="results-kpis" aria-label="Cost summary"></section>
+      <p id="pricePageStatus" class="price-page-status" role="status" aria-live="polite" hidden></p>
 
-      <section class="cross-cloud-section" aria-label="Other cloud estimate">
-        <button type="button" id="crossCloudTile" class="cross-cloud-tile" aria-expanded="false" aria-controls="crossCloudResults">
-          <span class="cross-cloud-tile-icon">☁</span>
-          <span class="cross-cloud-tile-text">
-            <strong>Estimate on other clouds</strong>
-            <span>Click to compare approximate AWS &amp; Azure on-demand cost for these workloads</span>
-          </span>
-          <span class="cross-cloud-tile-caret" aria-hidden="true">▾</span>
-        </button>
-        <div id="crossCloudResults" class="cross-cloud-results" hidden></div>
-      </section>
+      <section id="resultsKpis" class="results-kpis" aria-label="Cost Summary"></section>
 
       <section class="insight-panel ramp-panel" aria-labelledby="rampHeading">
         <div class="panel-heading ramp-heading">
           <div>
-            <h3 id="rampHeading">Build a 3-year ramp</h3>
+            <h3 id="rampHeading">Build a 3-Year Ramp</h3>
             <p>Drag any dot to adjust that section of the ramp. Click the graph or add a dot to create another section. The red dashed line is the BOM maximum.</p>
           </div>
           <div class="ramp-heading-right">
-            <div class="mode-switch ramp-months-switch" role="group" aria-label="Ramp length in months" title="Ramp length. The Full BOM's Consumption Ramp sheet is generated with exactly this many months.">
+            <div class="mode-switch ramp-months-switch" role="group" aria-label="Ramp Length in Months" title="Choose the contract ramp length used in the BOM Overview.">
               <button type="button" class="mode-opt is-active" data-ramp-months="12">12 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="24">24 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="36">36 mo</button>
+              <button type="button" class="mode-opt" data-ramp-months="48">48 mo</button>
               <button type="button" class="mode-opt" data-ramp-months="60">60 mo</button>
             </div>
-            <span id="rampCeilingLabel">BOM maximum</span>
+            <span id="rampCeilingLabel">BOM Maximum</span>
           </div>
         </div>
         <div class="ramp-body">
@@ -343,42 +629,32 @@
               <desc id="rampChartDesc">Interactive ramp chart capped by the full-capacity monthly estimate.</desc>
             </svg>
           </div>
-          <div class="ramp-controls" aria-label="Ramp assumptions">
+          <div class="ramp-controls" aria-label="Ramp Assumptions">
             <div class="ramp-action-row">
-              <button id="addRampPoint" class="ghost-button" type="button">Add ramp dot</button>
-              <button id="removeRampPoint" class="ghost-button" type="button">Remove selected</button>
+              <button id="addRampPoint" class="ghost-button" type="button">Add Ramp Point</button>
+              <button id="removeRampPoint" class="ghost-button" type="button">Remove Selected</button>
             </div>
             <div class="ramp-control-grid">
               <label class="ramp-control">
-                <span>Selected dot month</span>
+                <span>Selected Point Month</span>
                 <input id="rampPeakMonth" type="number" min="1" max="12" step="1" value="12" />
                 <small>Month 1 to month 12</small>
               </label>
               <label class="ramp-control">
-                <span>Selected dot monthly spend</span>
+                <span>Selected Point Monthly Spend</span>
                 <div class="currency-input">
                   <b aria-hidden="true">$</b>
-                  <input id="rampPeakMonthly" type="number" min="0" step="100" value="0" inputmode="decimal" aria-label="Selected dot monthly spend in dollars" />
+                  <input id="rampPeakMonthly" type="number" min="0" step="100" value="0" inputmode="decimal" aria-label="Selected Point Monthly Spend in Dollars" />
                 </div>
                 <small>Cannot exceed the BOM maximum</small>
               </label>
             </div>
-            <div class="ramp-discount" id="ociDiscountControl">
-              <label class="ramp-control">
-                <span>OCI discount (proposal)</span>
-                <div class="pct-input">
-                  <input id="ociDiscount" type="number" min="0" max="100" step="0.5" value="0" inputmode="decimal" aria-label="OCI discount percent" />
-                  <b aria-hidden="true">%</b>
-                </div>
-                <small>Applied to the OCI estimate and the export (cloud and on-prem). Leave at 0 for no discount.</small>
-              </label>
-            </div>
-            <div class="ramp-years" aria-label="Annual ramp totals">
-              <div><span>Year 1 spend</span><strong id="rampYearOneTotal">$0.00</strong></div>
-              <div><span>Year 2 spend</span><strong id="rampYearTwoTotal">$0.00</strong></div>
-              <div><span>Year 3 spend</span><strong id="rampYearThreeTotal">$0.00</strong></div>
-              <div id="rampYearFourBox" hidden><span>Year 4 spend</span><strong id="rampYearFourTotal">$0.00</strong></div>
-              <div id="rampYearFiveBox" hidden><span>Year 5 spend</span><strong id="rampYearFiveTotal">$0.00</strong></div>
+            <div class="ramp-years" aria-label="Annual Ramp Totals">
+              <div><span>Year 1 Spend</span><strong id="rampYearOneTotal">$0.00</strong></div>
+              <div><span>Year 2 Spend</span><strong id="rampYearTwoTotal">$0.00</strong></div>
+              <div><span>Year 3 Spend</span><strong id="rampYearThreeTotal">$0.00</strong></div>
+              <div id="rampYearFourBox" hidden><span>Year 4 Spend</span><strong id="rampYearFourTotal">$0.00</strong></div>
+              <div id="rampYearFiveBox" hidden><span>Year 5 Spend</span><strong id="rampYearFiveTotal">$0.00</strong></div>
             </div>
             <div class="ramp-summary">
               <div class="ramp-contract-value">
@@ -387,7 +663,7 @@
                 <small id="rampContractNote">Year 1 + Year 2 + Year 3</small>
               </div>
               <div class="ramp-average">
-                <span>Average monthly spend</span>
+                <span>Average Monthly Spend</span>
                 <strong id="rampAvgMonthly">$0.00</strong>
               </div>
             </div>
@@ -398,186 +674,23 @@
       <section class="results-grid">
         <article class="insight-panel cost-mix-panel">
           <div class="panel-heading">
-            <h3>Cost mix by SKU</h3>
-            <span>Monthly estimate</span>
+            <h3>Cost Mix by SKU</h3>
+            <span>Monthly Estimate</span>
           </div>
           <div class="cost-mix">
-            <div id="costDonut" class="cost-donut" aria-label="Cost mix chart"></div>
+            <div id="costDonut" class="cost-donut" aria-label="Cost Mix Chart"></div>
             <div id="costLegend" class="cost-legend is-collapsed"></div>
           </div>
-          <button type="button" id="costMixToggle" class="cost-mix-toggle" aria-expanded="false" hidden>Show all SKUs</button>
+          <button type="button" id="costMixToggle" class="cost-mix-toggle" aria-expanded="false" hidden>Show All SKUs</button>
         </article>
 
         <article class="insight-panel">
           <div class="panel-heading">
-            <h3 id="topListHeading">Top workloads</h3>
-            <span>Highest monthly cost</span>
+            <h3 id="topListHeading">Top Workloads</h3>
+            <span>Highest Monthly Cost</span>
           </div>
           <div id="topWorkloads" class="bar-list"></div>
         </article>
-      </section>
-
-      <section class="add-services-section" aria-label="Add OCI services">
-        <button type="button" id="addServicesToggle" class="add-services-toggle" aria-expanded="false" aria-controls="addServicesBody">
-          <span class="add-services-toggle-icon" aria-hidden="true">＋</span>
-          <span class="add-services-toggle-text">
-            <strong>Add OCI services to the BOM</strong>
-            <span>Search Networking, Storage, Database, PaaS and more — size each one and add it to your estimate and export.</span>
-          </span>
-          <span class="add-services-caret" aria-hidden="true">▾</span>
-        </button>
-
-        <div id="addServicesBody" class="add-services-body" hidden>
-          <div class="add-services-search-row">
-            <input id="serviceSearch" type="search" placeholder="Search services, e.g. load balancer, object storage, WAF, Autonomous…" autocomplete="off" aria-label="Search OCI services" />
-          </div>
-          <div id="serviceChips" class="service-chips" role="group" aria-label="Service categories"></div>
-
-          <div class="add-services-columns">
-            <div class="service-results-col">
-              <div id="serviceResults" class="service-results" aria-live="polite"></div>
-            </div>
-            <aside class="service-cart" aria-label="Added services">
-              <div class="service-cart-head">
-                <h4>Added services</h4>
-                <span id="serviceCartCount" class="service-cart-count">0</span>
-              </div>
-              <div id="serviceCartList" class="service-cart-list"></div>
-              <div class="service-cart-foot">
-                <span>Added monthly</span>
-                <strong id="serviceCartTotal">$0.00</strong>
-              </div>
-              <p class="service-cart-note">Added services are included in the totals above and in both BOM exports. Networking / Security / DR / Storage lines land on the matching Pricing Overview row.</p>
-            </aside>
-          </div>
-        </div>
-      </section>
-
-      <section class="add-services-section" aria-label="Diagram and DR options">
-        <button type="button" id="diagramOptionsToggle" class="add-services-toggle" aria-expanded="false" aria-controls="diagramOptionsBody">
-          <span class="add-services-toggle-icon" aria-hidden="true">＋</span>
-          <span class="add-services-toggle-text">
-            <strong>Diagram &amp; DR options</strong>
-            <small>Pick the OCI region (splits compute across availability domains when supported) and a DR region.</small>
-          </span>
-          <span class="add-services-caret" aria-hidden="true">▾</span>
-        </button>
-        <div id="diagramOptionsBody" class="add-services-body" hidden>
-          <div class="diagram-card">
-            <div class="diagram-card-head">
-              <span class="diagram-card-title">Primary region</span>
-              <span class="diagram-card-sub">Where the migrated workloads land</span>
-            </div>
-            <label class="diagram-field">
-              <span class="diagram-field-label">Primary OCI region</span>
-              <select id="primaryRegion" class="diagram-select" data-searchable="region">
-                <option value="" data-ads="1" data-pin="auto">Auto (unnamed region — pick a region to enable AD split)</option>
-                <option value="us-ashburn-1" data-ads="3">US East (Ashburn) · 3 ADs</option>
-                <option value="us-phoenix-1" data-ads="3">US West (Phoenix) · 3 ADs</option>
-                <option value="uk-london-1" data-ads="3">UK South (London) · 3 ADs</option>
-                <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt) · 3 ADs</option>
-                <option value="ap-sydney-1" data-ads="1">Australia East (Sydney) · 1 AD</option>
-                <option value="sa-saopaulo-1" data-ads="1">Brazil East (São Paulo) · 1 AD</option>
-                <option value="ca-montreal-1" data-ads="1">Canada Southeast (Montreal) · 1 AD</option>
-                <option value="ca-toronto-1" data-ads="1">Canada Southeast (Toronto) · 1 AD</option>
-                <option value="eu-paris-1" data-ads="1">France Central (Paris) · 1 AD</option>
-                <option value="ap-mumbai-1" data-ads="1">India West (Mumbai) · 1 AD</option>
-                <option value="ap-osaka-1" data-ads="1">Japan Central (Osaka) · 1 AD</option>
-                <option value="ap-tokyo-1" data-ads="1">Japan East (Tokyo) · 1 AD</option>
-                <option value="eu-amsterdam-1" data-ads="1">Netherlands NW (Amsterdam) · 1 AD</option>
-                <option value="me-jeddah-1" data-ads="1">Saudi Arabia West (Jeddah) · 1 AD</option>
-                <option value="ap-singapore-1" data-ads="1">Singapore · 1 AD</option>
-                <option value="ap-seoul-1" data-ads="1">South Korea Central (Seoul) · 1 AD</option>
-                <option value="eu-madrid-1" data-ads="1">Spain Central (Madrid) · 1 AD</option>
-                <option value="eu-zurich-1" data-ads="1">Switzerland North (Zurich) · 1 AD</option>
-                <option value="me-dubai-1" data-ads="1">UAE East (Dubai) · 1 AD</option>
-                <option value="us-chicago-1" data-ads="1">US Midwest (Chicago) · 1 AD</option>
-                <option value="us-sanjose-1" data-ads="1">US West (San Jose) · 1 AD</option>
-              </select>
-            </label>
-            <label class="diagram-switch" id="splitAcrossADsRow">
-              <input type="checkbox" id="splitAcrossADs" />
-              <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
-              <span class="diagram-switch-text">
-                <strong>Split compute across Availability Domains</strong>
-                <small id="adSplitHint">Pick a multi-AD region to enable</small>
-              </span>
-            </label>
-            <div id="adSplitResources" class="diagram-sub" hidden>
-              <div class="diagram-field">
-                <span class="diagram-field-label">Split which resources across ADs</span>
-                <div class="diagram-chips" id="adSplitChips">
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="adSplitVms" value="vms" checked />
-                    <span>Compute VMs</span>
-                  </label>
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="adSplitDbs" value="dbs" checked />
-                    <span>Databases</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="diagram-card">
-            <label class="diagram-switch">
-              <input type="checkbox" id="enableDr" />
-              <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
-              <span class="diagram-switch-text">
-                <strong>Enable Disaster Recovery region</strong>
-                <small>Draw a secondary OCI region and replicate the resources you choose</small>
-              </span>
-            </label>
-            <div id="drSubOptions" class="diagram-sub" hidden>
-              <label class="diagram-field">
-                <span class="diagram-field-label">DR region (secondary)</span>
-                <select id="drRegion" class="diagram-select" data-searchable="region">
-                  <option value="" data-pin="auto">Auto (unnamed secondary region)</option>
-                  <option value="us-ashburn-1" data-ads="3">US East (Ashburn)</option>
-                  <option value="us-phoenix-1" data-ads="3">US West (Phoenix)</option>
-                  <option value="uk-london-1" data-ads="3">UK South (London)</option>
-                  <option value="eu-frankfurt-1" data-ads="3">Germany Central (Frankfurt)</option>
-                  <option value="ap-sydney-1">Australia East (Sydney)</option>
-                  <option value="sa-saopaulo-1">Brazil East (São Paulo)</option>
-                  <option value="ca-montreal-1">Canada Southeast (Montreal)</option>
-                  <option value="ca-toronto-1">Canada Southeast (Toronto)</option>
-                  <option value="eu-paris-1">France Central (Paris)</option>
-                  <option value="ap-mumbai-1">India West (Mumbai)</option>
-                  <option value="ap-osaka-1">Japan Central (Osaka)</option>
-                  <option value="ap-tokyo-1">Japan East (Tokyo)</option>
-                  <option value="eu-amsterdam-1">Netherlands NW (Amsterdam)</option>
-                  <option value="me-jeddah-1">Saudi Arabia West (Jeddah)</option>
-                  <option value="ap-singapore-1">Singapore</option>
-                  <option value="ap-seoul-1">South Korea Central (Seoul)</option>
-                  <option value="eu-madrid-1">Spain Central (Madrid)</option>
-                  <option value="eu-zurich-1">Switzerland North (Zurich)</option>
-                  <option value="me-dubai-1">UAE East (Dubai)</option>
-                  <option value="us-chicago-1">US Midwest (Chicago)</option>
-                  <option value="us-sanjose-1">US West (San Jose)</option>
-                </select>
-              </label>
-              <div class="diagram-field">
-                <span class="diagram-field-label">Replicate to DR</span>
-                <div class="diagram-chips" id="drReplicateChips">
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="drRepVms" value="vms" checked />
-                    <span>Compute VMs</span>
-                  </label>
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="drRepDbs" value="dbs" checked />
-                    <span>Databases</span>
-                  </label>
-                  <label class="diagram-chip">
-                    <input type="checkbox" id="drRepObj" value="object" checked />
-                    <span>Object Storage backups</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p class="service-cart-note">These shape the architecture diagram in the Full BOM: the region names, whether compute is split across availability domains, and — when DR is enabled — the secondary region and which resources it replicates.</p>
-        </div>
       </section>
 
       <section class="insight-panel result-detail-panel">
@@ -587,23 +700,17 @@
           </div>
           <span id="resultRowCount">0 workloads</span>
         </div>
-        <div class="sizing-legend" aria-label="Status key">
-          <span class="legend-item"><span class="size-flag size-flag-rightsized">RIGHTSIZED</span> OCPU &amp; RAM trimmed for newer-generation efficiency</span>
-          <span class="legend-item"><span class="size-flag size-flag-baremetal">BARE METAL</span> too big for flex</span>
-          <span class="legend-item"><span class="size-flag size-flag-impossible">IMPOSSIBLE</span> exceeds largest OCI shape</span>
-          <span class="legend-item"><span class="size-flag size-flag-gpu">GPU</span> mapped to OCI GPU shape</span>
-        </div>
         <div class="bulk-action-bar" id="bulkActionBar" hidden>
           <span class="bulk-sel-count" id="bulkSelCount">0 selected</span>
           <label class="bulk-action-label">Set cost action:
             <select id="bulkCostAction" class="cell-select">
-              <option value="estimate">Use OCI estimate</option>
-              <option value="carry">Carry over AWS cost</option>
+              <option value="estimate">Use OCI Estimate</option>
+              <option value="carry">Carry Over AWS Cost</option>
               <option value="remove">Remove from BOM</option>
             </select>
           </label>
-          <button type="button" class="primary-button bulk-apply-btn" id="bulkApply">Apply to selected</button>
-          <button type="button" class="ghost-button" id="bulkClear">Clear selection</button>
+          <button type="button" class="primary-button bulk-apply-btn" id="bulkApply">Apply to Selected</button>
+          <button type="button" class="ghost-button" id="bulkClear">Clear Selection</button>
         </div>
         <div class="result-table-toolbar">
           <div class="column-picker" id="columnPicker">
@@ -613,7 +720,7 @@
         </div>
         <div class="result-detail-layout">
           <aside class="source-filter-panel" id="sourceFilterPanel" hidden>
-            <div class="source-filter-head">Filter by source service</div>
+            <div class="source-filter-head">Filter by Source Service</div>
             <div class="source-filter-actions">
               <button type="button" id="sourceFilterAll">All</button>
               <button type="button" id="sourceFilterNone">None</button>
@@ -631,6 +738,31 @@
           </div>
         </div>
       </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToServicesFromPrice" class="ghost-button" type="button">Back to Services</button>
+        <button id="continueToOtherClouds" class="primary-button" type="button">Estimate on Other Clouds</button>
+      </div>
+    </main>
+
+    <main id="otherCloudsPage" class="other-clouds-page is-hidden">
+      <section class="other-clouds-hero">
+        <div>
+          <p class="page-kicker">Cross-cloud comparison</p>
+          <h2>Estimate on Other Clouds</h2>
+          <span id="otherCloudsShape" class="shape-result-pill">E6 Standard Ax</span>
+          <p>Compare this OCI estimate with directional AWS and Azure on-demand estimates for the same workloads.</p>
+        </div>
+      </section>
+
+      <section class="other-clouds-comparison" aria-label="Other Cloud Estimate">
+        <div id="crossCloudResults" class="cross-cloud-results"></div>
+      </section>
+
+      <div class="workflow-page-footer">
+        <button id="backToPriceFromOtherClouds" class="ghost-button" type="button">Back to Price</button>
+        <button id="continueToArchitectureFromOtherClouds" class="primary-button" type="button">Continue to Architecture</button>
+      </div>
     </main>
 
     <div id="exportOverlay" class="export-overlay" hidden role="status" aria-live="polite">

@@ -1,0 +1,6 @@
+.env
+.env.*
+.vercel
+.git
+qa
+uploads/*

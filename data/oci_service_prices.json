@@ -6,14 +6,15 @@
     "usageBasis": "storage = usage quantity treated as GB-month; transfer = GB; count = per-unit/month"
   },
   "services": {
-    "OCI Object Storage": {"sku": "B86080", "rate": 0.0255, "unit": "GB per month", "basis": "storage", "note": "Set to 0.0255 per request (price list lists 0.0300 for B86080)."},
+    "OCI Object Storage": {"sku": "B91628", "rate": 0.0255, "unit": "GB per month", "basis": "storage", "freeGb": 10, "note": "Object Storage Standard. First 10 GB-month free."},
+    "OCI Infrequent Access Storage": {"sku": "B93000", "rate": 0.0100, "unit": "GB per month", "basis": "storage", "freeGb": 10, "retrievalSku": "B93001", "retrievalRate": 0.0100, "freeRetrievalGb": 10, "note": "Object Storage Infrequent Access. First 10 GB-month and first 10 GB retrieved per month are free."},
     "OCI Block Volumes": {"sku": "B91961", "rate": 0.0255, "unit": "GB per month", "basis": "storage", "perfUnitsSku": "B91962", "perfUnitsRate": 0.0017},
     "OCI File Storage": {"sku": "B89057", "rate": 0.3000, "unit": "GB per month", "basis": "storage", "note": "Standard File Storage tier."},
-    "OCI Archive Storage": {"sku": "B89145", "rate": 0.0030, "unit": "GB per month", "basis": "storage"},
+    "OCI Archive Storage": {"sku": "B91633", "rate": 0.0026, "unit": "GB per month", "basis": "storage", "freeGb": 10, "note": "Archive Storage. First 10 GB-month free."},
     "OCI Outbound Data Transfer": {"sku": "B87062", "rate": 0.0085, "unit": "GB", "basis": "transfer", "note": "First 10 TB/month is free."},
     "OCI Secure Desktops": {"sku": "B95518", "rate": 20.00, "unit": "desktop per month", "basis": "count"},
     "OCI Load Balancer": {"sku": "B93031", "rate": 0.0113, "unit": "Load-Balancer-hour", "basis": "count", "note": "Priced per load-balancer-hour. Capacity / LCU usage is included (free) on OCI."},
-    "OCI FastConnect": {"sku": "B?-FASTCONNECT", "unit": "port-hour", "basis": "count", "note": "Priced per provisioned port-hour by port speed; FastConnect does not meter traffic (ingress/egress data transfer is free).", "rate": 0.2125, "speedRates": {"1G": 0.2125, "10G": 1.275, "100G": 10.75, "400G": 20.00}},
+    "OCI FastConnect": {"sku": "B88325", "unit": "port-hour", "basis": "count", "note": "Priced per provisioned port-hour by port speed; FastConnect does not meter traffic (ingress/egress data transfer is free).", "rate": 0.2125, "speedRates": {"1G": 0.2125, "10G": 1.275, "100G": 10.75, "400G": 20.00}, "speedSkus": {"1G": "B88325", "10G": "B88326", "100G": "B93126", "400G": "B107975"}},
     "OCI Web Application Firewall": {"sku": "B94277", "rate": 0.60, "unit": "1,000,000 incoming requests per month", "basis": "waf", "instanceSku": "B94579", "instanceRate": 5.00, "freeInstances": 1, "freeRequests": 10000000, "note": "First instance + first 10M requests/month free; $5/instance-month and $0.60 per 1M requests after. Rules / WebACL / bot management bundled. Priced via price_waf_row (basis 'waf' is NOT priced by the generic storage path)."},
     "OCI Database Backup": {"sku": "B90230", "rate": 0.0051, "unit": "GB per month", "basis": "reference", "note": "Oracle Database Backup Cloud -> Object Storage. Used for PostgreSQL/Aurora-PG/Oracle/Base DB backups. MySQL backups use MySQL Database - Backup Storage (B92483, $0.04/GB-month); SQL Server (self-managed VM) backups use standard Object Storage ($0.0255/GB-month). Priced via price_rds_row (basis 'reference' is NOT priced by the generic storage path)."},
     "OCI Logging": {"sku": "B92707", "rate": 0.05, "unit": "GB per month", "basis": "logging", "freeGb": 10, "note": "First 10 GB/month free, then $0.05/GB-month. CloudWatch Logs map here. Priced via price_cloudwatch_logs_row (basis 'logging' is NOT priced by the generic storage path)."},

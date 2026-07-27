@@ -48,7 +48,7 @@ CONTAINER_STYLES = {
     'subnet':      'rounded=0;whiteSpace=wrap;html=1;fillColor=none;'
                    'strokeColor=#AE562C;dashed=1;dashPattern=2 2;verticalAlign=top;'
                    'align=left;spacing=4;fontSize=15;fontColor=#AE562C;',
-    # Availability Domain — Oracle draws these as solid-bordered light containers, distinct
+    # Availability Domain - Oracle draws these as solid-bordered light containers, distinct
     # from the orange dashed subnets/VCNs.
     'ad':          'rounded=1;arcSize=3;whiteSpace=wrap;html=1;fillColor=#E9F0F0;'
                    'strokeColor=#5E7D82;dashed=0;verticalAlign=top;align=left;'
@@ -166,6 +166,14 @@ def build(spec_path, out_drawio, out_png=None, lib_path=None):
 
     for i, e in enumerate(spec.get('edges', [])):
         style = EDGE_STYLES.get(e.get('style', 'solid'), EDGE_STYLES['solid'])
+        source_anchor = e.get('sourceAnchor')
+        if source_anchor:
+            style += (f'exitX={source_anchor[0]};exitY={source_anchor[1]};'
+                      'exitDx=0;exitDy=0;exitPerimeter=1;')
+        target_anchor = e.get('targetAnchor')
+        if target_anchor:
+            style += (f'entryX={target_anchor[0]};entryY={target_anchor[1]};'
+                      'entryDx=0;entryDy=0;entryPerimeter=1;')
         src = e['source'] if e['source'] in node_bounds else e['source']
         c = ET.SubElement(root, 'mxCell', id=f'e{i}', value=e.get('label', ''),
                           style=style, edge='1', parent='1',
