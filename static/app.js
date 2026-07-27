@@ -4669,14 +4669,22 @@ function onPriceShapeClick() {
 }
 els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing?.addEventListener("click", priceRows);
+function repriceIfEstimated() {
+  // If an estimate already exists, re-run pricing in place so the toggle takes effect
+  // immediately instead of requiring a manual re-price.
+  if (typeof priceRows === "function" && state.pricing) priceRows({ keepView: true });
+}
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
+  repriceIfEstimated();
 });
 els.hideSqlToggle?.addEventListener("change", (event) => {
   state.hideSqlPricing = event.target.checked;
+  repriceIfEstimated();
 });
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
+  repriceIfEstimated();
 });
 function setCpuUnit(value) {
   const v = ["auto", "vcpu", "ocpu"].includes(value) ? value : "auto";
