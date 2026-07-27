@@ -555,6 +555,37 @@ async function main() {
       await page.locator(".result-detail-panel").screenshot({
         path: path.join(QA_DIR, "dark-application-cost-details.png"),
       });
+      await page.locator("#exportOverlay").evaluate((overlay) => {
+        overlay.hidden = false;
+      });
+      const exportOverlayStyles = await page.locator("#exportOverlay").evaluate((overlay) => {
+        const text = overlay.querySelector(".export-overlay-text");
+        const spinner = overlay.querySelector(".export-spinner");
+        return {
+          card: getComputedStyle(overlay, "::before").backgroundColor,
+          text: text ? getComputedStyle(text).color : "",
+          spinner: spinner ? getComputedStyle(spinner).borderTopColor : "",
+        };
+      });
+      const expectedExportOverlayStyles = {
+        card: "rgb(36, 46, 47)",
+        text: "rgb(243, 241, 236)",
+        spinner: "rgb(100, 213, 154)",
+      };
+      for (const [property, expected] of Object.entries(expectedExportOverlayStyles)) {
+        if (exportOverlayStyles[property] !== expected) {
+          throw new Error(
+            `Dark export overlay ${property} mismatch: expected ${expected}, got ${exportOverlayStyles[property]}`,
+          );
+        }
+      }
+      await page.screenshot({
+        path: path.join(QA_DIR, "dark-export-overlay.png"),
+        fullPage: false,
+      });
+      await page.locator("#exportOverlay").evaluate((overlay) => {
+        overlay.hidden = true;
+      });
     }
     await page.waitForTimeout(100);
     await page.screenshot({ path: path.join(QA_DIR, screenshot), fullPage: false });
@@ -638,6 +669,7 @@ async function main() {
           "qa/dark-pricing.png",
           "qa/dark-cost-mix.png",
           "qa/dark-application-cost-details.png",
+          "qa/dark-export-overlay.png",
           "qa/dark-compare.png",
           "qa/dark-architecture.png",
           "qa/dark-deliverables.png",

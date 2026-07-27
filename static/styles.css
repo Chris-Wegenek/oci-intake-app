@@ -4625,6 +4625,25 @@ td input[type="checkbox"] {
     linear-gradient(180deg, #12191a 0%, var(--bg) 50%, #0d1213 100%);
 }
 
+:root[data-theme="dark"] .export-overlay {
+  background: rgba(7, 11, 12, 0.78);
+}
+
+:root[data-theme="dark"] .export-overlay::before {
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
+}
+
+:root[data-theme="dark"] .export-spinner {
+  border-color: #4b595b;
+  border-top-color: var(--success);
+}
+
+:root[data-theme="dark"] .export-overlay-text {
+  color: var(--ink);
+}
+
 :root[data-theme="dark"] .app-header {
   background-color: #11191a;
   background-image:
