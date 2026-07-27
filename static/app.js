@@ -5037,8 +5037,8 @@ function renderCrossCloud() {
         ? `Top-of-the-line (what-if): every cloud - including your ${srcName} bill - is re-estimated on that cloud's newest-generation equivalent shape, so you can see what the same workloads would cost re-shaped. Non-compute services (storage, data transfer, managed services) stay at their actual billed cost. For directional comparison only - not a quote.`
         : `Best match: your ${srcName} total is your actual billed cost - no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services at their billed cost. Switch to Top of the line to re-estimate your bill on newest-generation shapes. For directional comparison only - not a quote.`)
     : tier
-    ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only - not a quote."
-    : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only - not a quote.";
+    ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline, plus attached block storage, Windows, and SQL Server licensing where detected). For directional comparison only - not a quote."
+    : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline, plus attached block storage, Windows, and SQL Server licensing where detected). For directional comparison only - not a quote.";
   const estNote = sourceCostIsEstimated()
     ? ` Your ${srcName} bill contained usage/SKUs but no pricing, so the ${srcName} total shown is an App Estimate reconstructed from usage - not a billed figure.`
     : "";

@@ -3654,6 +3654,8 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
     out = {}
     for cloud in ("aws", "azure"):
         total = 0.0
+        storage_total = 0.0
+        sql_total = 0.0
         actual_rows = 0
         estimated_rows = 0
         live_rows = 0
@@ -3713,6 +3715,25 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                 # On-prem inventory: only compute workloads are priced here.
                 if not is_compute:
                     continue
+                # Attached block storage: OCI's total includes each VM's disk, so the other
+                # clouds must too - otherwise OCI looks artificially expensive (its block volume
+                # is far cheaper than AWS EBS / Azure managed disk). Price the VM's disk at this
+                # cloud's block-volume rate (OCI B91961 -> EBS gp3 / Azure Standard SSD; the
+                # performance-unit SKU B91962 is bundled into that per-GB rate, matching cloud-bill mode).
+                _blk_gb = to_number(specs.get("blockStorageGb"), 0)
+                if _blk_gb > 0:
+                    _blk_rate = (_CLOUD_RATE_TABLE.get(cloud, {}).get("B91961") or (1.0, 0.0))[1]
+                    storage_total += _blk_gb * _blk_rate
+                # File/NAS storage (rare in VM inventory) priced at the cloud's file-share rate.
+                _file_gb = to_number(specs.get("fileStorageGb"), 0)
+                if _file_gb > 0:
+                    _file_rate = (_CLOUD_RATE_TABLE.get(cloud, {}).get("B89057") or (1.0, 0.0))[1]
+                    storage_total += _file_gb * _file_rate
+                # SQL Server licensing is a BYOL-able 3rd-party license the customer pays on ANY
+                # cloud (AWS/Azure charge it too), so mirror OCI's SQL license onto the other
+                # clouds - otherwise a SQL workload makes OCI look artificially expensive, the
+                # same way Windows/storage did. Already reflects the hide-SQL toggle (0 when hidden).
+                sql_total += to_number(row.get("sqlLicenseMonthly"), 0)
 
             hours = row.get("hoursPerMonth") or HOURS_PER_MONTH
             # Cloud bills are often billed at daily/hourly granularity, so a single VM shows up
@@ -3781,10 +3802,13 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
             basis = "actual"
         else:
             basis = "equivalent"
+        total += storage_total + sql_total
         out[cloud] = {
             "label": "AWS" if cloud == "aws" else "Microsoft Azure",
             "monthlyTotal": money(total),
             "annualTotal": money(total * 12),
+            "storageMonthly": money(storage_total),
+            "sqlLicenseMonthly": money(sql_total),
             "priced": True,
             "basis": basis,
             "actualRows": actual_rows,
