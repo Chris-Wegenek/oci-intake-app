@@ -8821,6 +8821,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "sourceProduct": clean_text(row.get("source_product")),
             "windowsLicenseMonthly": windows_addon,
             "sqlLicenseMonthly": sql_license_monthly,
+            "osDetected": "windows" if is_windows_row else "linux",
             "sourceCloudEstimate": source_cloud_estimate,
             "rightsized": bool(rightsize and ((original_memory_gb and memory_gb != original_memory_gb) or (original_ocpus and ocpus != original_ocpus))),
             "originalMemoryGb": round(original_memory_gb, 4),

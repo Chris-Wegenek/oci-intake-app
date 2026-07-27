@@ -623,12 +623,19 @@ function syncWorkflowAvailability() {
 
   els.steps.forEach((item) => {
     const step = item.dataset.step;
-    const locked = workflowStepIndex(step) > highest;
-    item.disabled = locked;
+    const idx = workflowStepIndex(step);
+    const locked = idx > highest;
+    // Keep the IMMEDIATELY-next tab clickable so it can act as the page's forward button
+    // (a disabled <button> swallows click events); tabs further ahead stay disabled.
+    const isNext = idx === highest + 1;
+    item.disabled = locked && !isNext;
     item.classList.toggle("is-locked", locked);
+    item.classList.toggle("is-next", isNext);
     if (locked) {
-      const previous = WORKFLOW_STEP_ORDER[workflowStepIndex(step) - 1];
-      item.title = `Complete ${WORKFLOW_STEP_LABELS[previous]} to unlock ${WORKFLOW_STEP_LABELS[step]}.`;
+      const previous = WORKFLOW_STEP_ORDER[idx - 1];
+      item.title = isNext
+        ? `Continue to ${WORKFLOW_STEP_LABELS[step]}`
+        : `Complete ${WORKFLOW_STEP_LABELS[previous]} to unlock ${WORKFLOW_STEP_LABELS[step]}.`;
     } else {
       item.removeAttribute("title");
     }
@@ -3832,6 +3839,13 @@ function fallbackEntityName(row, noun = "Workload") {
   return suffix ? `${noun} ${suffix}` : noun;
 }
 
+function osBadge(os) {
+  const v = String(os || "").toLowerCase();
+  if (v === "windows") return `<span class="os-badge os-windows">Windows</span>`;
+  if (v === "linux") return `<span class="os-badge os-linux">Linux</span>`;
+  return "-";
+}
+
 function cloudRowLabel(row) {
   const mapping = row.fullServiceMapping || {};
   return mapping.sourceService || fallbackEntityName(row, "Source line");
@@ -4404,6 +4418,12 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false, co
       label: "Env",
       sortValue: (row) => row.environment || "",
       render: (row) => escapeHtml(row.environment || "-"),
+    },
+    {
+      key: "os",
+      label: "OS",
+      sortValue: (row) => row.osDetected || "",
+      render: (row) => osBadge(row.osDetected),
     },
     {
       key: "region",
@@ -5070,10 +5090,36 @@ els.continueToArchitectureFromOtherClouds?.addEventListener("click", () => {
   unlockWorkflowStep("architecture");
   showArchitecturePage();
 });
+// The "forward"/primary button that advances FROM each step. Clicking the tab immediately
+// after the current one runs that button - same as the page's Continue button - so users can
+// advance from the tab bar, not just the in-page button.
+const STEP_FORWARD_BTN = {
+  upload: "continueToReviewFromUpload",
+  review: "priceButton",
+  shape: "priceShapeButton",
+  networking: "continueToPriceFromServices",
+  price: "continueToOtherClouds",
+  "other-clouds": "continueToArchitectureFromOtherClouds",
+  architecture: "continueToDeliverables",
+};
+function currentActiveStep() {
+  return document.querySelector(".step.is-active")?.dataset.step || null;
+}
 els.steps.forEach((step) => {
   step.addEventListener("click", () => {
-    if (step.disabled || !isWorkflowStepUnlocked(step.dataset.step)) return;
-    navigateStep(step.dataset.step);
+    const target = step.dataset.step;
+    if (!step.disabled && isWorkflowStepUnlocked(target)) {
+      navigateStep(target);
+      return;
+    }
+    // Not yet unlocked: allow the IMMEDIATELY-next tab to act as the page's forward button.
+    const current = currentActiveStep();
+    const ci = workflowStepIndex(current);
+    const ti = workflowStepIndex(target);
+    if (ci >= 0 && ti === ci + 1) {
+      const btn = document.getElementById(STEP_FORWARD_BTN[current] || "");
+      if (btn && !btn.disabled) btn.click();
+    }
   });
 });
 els.modeOnPrem?.addEventListener("click", () => setIntakeMode("on_prem"));
