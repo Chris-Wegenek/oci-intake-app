@@ -3382,6 +3382,27 @@ def _instance_generation(provider, name):
     return int(match.group(1)) if match else 0
 
 
+def _is_specialty_instance(provider, name, family=None):
+    """True for GPU / accelerator / HPC specialty instances that must NOT be used as the
+    general-purpose equivalent for a normal server. They have huge RAM/price and would otherwise
+    win the 'smallest instance that fits' match (e.g. an Azure ND96 A100 GPU box at $32/hr, or an
+    AWS hpc7a) for a plain memory workload, massively inflating the cross-cloud estimate."""
+    n = (name or "").lower().strip()
+    fam = (family or "").lower()
+    if "gpu" in fam or "hpc" in fam or "accelerat" in fam or "fpga" in fam:
+        return True
+    if provider == "azure":
+        # N-series = GPU/FPGA (NC/ND/NV/NG/NP); H/HB/HC/HX = HPC.
+        if re.match(r"^n[cdvgp]", n) or re.match(r"^h(b|c|x)?\d", n):
+            return True
+    if provider == "aws":
+        fam0 = n.split(".")[0]
+        # GPU/accelerator families (p/g/dl/trn/inf/vt/f) and HPC (hpc*).
+        if re.match(r"^(p\d|g\d|dl\d|trn\d|inf\d|vt\d|f\d)", fam0) or fam0.startswith("hpc"):
+            return True
+    return False
+
+
 def _index_real_priced_instances():
     """Index every real-priced cloud instance (name + size + price + generation) by
     cloud and by cloud+OCI-vendor, so the cross-cloud estimate can match real shapes."""
@@ -3392,6 +3413,8 @@ def _index_real_priced_instances():
     max_gen = {}
     for s in CLOUD_SHAPE_MAP.values():
         if s.get("isGpu"):
+            continue
+        if _is_specialty_instance(s.get("provider"), s.get("instance"), s.get("family")):
             continue
         vcpu = s.get("vcpu")
         mem = s.get("memoryGb")
