@@ -2092,7 +2092,10 @@ def rule_based_row_has_inventory_signal(row, fields):
             has_descriptive_detail = True
 
     if not (has_application or has_name):
-        return False
+        # Accept a plain inventory row that carries real sizing signals (CPU/memory/storage)
+        # even without a name/application column - e.g. a per-server DB table where each row is
+        # one server and there is no hostname column.
+        return has_resource
     return has_resource or has_environment or has_descriptive_detail
 
 
@@ -7976,6 +7979,16 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 "db_total_storage", "db_size"):
         if keys.get(_sk) and not plausible_storage_field(fields, keys[_sk]):
             keys[_sk] = None
+    # A single-tier inventory (e.g. a DB-only per-server table with no "Application Details"
+    # section) can resolve the SAME column for both an app and a db finder, because the app
+    # finders fall back section-lessly. That double-counts the column as app + db. If an app key
+    # landed on a column already claimed by a db key, drop the app side so it's counted once.
+    _db_claimed = {keys.get(k) for k in ("db_cpu", "db_memory", "db_servers",
+                                         "db_total_allocated", "db_total_storage", "db_size")
+                   if keys.get(k)}
+    for _ak in ("app_cpu", "app_memory", "app_local_storage", "app_shared_storage", "app_servers"):
+        if keys.get(_ak) and keys.get(_ak) in _db_claimed:
+            keys[_ak] = None
     data_has = {"region": False, "environment": False, "hours": bool(keys.get("hours"))}
 
     priced_rows = []
