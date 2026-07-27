@@ -3898,7 +3898,7 @@ def gpu_pricing_for_context(context):
 # Map each app flex shape to its OCI shape name, per-VM max OCPU/memory, and CPU vendor.
 SHAPE_KEY_TO_OCI = {
     "e6-standard-ax": ("VM.Standard.E6.Ax.Flex", 94, 712, "amd"),
-    "e6-standard": ("VM.Standard.E6.Flex", 94, 1049, "amd"),
+    "e6-standard": ("VM.Standard.E6.Flex", 126, 1454, "amd"),
     "e5-standard": ("VM.Standard.E5.Flex", 94, 1049, "amd"),
     "e4-standard": ("VM.Standard.E4.Flex", 64, 1024, "amd"),
     "x9-standard": ("VM.Standard3.Flex", 32, 512, "intel"),
@@ -3934,7 +3934,7 @@ def oci_size_check(shape_key, ocpus, memory_gb):
             return {
                 "status": "baremetal",
                 "shape": tier["shape"],
-                "message": f"{ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}; fits bare metal {tier['shape']}.",
+                "message": f"Per server: {ocpus:g} OCPU / {memory_gb:g} GB exceeds {flex_shape}; fits bare metal {tier['shape']}. (The row total is the sum across this workload's servers.)",
             }
     biggest = (OCI_VENDOR_TIERS.get(vendor) or [{}])[-1]
     return {
