@@ -3,7 +3,7 @@ function main(workbook: ExcelScript.Workbook) {
   const generatedNames = ["BOM w E6 Acceleron", "Overview"];
   // Identify the SOURCE data sheet robustly.
   // On a re-run the active sheet is "Overview" (we activate it at the end) and the original
-  // data sheet has been renamed to "Base Data" — so prefer that, then fall back to the active sheet.
+  // data sheet has been renamed to "Base Data" - so prefer that, then fall back to the active sheet.
   let on_prem_data_sheet = workbook.getWorksheet("Base Data") || workbook.getActiveWorksheet();
   // Safety net: never treat one of the generated sheets as the source.
   if (generatedNames.indexOf(on_prem_data_sheet.getName()) !== -1) {
@@ -106,7 +106,7 @@ function main(workbook: ExcelScript.Workbook) {
   new_bom_sheet.getCell(2, 6).getFormat().getFill().setColor("#C0E6F5");
   new_bom_sheet.getCell(2, 6).getFormat().getFont().setBold(true);
   new_bom_sheet.getCell(2, 6).getFormat().getFont().setSize(11);
-  // Col H header — VM Cost
+  // Col H header - VM Cost
   new_bom_sheet.getCell(2, 7).setValue("VM Cost");
   new_bom_sheet.getCell(2, 7).getFormat().setVerticalAlignment(ExcelScript.VerticalAlignment.center);
   new_bom_sheet.getCell(2, 7).getFormat().setHorizontalAlignment(ExcelScript.HorizontalAlignment.center);
@@ -115,7 +115,7 @@ function main(workbook: ExcelScript.Workbook) {
   new_bom_sheet.getCell(2, 7).getFormat().getFont().setSize(11);
   new_bom_sheet.getCell(2, 7).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setStyle(ExcelScript.BorderLineStyle.medium);
   new_bom_sheet.getCell(2, 7).getFormat().getRangeBorder(ExcelScript.BorderIndex.edgeLeft).setColor(box_border_color);
-  // Col I — empty spacer column header
+  // Col I - empty spacer column header
   new_bom_sheet.getCell(2, 8).getFormat().getFill().setColor("#C0E6F5");
   new_bom_sheet.getCell(3, 1).setValue("Free Tier");
   new_bom_sheet.getCell(3, 1).getFormat().getFont().setSize(17);
@@ -281,7 +281,7 @@ function main(workbook: ExcelScript.Workbook) {
     // Copy reference columns
     new_bom_sheet.getRangeByIndexes(nameRow, 9, 1, 1).copyFrom(on_prem_data_sheet.getRangeByIndexes(bom_header_col_start, bom_header_row_start, 1, themax + 1), ExcelScript.RangeCopyType.all, false, false);
     new_bom_sheet.getRangeByIndexes(nameRow + 1, 9, 1, 1).copyFrom(on_prem_data_sheet.getRangeByIndexes(sourceRow, 0, 1, themax + 1), ExcelScript.RangeCopyType.all, false, false);
-    // Read source values directly — Math.floor for CPU and RAM
+    // Read source values directly - Math.floor for CPU and RAM
     const cpuValue = Math.floor(Number(on_prem_data_sheet.getCell(sourceRow, cpu_col_num).getValue()));
     const ramValue = Math.floor(Number(on_prem_data_sheet.getCell(sourceRow, ram_col_num).getValue()));
     const diskValue = Number(on_prem_data_sheet.getCell(sourceRow, disk_col_num).getValue());
@@ -306,7 +306,7 @@ function main(workbook: ExcelScript.Workbook) {
     if (serverOS === "windows") {
       windows_cpu_total += cpuValue;
     }
-    // --- Server Name Row — full row A-H gets red fill ---
+    // --- Server Name Row - full row A-H gets red fill ---
     const nameRowRange = new_bom_sheet.getRangeByIndexes(nameRow, 0, 1, 8);
     nameRowRange.getFormat().getFill().setColor(server_name_red);
     const textRange = new_bom_sheet.getCell(nameRow, 1);
@@ -450,7 +450,7 @@ function main(workbook: ExcelScript.Workbook) {
   // The pasted reference data lives in columns J onward (col index 9), 2 rows tall
   // (header row at nameRow, data row at nameRow + 1) and themax+1 columns wide.
   // ===================================================================================================
-  var ref_data_start_col = 9;          // column J — left edge of the pasted printout
+  var ref_data_start_col = 9;          // column J - left edge of the pasted printout
   var ref_label_col = 10;              // where "Server info" goes. 10 = col K (above each printout).
   for (let b = 0; b < blockCounter; b++) {
     var refNameRow = first_name_row + (b * block_size);
@@ -504,9 +504,9 @@ function main(workbook: ExcelScript.Workbook) {
   new_bom_sheet.getRange("J:J").getFormat().autofitColumns();
   let overview = workbook.addWorksheet("Overview");
   // Palette (red theme)
-  const ov_navy = "#7F1D1D";    // deep red — banners / title / borders
-  const ov_blue = "#C0504D";    // medium red — column / KPI headers
-  const ov_light = "#F2DCDB";   // light red — value cards / totals
+  const ov_navy = "#7F1D1D";    // deep red - banners / title / borders
+  const ov_blue = "#C0504D";    // medium red - column / KPI headers
+  const ov_light = "#F2DCDB";   // light red - value cards / totals
   const ov_input = "#FFF2CC";   // yellow = "fill this in"
   const ov_inputBorder = "#BF8F00";
 
@@ -581,7 +581,7 @@ function main(workbook: ExcelScript.Workbook) {
   for (let y = 0; y < 5; y++) {
     const row = 10 + y;
     overview.getRange(`A${row}`).setValue(y + 1);
-    overview.getRange(`B${row}`).setValue(1); // 100% default — lower these for a ramp-up
+    overview.getRange(`B${row}`).setValue(1); // 100% default - lower these for a ramp-up
     overview.getRange(`B${row}`).setNumberFormatLocal("0%");
     overview.getRange(`C${row}`).setFormula(`=$E$5*B${row}`);
     overview.getRange(`D${row}`).setFormula(y === 0 ? `=C${row}` : `=D${row - 1}+C${row}`);
@@ -650,7 +650,7 @@ function main(workbook: ExcelScript.Workbook) {
   };
 
   // ---- Chart Data 1: Today + 5-year comparison (OCI, Existing, Combined) + reference line + savings ----
-  hdrBand("A23:F23", "A23", "Chart Data — Comparison");
+  hdrBand("A23:F23", "A23", "Chart Data - Comparison");
   overview.getRange("A24").setValue("Year");
   overview.getRange("B24").setValue("OCI Estimate");
   overview.getRange("C24").setValue("Existing Infra Cost");
@@ -706,7 +706,7 @@ function main(workbook: ExcelScript.Workbook) {
   // Edit the yellow "Existing Util %" cells to ramp the existing infrastructure spend up/down
   // across the 5 years. The comparison chart's "Existing Infra Cost" series reads from here.
   overview.getRange("T:V").getFormat().setColumnWidth(125);
-  hdrBand("T8:V8", "T8", "Existing Spend — Ramp %");
+  hdrBand("T8:V8", "T8", "Existing Spend - Ramp %");
   overview.getRange("T9").setValue("Year");
   overview.getRange("U9").setValue("Existing Infra Cost");
   overview.getRange("V9").setValue("Existing Util %");

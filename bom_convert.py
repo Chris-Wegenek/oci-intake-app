@@ -2,7 +2,7 @@
 line items, quantities and pricing) into the app's pricing-result structure.
 
 The converter recognizes every line item against the OCI SKU catalog
-(data/oci_price_list.json — 617 SKUs with pay-as-you-go rates, units and product
+(data/oci_price_list.json - 617 SKUs with pay-as-you-go rates, units and product
 names), re-prices recognized SKUs at the app's own known rate, recovers sizing
 (OCPU / RAM / storage) from the recognized resource type, and emits the same
 `pricing` dict shape that calculate_pricing produces so the frontend can load it
@@ -433,7 +433,7 @@ def _pick_bom_sheet(sheets):
     """Choose the actual BOM sheet. The sheet NAME is the most reliable signal: a sheet
     named like a BOM beats a 'price list' / 'rate card' even when the price list has far
     more SKU rows. Within a name tier, prefer the sheet with the most priced line items
-    (SKU rows that also carry a quantity/cost — price lists have rates but no quantities
+    (SKU rows that also carry a quantity/cost - price lists have rates but no quantities
     of their own beyond the unit rate)."""
     best, best_key = None, None
     for name, raw in sheets.items():
@@ -541,10 +541,10 @@ def _make_compute_vm(comp, shape, hours):
     label = (shape or {}).get("shortLabel") or (shape or {}).get("label") or "BOM shape"
     specs = {"applicationServers": 1.0, "databaseServers": 0.0, "vcpus": ocpu * 2,
              "ocpus": ocpu, "memoryGb": mem, "blockStorageGb": 0.0, "fileStorageGb": 0.0}
-    prod = f"OCI Compute VM — {label} ({ocpu:g} OCPU / {mem:g} GB)"
+    prod = f"OCI Compute VM - {label} ({ocpu:g} OCPU / {mem:g} GB)"
     return {
         "rowId": "", "sourceRow": comp.get("sourceRow", 0), "_kind": "vm",
-        "name": f"{comp['section']} — Compute VM" if comp["section"] else "Compute VM",
+        "name": f"{comp['section']} - Compute VM" if comp["section"] else "Compute VM",
         "environment": comp["section"], "region": "",
         "sizeCheck": {"status": "ok"}, "mappingFlag": "", "costAction": "price",
         "ociServiceCategory": "Compute", "ociProduct": prod,
@@ -563,7 +563,7 @@ def _make_compute_vm(comp, shape, hours):
         },
         "lineItems": comp["items"],
         "monthly": monthly, "annual": round(monthly * 12, 4),
-        "assumptions": ["Converted OCI BOM — this server's compute is grouped into a "
+        "assumptions": ["Converted OCI BOM - this server's compute is grouped into a "
                         "re-mappable VM; pick a different OCI shape to re-price it."],
     }
 
@@ -620,7 +620,7 @@ def convert_oci_bom(path):
         return comparison_summary
     sheet_name, sku_count = _pick_bom_sheet(sheets)
     if not sheet_name or sku_count <= 0:
-        raise ValueError("No OCI SKUs (e.g. B94277) were found in this file — it does not look like an OCI BOM.")
+        raise ValueError("No OCI SKUs (e.g. B94277) were found in this file - it does not look like an OCI BOM.")
     raw = sheets[sheet_name]
     header_row, cols = _detect_columns(raw)
     data_start = (header_row + 1) if header_row is not None else 0
@@ -658,7 +658,7 @@ def convert_oci_bom(path):
             _norm(desc) in {"free tier"} or _norm(cell("monthly")) in {"free", "included"}
 
         # Only SKU rows are priced line items. A row with no SKU is either a section
-        # header (e.g. a server name — becomes the row's grouping) or a free-tier line.
+        # header (e.g. a server name - becomes the row's grouping) or a free-tier line.
         if not sku:
             if free_text and desc:
                 pass  # fall through to emit a $0 free line item
@@ -737,9 +737,9 @@ def convert_oci_bom(path):
             "rate": rate,
             "monthly": monthly,
             "mapping": (f"Recognized OCI SKU {sku}: {product}"
-                        + (f" — re-priced at ${rate}/{unit or 'unit'}." if rate else ".")
+                        + (f" - re-priced at ${rate}/{unit or 'unit'}." if rate else ".")
                         if recognized else
-                        f"SKU {sku or '(none)'} not found in the OCI catalog — carried at the BOM's stated cost for review."),
+                        f"SKU {sku or '(none)'} not found in the OCI catalog - carried at the BOM's stated cost for review."),
             "ociServiceUsage": recognized,
         }
         name = (f"{section} · {product}" if section else product)[:120]

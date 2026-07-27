@@ -1,0 +1,3367 @@
+[
+  {
+    "title": "Analytics and AI",
+    "category": "Analytics and AI",
+    "name": "Analytics and AI",
+    "normalized_title": "analytics and ai",
+    "normalized_name": "analytics and ai",
+    "tokens": [
+      "analytics",
+      "and",
+      "ai"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Artificial Intelligence",
+    "category": "Analytics and AI",
+    "name": "Artificial Intelligence",
+    "normalized_title": "analytics and ai artificial intelligence",
+    "normalized_name": "artificial intelligence",
+    "tokens": [
+      "artificial",
+      "intelligence"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Big Data",
+    "category": "Analytics and AI",
+    "name": "Big Data",
+    "normalized_title": "analytics and ai big data",
+    "normalized_name": "big data",
+    "tokens": [
+      "big",
+      "data"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Data Catalog",
+    "category": "Analytics and AI",
+    "name": "Data Catalog",
+    "normalized_title": "analytics and ai data catalog",
+    "normalized_name": "data catalog",
+    "tokens": [
+      "data",
+      "catalog"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Data Flow",
+    "category": "Analytics and AI",
+    "name": "Data Flow",
+    "normalized_title": "analytics and ai data flow",
+    "normalized_name": "data flow",
+    "tokens": [
+      "data",
+      "flow"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Data Integration",
+    "category": "Analytics and AI",
+    "name": "Data Integration",
+    "normalized_title": "analytics and ai data integration",
+    "normalized_name": "data integration",
+    "tokens": [
+      "data",
+      "integration"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Data Science",
+    "category": "Analytics and AI",
+    "name": "Data Science",
+    "normalized_title": "analytics and ai data science",
+    "normalized_name": "data science",
+    "tokens": [
+      "data",
+      "science"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Digital Assistant",
+    "category": "Analytics and AI",
+    "name": "Digital Assistant",
+    "normalized_title": "analytics and ai digital assistant",
+    "normalized_name": "digital assistant",
+    "tokens": [
+      "digital",
+      "assistant"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Document Understanding",
+    "category": "Analytics and AI",
+    "name": "Document Understanding",
+    "normalized_title": "analytics and ai document understanding",
+    "normalized_name": "document understanding",
+    "tokens": [
+      "document",
+      "understanding"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - Essbase",
+    "category": "Analytics and AI",
+    "name": "Essbase",
+    "normalized_title": "analytics and ai essbase",
+    "normalized_name": "essbase",
+    "tokens": [
+      "essbase"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Forecasting",
+    "category": "Analytics and AI",
+    "name": "Forecasting",
+    "normalized_title": "analytics and ai forecasting",
+    "normalized_name": "forecasting",
+    "tokens": [
+      "forecasting"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - Generative AI",
+    "category": "Analytics and AI",
+    "name": "Generative AI",
+    "normalized_title": "analytics and ai generative ai",
+    "normalized_name": "generative ai",
+    "tokens": [
+      "generative",
+      "ai"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - Machine Learning",
+    "category": "Analytics and AI",
+    "name": "Machine Learning",
+    "normalized_title": "analytics and ai machine learning",
+    "normalized_name": "machine learning",
+    "tokens": [
+      "machine",
+      "learning"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Message Listener",
+    "category": "Analytics and AI",
+    "name": "Message Listener",
+    "normalized_title": "analytics and ai message listener",
+    "normalized_name": "message listener",
+    "tokens": [
+      "message",
+      "listener"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Message Producer",
+    "category": "Analytics and AI",
+    "name": "Message Producer",
+    "normalized_title": "analytics and ai message producer",
+    "normalized_name": "message producer",
+    "tokens": [
+      "message",
+      "producer"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - OCI Generative AI",
+    "category": "Analytics and AI",
+    "name": "OCI Generative AI",
+    "normalized_title": "analytics and ai oci generative ai",
+    "normalized_name": "oci generative ai",
+    "tokens": [
+      "oci",
+      "generative",
+      "ai"
+    ],
+    "acronyms": [
+      "ai",
+      "oci"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - OCI Language",
+    "category": "Analytics and AI",
+    "name": "OCI Language",
+    "normalized_title": "analytics and ai oci language",
+    "normalized_name": "oci language",
+    "tokens": [
+      "oci",
+      "language"
+    ],
+    "acronyms": [
+      "ai",
+      "oci"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - OCI Speech",
+    "category": "Analytics and AI",
+    "name": "OCI Speech",
+    "normalized_title": "analytics and ai oci speech",
+    "normalized_name": "oci speech",
+    "tokens": [
+      "oci",
+      "speech"
+    ],
+    "acronyms": [
+      "ai",
+      "oci"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - OCI Vision",
+    "category": "Analytics and AI",
+    "name": "OCI Vision",
+    "normalized_title": "analytics and ai oci vision",
+    "normalized_name": "oci vision",
+    "tokens": [
+      "oci",
+      "vision"
+    ],
+    "acronyms": [
+      "ai",
+      "oci"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Analytics and AI - Service Connector Hub",
+    "category": "Analytics and AI",
+    "name": "Service Connector Hub",
+    "normalized_title": "analytics and ai service connector hub",
+    "normalized_name": "service connector hub",
+    "tokens": [
+      "service",
+      "connector",
+      "hub"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Analytics and AI - Streaming",
+    "category": "Analytics and AI",
+    "name": "Streaming",
+    "normalized_title": "analytics and ai streaming",
+    "normalized_name": "streaming",
+    "tokens": [
+      "streaming"
+    ],
+    "acronyms": [
+      "ai"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - BI Cloud Connector",
+    "category": "Applications",
+    "name": "BI Cloud Connector",
+    "normalized_title": "applications bi cloud connector",
+    "normalized_name": "bi cloud connector",
+    "tokens": [
+      "bi",
+      "cloud",
+      "connector"
+    ],
+    "acronyms": [
+      "bi"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - CPQ",
+    "category": "Applications",
+    "name": "CPQ",
+    "normalized_title": "applications cpq",
+    "normalized_name": "cpq",
+    "tokens": [
+      "cpq"
+    ],
+    "acronyms": [
+      "cpq"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - E-Business Suite",
+    "category": "Applications",
+    "name": "E-Business Suite",
+    "normalized_title": "applications e business suite",
+    "normalized_name": "e business suite",
+    "tokens": [
+      "e",
+      "business",
+      "suite"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - EPM",
+    "category": "Applications",
+    "name": "EPM",
+    "normalized_title": "applications epm",
+    "normalized_name": "epm",
+    "tokens": [
+      "epm"
+    ],
+    "acronyms": [
+      "epm"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - ERP",
+    "category": "Applications",
+    "name": "ERP",
+    "normalized_title": "applications erp",
+    "normalized_name": "erp",
+    "tokens": [
+      "erp"
+    ],
+    "acronyms": [
+      "erp"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Engagement",
+    "category": "Applications",
+    "name": "Engagement",
+    "normalized_title": "applications engagement",
+    "normalized_name": "engagement",
+    "tokens": [
+      "engagement"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Financials",
+    "category": "Applications",
+    "name": "Financials",
+    "normalized_title": "applications financials",
+    "normalized_name": "financials",
+    "tokens": [
+      "financials"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Fusion",
+    "category": "Applications",
+    "name": "Fusion",
+    "normalized_title": "applications fusion",
+    "normalized_name": "fusion",
+    "tokens": [
+      "fusion"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - HCM",
+    "category": "Applications",
+    "name": "HCM",
+    "normalized_title": "applications hcm",
+    "normalized_name": "hcm",
+    "tokens": [
+      "hcm"
+    ],
+    "acronyms": [
+      "hcm"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Healthcare",
+    "category": "Applications",
+    "name": "Healthcare",
+    "normalized_title": "applications healthcare",
+    "normalized_name": "healthcare",
+    "tokens": [
+      "healthcare"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Innovation Management",
+    "category": "Applications",
+    "name": "Innovation Management",
+    "normalized_title": "applications innovation management",
+    "normalized_name": "innovation management",
+    "tokens": [
+      "innovation",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Inventory Management",
+    "category": "Applications",
+    "name": "Inventory Management",
+    "normalized_title": "applications inventory management",
+    "normalized_name": "inventory management",
+    "tokens": [
+      "inventory",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Manufacturing",
+    "category": "Applications",
+    "name": "Manufacturing",
+    "normalized_title": "applications manufacturing",
+    "normalized_name": "manufacturing",
+    "tokens": [
+      "manufacturing"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - OCO Subnet",
+    "category": "Applications",
+    "name": "OCO Subnet",
+    "normalized_title": "applications oco subnet",
+    "normalized_name": "oco subnet",
+    "tokens": [
+      "oco",
+      "subnet"
+    ],
+    "acronyms": [
+      "oco"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Order Management",
+    "category": "Applications",
+    "name": "Order Management",
+    "normalized_title": "applications order management",
+    "normalized_name": "order management",
+    "tokens": [
+      "order",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Procurement",
+    "category": "Applications",
+    "name": "Procurement",
+    "normalized_title": "applications procurement",
+    "normalized_name": "procurement",
+    "tokens": [
+      "procurement"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Product Master Data Management",
+    "category": "Applications",
+    "name": "Product Master Data Management",
+    "normalized_title": "applications product master data management",
+    "normalized_name": "product master data management",
+    "tokens": [
+      "product",
+      "master",
+      "data",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Project Financial Management",
+    "category": "Applications",
+    "name": "Project Financial Management",
+    "normalized_title": "applications project financial management",
+    "normalized_name": "project financial management",
+    "tokens": [
+      "project",
+      "financial",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Project Management",
+    "category": "Applications",
+    "name": "Project Management",
+    "normalized_title": "applications project management",
+    "normalized_name": "project management",
+    "tokens": [
+      "project",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Applications - Supply Chain Planning",
+    "category": "Applications",
+    "name": "Supply Chain Planning",
+    "normalized_title": "applications supply chain planning",
+    "normalized_name": "supply chain planning",
+    "tokens": [
+      "supply",
+      "chain",
+      "planning"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Cloud",
+    "category": "Cloud",
+    "name": "Cloud",
+    "normalized_title": "cloud",
+    "normalized_name": "cloud",
+    "tokens": [
+      "cloud"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Autoscaling",
+    "category": "Compute",
+    "name": "Autoscaling",
+    "normalized_title": "compute autoscaling",
+    "normalized_name": "autoscaling",
+    "tokens": [
+      "autoscaling"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Bare Metal Compute",
+    "category": "Compute",
+    "name": "Bare Metal Compute",
+    "normalized_title": "compute bare metal compute",
+    "normalized_name": "bare metal compute",
+    "tokens": [
+      "bare",
+      "metal",
+      "compute"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Burstable Virtual Machine Burstable VM",
+    "category": "Compute",
+    "name": "Burstable Virtual Machine Burstable VM",
+    "normalized_title": "compute burstable virtual machine burstable vm",
+    "normalized_name": "burstable virtual machine burstable vm",
+    "tokens": [
+      "burstable",
+      "virtual",
+      "machine",
+      "burstable",
+      "vm"
+    ],
+    "acronyms": [
+      "vm"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Flex Virtual Machine Flex VM",
+    "category": "Compute",
+    "name": "Flex Virtual Machine Flex VM",
+    "normalized_title": "compute flex virtual machine flex vm",
+    "normalized_name": "flex virtual machine flex vm",
+    "tokens": [
+      "flex",
+      "virtual",
+      "machine",
+      "flex",
+      "vm"
+    ],
+    "acronyms": [
+      "vm"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Functions",
+    "category": "Compute",
+    "name": "Functions",
+    "normalized_title": "compute functions",
+    "normalized_name": "functions",
+    "tokens": [
+      "functions"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Instance Pools",
+    "category": "Compute",
+    "name": "Instance Pools",
+    "normalized_title": "compute instance pools",
+    "normalized_name": "instance pools",
+    "tokens": [
+      "instance",
+      "pools"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Compute - Virtual Machine VM",
+    "category": "Compute",
+    "name": "Virtual Machine VM",
+    "normalized_title": "compute virtual machine vm",
+    "normalized_name": "virtual machine vm",
+    "tokens": [
+      "virtual",
+      "machine",
+      "vm"
+    ],
+    "acronyms": [
+      "vm"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Container",
+    "category": "Container",
+    "name": "Container",
+    "normalized_title": "container",
+    "normalized_name": "container",
+    "tokens": [
+      "container"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - ADB-D",
+    "category": "Database",
+    "name": "ADB-D",
+    "normalized_title": "database adb d",
+    "normalized_name": "adb d",
+    "tokens": [
+      "adb",
+      "d"
+    ],
+    "acronyms": [
+      "adb-d"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - ADW-D",
+    "category": "Database",
+    "name": "ADW-D",
+    "normalized_title": "database adw d",
+    "normalized_name": "adw d",
+    "tokens": [
+      "adw",
+      "d"
+    ],
+    "acronyms": [
+      "adw-d"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - ATP-D",
+    "category": "Database",
+    "name": "ATP-D",
+    "normalized_title": "database atp d",
+    "normalized_name": "atp d",
+    "tokens": [
+      "atp",
+      "d"
+    ],
+    "acronyms": [
+      "atp-d"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Autonomous DB",
+    "category": "Database",
+    "name": "Autonomous DB",
+    "normalized_title": "database autonomous db",
+    "normalized_name": "autonomous db",
+    "tokens": [
+      "autonomous",
+      "db"
+    ],
+    "acronyms": [
+      "db"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Autonomous Data Warehouse ADW",
+    "category": "Database",
+    "name": "Autonomous Data Warehouse ADW",
+    "normalized_title": "database autonomous data warehouse adw",
+    "normalized_name": "autonomous data warehouse adw",
+    "tokens": [
+      "autonomous",
+      "data",
+      "warehouse",
+      "adw"
+    ],
+    "acronyms": [
+      "adw"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Autonomous Transaction Processing ATP",
+    "category": "Database",
+    "name": "Autonomous Transaction Processing ATP",
+    "normalized_title": "database autonomous transaction processing atp",
+    "normalized_name": "autonomous transaction processing atp",
+    "tokens": [
+      "autonomous",
+      "transaction",
+      "processing",
+      "atp"
+    ],
+    "acronyms": [
+      "atp"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Data Lake",
+    "category": "Database",
+    "name": "Data Lake",
+    "normalized_title": "database data lake",
+    "normalized_name": "data lake",
+    "tokens": [
+      "data",
+      "lake"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - Data Safe",
+    "category": "Database",
+    "name": "Data Safe",
+    "normalized_title": "database data safe",
+    "normalized_name": "data safe",
+    "tokens": [
+      "data",
+      "safe"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database",
+    "category": "Database",
+    "name": "Database",
+    "normalized_title": "database",
+    "normalized_name": "database",
+    "tokens": [
+      "database"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Database System",
+    "category": "Database",
+    "name": "Database System",
+    "normalized_title": "database database system",
+    "normalized_name": "database system",
+    "tokens": [
+      "database",
+      "system"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Exadata",
+    "category": "Database",
+    "name": "Exadata",
+    "normalized_title": "database exadata",
+    "normalized_name": "exadata",
+    "tokens": [
+      "exadata"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Exadata C@C",
+    "category": "Database",
+    "name": "Exadata C@C",
+    "normalized_title": "database exadata c c",
+    "normalized_name": "exadata c c",
+    "tokens": [
+      "exadata",
+      "c",
+      "c"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Flashback",
+    "category": "Database",
+    "name": "Flashback",
+    "normalized_title": "database flashback",
+    "normalized_name": "flashback",
+    "tokens": [
+      "flashback"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - GoldenGate",
+    "category": "Database",
+    "name": "GoldenGate",
+    "normalized_title": "database goldengate",
+    "normalized_name": "goldengate",
+    "tokens": [
+      "goldengate"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Application Adapter",
+    "category": "Database",
+    "name": "GoldenGate Application Adapter",
+    "normalized_title": "database goldengate application adapter",
+    "normalized_name": "goldengate application adapter",
+    "tokens": [
+      "goldengate",
+      "application",
+      "adapter"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Director",
+    "category": "Database",
+    "name": "GoldenGate Director",
+    "normalized_title": "database goldengate director",
+    "normalized_name": "goldengate director",
+    "tokens": [
+      "goldengate",
+      "director"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate HP Non-Stop Guardian",
+    "category": "Database",
+    "name": "GoldenGate HP Non-Stop Guardian",
+    "normalized_title": "database goldengate hp non stop guardian",
+    "normalized_name": "goldengate hp non stop guardian",
+    "tokens": [
+      "goldengate",
+      "hp",
+      "non",
+      "stop",
+      "guardian"
+    ],
+    "acronyms": [
+      "hp"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Monitor",
+    "category": "Database",
+    "name": "GoldenGate Monitor",
+    "normalized_title": "database goldengate monitor",
+    "normalized_name": "goldengate monitor",
+    "tokens": [
+      "goldengate",
+      "monitor"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate On-Premises",
+    "category": "Database",
+    "name": "GoldenGate On-Premises",
+    "normalized_title": "database goldengate on premises",
+    "normalized_name": "goldengate on premises",
+    "tokens": [
+      "goldengate",
+      "on",
+      "premises"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Plug-in",
+    "category": "Database",
+    "name": "GoldenGate Plug-in",
+    "normalized_title": "database goldengate plug in",
+    "normalized_name": "goldengate plug in",
+    "tokens": [
+      "goldengate",
+      "plug",
+      "in"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Stream Analytics",
+    "category": "Database",
+    "name": "GoldenGate Stream Analytics",
+    "normalized_title": "database goldengate stream analytics",
+    "normalized_name": "goldengate stream analytics",
+    "tokens": [
+      "goldengate",
+      "stream",
+      "analytics"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Studio",
+    "category": "Database",
+    "name": "GoldenGate Studio",
+    "normalized_title": "database goldengate studio",
+    "normalized_name": "goldengate studio",
+    "tokens": [
+      "goldengate",
+      "studio"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - GoldenGate Veridata",
+    "category": "Database",
+    "name": "GoldenGate Veridata",
+    "normalized_title": "database goldengate veridata",
+    "normalized_name": "goldengate veridata",
+    "tokens": [
+      "goldengate",
+      "veridata"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - HeatWave",
+    "category": "Database",
+    "name": "HeatWave",
+    "normalized_title": "database heatwave",
+    "normalized_name": "heatwave",
+    "tokens": [
+      "heatwave"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - Lakehouse",
+    "category": "Database",
+    "name": "Lakehouse",
+    "normalized_title": "database lakehouse",
+    "normalized_name": "lakehouse",
+    "tokens": [
+      "lakehouse"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - Management Data Guard",
+    "category": "Database",
+    "name": "Management Data Guard",
+    "normalized_title": "database management data guard",
+    "normalized_name": "management data guard",
+    "tokens": [
+      "management",
+      "data",
+      "guard"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - MySQL",
+    "category": "Database",
+    "name": "MySQL",
+    "normalized_title": "database mysql",
+    "normalized_name": "mysql",
+    "tokens": [
+      "mysql"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - NoSQL",
+    "category": "Database",
+    "name": "NoSQL",
+    "normalized_title": "database nosql",
+    "normalized_name": "nosql",
+    "tokens": [
+      "nosql"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - OCI Database with PostgreSQL",
+    "category": "Database",
+    "name": "OCI Database with PostgreSQL",
+    "normalized_title": "database oci database with postgresql",
+    "normalized_name": "oci database with postgresql",
+    "tokens": [
+      "oci",
+      "database",
+      "with",
+      "postgresql"
+    ],
+    "acronyms": [
+      "oci"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - OpenSearch",
+    "category": "Database",
+    "name": "OpenSearch",
+    "normalized_title": "database opensearch",
+    "normalized_name": "opensearch",
+    "tokens": [
+      "opensearch"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Oracle Base Database",
+    "category": "Database",
+    "name": "Oracle Base Database",
+    "normalized_title": "database oracle base database",
+    "normalized_name": "oracle base database",
+    "tokens": [
+      "oracle",
+      "base",
+      "database"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - Oracle REST Data Services",
+    "category": "Database",
+    "name": "Oracle REST Data Services",
+    "normalized_title": "database oracle rest data services",
+    "normalized_name": "oracle rest data services",
+    "tokens": [
+      "oracle",
+      "rest",
+      "data",
+      "services"
+    ],
+    "acronyms": [
+      "rest"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database - RAC",
+    "category": "Database",
+    "name": "RAC",
+    "normalized_title": "database rac",
+    "normalized_name": "rac",
+    "tokens": [
+      "rac"
+    ],
+    "acronyms": [
+      "rac"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Database - Recovery",
+    "category": "Database",
+    "name": "Recovery",
+    "normalized_title": "database recovery",
+    "normalized_name": "recovery",
+    "tokens": [
+      "recovery"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Database Management",
+    "category": "Database Management",
+    "name": "Database Management",
+    "normalized_title": "database management",
+    "normalized_name": "database management",
+    "tokens": [
+      "database",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - APEX",
+    "category": "Developer Services",
+    "name": "APEX",
+    "normalized_title": "developer services apex",
+    "normalized_name": "apex",
+    "tokens": [
+      "apex"
+    ],
+    "acronyms": [
+      "apex"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - API Gateway",
+    "category": "Developer Services",
+    "name": "API Gateway",
+    "normalized_title": "developer services api gateway",
+    "normalized_name": "api gateway",
+    "tokens": [
+      "api",
+      "gateway"
+    ],
+    "acronyms": [
+      "api"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - API Service",
+    "category": "Developer Services",
+    "name": "API Service",
+    "normalized_title": "developer services api service",
+    "normalized_name": "api service",
+    "tokens": [
+      "api",
+      "service"
+    ],
+    "acronyms": [
+      "api"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Container Engine for Kubernetes",
+    "category": "Developer Services",
+    "name": "Container Engine for Kubernetes",
+    "normalized_title": "developer services container engine for kubernetes",
+    "normalized_name": "container engine for kubernetes",
+    "tokens": [
+      "container",
+      "engine",
+      "for",
+      "kubernetes"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Container Registry",
+    "category": "Developer Services",
+    "name": "Container Registry",
+    "normalized_title": "developer services container registry",
+    "normalized_name": "container registry",
+    "tokens": [
+      "container",
+      "registry"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Content Management",
+    "category": "Developer Services",
+    "name": "Content Management",
+    "normalized_title": "developer services content management",
+    "normalized_name": "content management",
+    "tokens": [
+      "content",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - DevOps",
+    "category": "Developer Services",
+    "name": "DevOps",
+    "normalized_title": "developer services devops",
+    "normalized_name": "devops",
+    "tokens": [
+      "devops"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Email Delivery",
+    "category": "Developer Services",
+    "name": "Email Delivery",
+    "normalized_title": "developer services email delivery",
+    "normalized_name": "email delivery",
+    "tokens": [
+      "email",
+      "delivery"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Integrations",
+    "category": "Developer Services",
+    "name": "Integrations",
+    "normalized_title": "developer services integrations",
+    "normalized_name": "integrations",
+    "tokens": [
+      "integrations"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Jet",
+    "category": "Developer Services",
+    "name": "Jet",
+    "normalized_title": "developer services jet",
+    "normalized_name": "jet",
+    "tokens": [
+      "jet"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Notifications",
+    "category": "Developer Services",
+    "name": "Notifications",
+    "normalized_title": "developer services notifications",
+    "normalized_name": "notifications",
+    "tokens": [
+      "notifications"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Private Endpoint IP",
+    "category": "Developer Services",
+    "name": "Private Endpoint IP",
+    "normalized_title": "developer services private endpoint ip",
+    "normalized_name": "private endpoint ip",
+    "tokens": [
+      "private",
+      "endpoint",
+      "ip"
+    ],
+    "acronyms": [
+      "ip"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Resource Manager",
+    "category": "Developer Services",
+    "name": "Resource Manager",
+    "normalized_title": "developer services resource manager",
+    "normalized_name": "resource manager",
+    "tokens": [
+      "resource",
+      "manager"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Service Mesh",
+    "category": "Developer Services",
+    "name": "Service Mesh",
+    "normalized_title": "developer services service mesh",
+    "normalized_name": "service mesh",
+    "tokens": [
+      "service",
+      "mesh"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Developer Services - Visual Builder",
+    "category": "Developer Services",
+    "name": "Visual Builder",
+    "normalized_title": "developer services visual builder",
+    "normalized_name": "visual builder",
+    "tokens": [
+      "visual",
+      "builder"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Digital Media",
+    "category": "Digital Media",
+    "name": "Digital Media",
+    "normalized_title": "digital media",
+    "normalized_name": "digital media",
+    "tokens": [
+      "digital",
+      "media"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Governance and Administration - Cloud Advisor",
+    "category": "Governance and Administration",
+    "name": "Cloud Advisor",
+    "normalized_title": "governance and administration cloud advisor",
+    "normalized_name": "cloud advisor",
+    "tokens": [
+      "cloud",
+      "advisor"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Governance and Administration - License Manager",
+    "category": "Governance and Administration",
+    "name": "License Manager",
+    "normalized_title": "governance and administration license manager",
+    "normalized_name": "license manager",
+    "tokens": [
+      "license",
+      "manager"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Governance and Administration - Oracle Cloud Identifier",
+    "category": "Governance and Administration",
+    "name": "Oracle Cloud Identifier",
+    "normalized_title": "governance and administration oracle cloud identifier",
+    "normalized_name": "oracle cloud identifier",
+    "tokens": [
+      "oracle",
+      "cloud",
+      "identifier"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Governance and Administration - Organization",
+    "category": "Governance and Administration",
+    "name": "Organization",
+    "normalized_title": "governance and administration organization",
+    "normalized_name": "organization",
+    "tokens": [
+      "organization"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Governance and Administration - Tagging",
+    "category": "Governance and Administration",
+    "name": "Tagging",
+    "normalized_title": "governance and administration tagging",
+    "normalized_name": "tagging",
+    "tokens": [
+      "tagging"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Active Directory",
+    "category": "Identity and Security",
+    "name": "Active Directory",
+    "normalized_title": "identity and security active directory",
+    "normalized_name": "active directory",
+    "tokens": [
+      "active",
+      "directory"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Bastion",
+    "category": "Identity and Security",
+    "name": "Bastion",
+    "normalized_title": "identity and security bastion",
+    "normalized_name": "bastion",
+    "tokens": [
+      "bastion"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Certificates",
+    "category": "Identity and Security",
+    "name": "Certificates",
+    "normalized_title": "identity and security certificates",
+    "normalized_name": "certificates",
+    "tokens": [
+      "certificates"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Cloud Guard",
+    "category": "Identity and Security",
+    "name": "Cloud Guard",
+    "normalized_title": "identity and security cloud guard",
+    "normalized_name": "cloud guard",
+    "tokens": [
+      "cloud",
+      "guard"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Compartments",
+    "category": "Identity and Security",
+    "name": "Compartments",
+    "normalized_title": "identity and security compartments",
+    "normalized_name": "compartments",
+    "tokens": [
+      "compartments"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - DDoS Protection",
+    "category": "Identity and Security",
+    "name": "DDoS Protection",
+    "normalized_title": "identity and security ddos protection",
+    "normalized_name": "ddos protection",
+    "tokens": [
+      "ddos",
+      "protection"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Encryption",
+    "category": "Identity and Security",
+    "name": "Encryption",
+    "normalized_title": "identity and security encryption",
+    "normalized_name": "encryption",
+    "tokens": [
+      "encryption"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Firewall",
+    "category": "Identity and Security",
+    "name": "Firewall",
+    "normalized_title": "identity and security firewall",
+    "normalized_name": "firewall",
+    "tokens": [
+      "firewall"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - IAM Identity and Access Management",
+    "category": "Identity and Security",
+    "name": "IAM Identity and Access Management",
+    "normalized_title": "identity and security iam identity and access management",
+    "normalized_name": "iam identity and access management",
+    "tokens": [
+      "iam",
+      "identity",
+      "and",
+      "access",
+      "management"
+    ],
+    "acronyms": [
+      "iam"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Identity",
+    "category": "Identity and Security",
+    "name": "Identity",
+    "normalized_title": "identity and security identity",
+    "normalized_name": "identity",
+    "tokens": [
+      "identity"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Key Management",
+    "category": "Identity and Security",
+    "name": "Key Management",
+    "normalized_title": "identity and security key management",
+    "normalized_name": "key management",
+    "tokens": [
+      "key",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Key Vault",
+    "category": "Identity and Security",
+    "name": "Key Vault",
+    "normalized_title": "identity and security key vault",
+    "normalized_name": "key vault",
+    "tokens": [
+      "key",
+      "vault"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Maximum Security Zone",
+    "category": "Identity and Security",
+    "name": "Maximum Security Zone",
+    "normalized_title": "identity and security maximum security zone",
+    "normalized_name": "maximum security zone",
+    "tokens": [
+      "maximum",
+      "security",
+      "zone"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - NSG",
+    "category": "Identity and Security",
+    "name": "NSG",
+    "normalized_title": "identity and security nsg",
+    "normalized_name": "nsg",
+    "tokens": [
+      "nsg"
+    ],
+    "acronyms": [
+      "nsg"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Policies",
+    "category": "Identity and Security",
+    "name": "Policies",
+    "normalized_title": "identity and security policies",
+    "normalized_name": "policies",
+    "tokens": [
+      "policies"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Security Lists",
+    "category": "Identity and Security",
+    "name": "Security Lists",
+    "normalized_title": "identity and security security lists",
+    "normalized_name": "security lists",
+    "tokens": [
+      "security",
+      "lists"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Threat Defense",
+    "category": "Identity and Security",
+    "name": "Threat Defense",
+    "normalized_title": "identity and security threat defense",
+    "normalized_name": "threat defense",
+    "tokens": [
+      "threat",
+      "defense"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Threat Intelligence",
+    "category": "Identity and Security",
+    "name": "Threat Intelligence",
+    "normalized_title": "identity and security threat intelligence",
+    "normalized_name": "threat intelligence",
+    "tokens": [
+      "threat",
+      "intelligence"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - User",
+    "category": "Identity and Security",
+    "name": "User",
+    "normalized_title": "identity and security user",
+    "normalized_name": "user",
+    "tokens": [
+      "user"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - User Group",
+    "category": "Identity and Security",
+    "name": "User Group",
+    "normalized_title": "identity and security user group",
+    "normalized_name": "user group",
+    "tokens": [
+      "user",
+      "group"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Vault",
+    "category": "Identity and Security",
+    "name": "Vault",
+    "normalized_title": "identity and security vault",
+    "normalized_name": "vault",
+    "tokens": [
+      "vault"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - Vulnerability Scanning",
+    "category": "Identity and Security",
+    "name": "Vulnerability Scanning",
+    "normalized_title": "identity and security vulnerability scanning",
+    "normalized_name": "vulnerability scanning",
+    "tokens": [
+      "vulnerability",
+      "scanning"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Identity and Security - WAF",
+    "category": "Identity and Security",
+    "name": "WAF",
+    "normalized_title": "identity and security waf",
+    "normalized_name": "waf",
+    "tokens": [
+      "waf"
+    ],
+    "acronyms": [
+      "waf"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Component Drill Downs - Collapsed Expanded",
+    "category": "Logical",
+    "name": "Component Drill Downs - Collapsed Expanded",
+    "normalized_title": "logical component drill downs collapsed expanded",
+    "normalized_name": "component drill downs collapsed expanded",
+    "tokens": [
+      "component",
+      "drill",
+      "downs",
+      "collapsed",
+      "expanded"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Component Drill Downs - Collapsed Expanded - top down",
+    "category": "Logical",
+    "name": "Component Drill Downs - Collapsed Expanded - top down",
+    "normalized_title": "logical component drill downs collapsed expanded top down",
+    "normalized_name": "component drill downs collapsed expanded top down",
+    "tokens": [
+      "component",
+      "drill",
+      "downs",
+      "collapsed",
+      "expanded",
+      "top",
+      "down"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Component Drill Downs - Collapsed Expanded botttom up",
+    "category": "Logical",
+    "name": "Component Drill Downs - Collapsed Expanded botttom up",
+    "normalized_title": "logical component drill downs collapsed expanded botttom up",
+    "normalized_name": "component drill downs collapsed expanded botttom up",
+    "tokens": [
+      "component",
+      "drill",
+      "downs",
+      "collapsed",
+      "expanded",
+      "botttom",
+      "up"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Component Drill Downs - Collapsed Expanded example part 1",
+    "category": "Logical",
+    "name": "Component Drill Downs - Collapsed Expanded example part 1",
+    "normalized_title": "logical component drill downs collapsed expanded example part 1",
+    "normalized_name": "component drill downs collapsed expanded example part 1",
+    "tokens": [
+      "component",
+      "drill",
+      "downs",
+      "collapsed",
+      "expanded",
+      "example",
+      "part",
+      "1"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Component Drill Downs - Collapsed Expanded left right",
+    "category": "Logical",
+    "name": "Component Drill Downs - Collapsed Expanded left right",
+    "normalized_title": "logical component drill downs collapsed expanded left right",
+    "normalized_name": "component drill downs collapsed expanded left right",
+    "tokens": [
+      "component",
+      "drill",
+      "downs",
+      "collapsed",
+      "expanded",
+      "left",
+      "right"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Components - Atomic",
+    "category": "Logical",
+    "name": "Components - Atomic",
+    "normalized_title": "logical components atomic",
+    "normalized_name": "components atomic",
+    "tokens": [
+      "components",
+      "atomic"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Components - Collapsed Composite",
+    "category": "Logical",
+    "name": "Components - Collapsed Composite",
+    "normalized_title": "logical components collapsed composite",
+    "normalized_name": "components collapsed composite",
+    "tokens": [
+      "components",
+      "collapsed",
+      "composite"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Components - Expanded Composite",
+    "category": "Logical",
+    "name": "Components - Expanded Composite",
+    "normalized_title": "logical components expanded composite",
+    "normalized_name": "components expanded composite",
+    "tokens": [
+      "components",
+      "expanded",
+      "composite"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Components - OCI Component",
+    "category": "Logical",
+    "name": "Components - OCI Component",
+    "normalized_title": "logical components oci component",
+    "normalized_name": "components oci component",
+    "tokens": [
+      "components",
+      "oci",
+      "component"
+    ],
+    "acronyms": [
+      "oci"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Components - Oracle On-Premises Component",
+    "category": "Logical",
+    "name": "Components - Oracle On-Premises Component",
+    "normalized_title": "logical components oracle on premises component",
+    "normalized_name": "components oracle on premises component",
+    "tokens": [
+      "components",
+      "oracle",
+      "on",
+      "premises",
+      "component"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Components -3rd Party Non- OCI",
+    "category": "Logical",
+    "name": "Components -3rd Party Non- OCI",
+    "normalized_title": "logical components 3rd party non oci",
+    "normalized_name": "components 3rd party non oci",
+    "tokens": [
+      "components",
+      "3rd",
+      "party",
+      "non",
+      "oci"
+    ],
+    "acronyms": [
+      "oci"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connector Labels - Dataflow - Number",
+    "category": "Logical",
+    "name": "Connector Labels - Dataflow - Number",
+    "normalized_title": "logical connector labels dataflow number",
+    "normalized_name": "connector labels dataflow number",
+    "tokens": [
+      "connector",
+      "labels",
+      "dataflow",
+      "number"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connector Labels - Dataflow - Number and Text - horizontal",
+    "category": "Logical",
+    "name": "Connector Labels - Dataflow - Number and Text - horizontal",
+    "normalized_title": "logical connector labels dataflow number and text horizontal",
+    "normalized_name": "connector labels dataflow number and text horizontal",
+    "tokens": [
+      "connector",
+      "labels",
+      "dataflow",
+      "number",
+      "and",
+      "text",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connector Labels - Dataflow - Number and Text - vertical",
+    "category": "Logical",
+    "name": "Connector Labels - Dataflow - Number and Text - vertical",
+    "normalized_title": "logical connector labels dataflow number and text vertical",
+    "normalized_name": "connector labels dataflow number and text vertical",
+    "tokens": [
+      "connector",
+      "labels",
+      "dataflow",
+      "number",
+      "and",
+      "text",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connector Labels - User Interaction - Number",
+    "category": "Logical",
+    "name": "Connector Labels - User Interaction - Number",
+    "normalized_title": "logical connector labels user interaction number",
+    "normalized_name": "connector labels user interaction number",
+    "tokens": [
+      "connector",
+      "labels",
+      "user",
+      "interaction",
+      "number"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connector Labels - User Interaction - Number and Text - horizontal",
+    "category": "Logical",
+    "name": "Connector Labels - User Interaction - Number and Text - horizontal",
+    "normalized_title": "logical connector labels user interaction number and text horizontal",
+    "normalized_name": "connector labels user interaction number and text horizontal",
+    "tokens": [
+      "connector",
+      "labels",
+      "user",
+      "interaction",
+      "number",
+      "and",
+      "text",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connector Labels - User Interaction - Number and Text - vertical",
+    "category": "Logical",
+    "name": "Connector Labels - User Interaction - Number and Text - vertical",
+    "normalized_title": "logical connector labels user interaction number and text vertical",
+    "normalized_name": "connector labels user interaction number and text vertical",
+    "tokens": [
+      "connector",
+      "labels",
+      "user",
+      "interaction",
+      "number",
+      "and",
+      "text",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connectors - Dataflow",
+    "category": "Logical",
+    "name": "Connectors - Dataflow",
+    "normalized_title": "logical connectors dataflow",
+    "normalized_name": "connectors dataflow",
+    "tokens": [
+      "connectors",
+      "dataflow"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connectors - Dataflow - Labeled horizontal",
+    "category": "Logical",
+    "name": "Connectors - Dataflow - Labeled horizontal",
+    "normalized_title": "logical connectors dataflow labeled horizontal",
+    "normalized_name": "connectors dataflow labeled horizontal",
+    "tokens": [
+      "connectors",
+      "dataflow",
+      "labeled",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connectors - Dataflow - Labeled vertical",
+    "category": "Logical",
+    "name": "Connectors - Dataflow - Labeled vertical",
+    "normalized_title": "logical connectors dataflow labeled vertical",
+    "normalized_name": "connectors dataflow labeled vertical",
+    "tokens": [
+      "connectors",
+      "dataflow",
+      "labeled",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connectors - User Interaction",
+    "category": "Logical",
+    "name": "Connectors - User Interaction",
+    "normalized_title": "logical connectors user interaction",
+    "normalized_name": "connectors user interaction",
+    "tokens": [
+      "connectors",
+      "user",
+      "interaction"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connectors - User Interaction - Labeled horizontal",
+    "category": "Logical",
+    "name": "Connectors - User Interaction - Labeled horizontal",
+    "normalized_title": "logical connectors user interaction labeled horizontal",
+    "normalized_name": "connectors user interaction labeled horizontal",
+    "tokens": [
+      "connectors",
+      "user",
+      "interaction",
+      "labeled",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Connectors - User Interaction - Labeled vertical",
+    "category": "Logical",
+    "name": "Connectors - User Interaction - Labeled vertical",
+    "normalized_title": "logical connectors user interaction labeled vertical",
+    "normalized_name": "connectors user interaction labeled vertical",
+    "tokens": [
+      "connectors",
+      "user",
+      "interaction",
+      "labeled",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Example - Components with Groups",
+    "category": "Logical",
+    "name": "Example - Components with Groups",
+    "normalized_title": "logical example components with groups",
+    "normalized_name": "example components with groups",
+    "tokens": [
+      "example",
+      "components",
+      "with",
+      "groups"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Example - On-Premises Components with Groups",
+    "category": "Logical",
+    "name": "Example - On-Premises Components with Groups",
+    "normalized_title": "logical example on premises components with groups",
+    "normalized_name": "example on premises components with groups",
+    "tokens": [
+      "example",
+      "on",
+      "premises",
+      "components",
+      "with",
+      "groups"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Grouping - 3rd Party Cloud",
+    "category": "Logical",
+    "name": "Grouping - 3rd Party Cloud",
+    "normalized_title": "logical grouping 3rd party cloud",
+    "normalized_name": "grouping 3rd party cloud",
+    "tokens": [
+      "grouping",
+      "3rd",
+      "party",
+      "cloud"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Grouping - Internet",
+    "category": "Logical",
+    "name": "Grouping - Internet",
+    "normalized_title": "logical grouping internet",
+    "normalized_name": "grouping internet",
+    "tokens": [
+      "grouping",
+      "internet"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Grouping - On-Premises",
+    "category": "Logical",
+    "name": "Grouping - On-Premises",
+    "normalized_title": "logical grouping on premises",
+    "normalized_name": "grouping on premises",
+    "tokens": [
+      "grouping",
+      "on",
+      "premises"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Grouping - Oracle Cloud",
+    "category": "Logical",
+    "name": "Grouping - Oracle Cloud",
+    "normalized_title": "logical grouping oracle cloud",
+    "normalized_name": "grouping oracle cloud",
+    "tokens": [
+      "grouping",
+      "oracle",
+      "cloud"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Grouping - Other Group",
+    "category": "Logical",
+    "name": "Grouping - Other Group",
+    "normalized_title": "logical grouping other group",
+    "normalized_name": "grouping other group",
+    "tokens": [
+      "grouping",
+      "other",
+      "group"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Location Canvas - Full - Horizontal",
+    "category": "Logical",
+    "name": "Location Canvas - Full - Horizontal",
+    "normalized_title": "logical location canvas full horizontal",
+    "normalized_name": "location canvas full horizontal",
+    "tokens": [
+      "location",
+      "canvas",
+      "full",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Location Canvas - Full - Vertical",
+    "category": "Logical",
+    "name": "Location Canvas - Full - Vertical",
+    "normalized_title": "logical location canvas full vertical",
+    "normalized_name": "location canvas full vertical",
+    "tokens": [
+      "location",
+      "canvas",
+      "full",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Location Canvas - On-Premises- Horizontal",
+    "category": "Logical",
+    "name": "Location Canvas - On-Premises- Horizontal",
+    "normalized_title": "logical location canvas on premises horizontal",
+    "normalized_name": "location canvas on premises horizontal",
+    "tokens": [
+      "location",
+      "canvas",
+      "on",
+      "premises",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Logical - Location Canvas - On-Premises- Vertical",
+    "category": "Logical",
+    "name": "Location Canvas - On-Premises- Vertical",
+    "normalized_title": "logical location canvas on premises vertical",
+    "normalized_name": "location canvas on premises vertical",
+    "tokens": [
+      "location",
+      "canvas",
+      "on",
+      "premises",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Marketplace",
+    "category": "Marketplace",
+    "name": "Marketplace",
+    "normalized_title": "marketplace",
+    "normalized_name": "marketplace",
+    "tokens": [
+      "marketplace"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Media Flow",
+    "category": "Media Flow",
+    "name": "Media Flow",
+    "normalized_title": "media flow",
+    "normalized_name": "media flow",
+    "tokens": [
+      "media",
+      "flow"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Media Streams",
+    "category": "Media Streams",
+    "name": "Media Streams",
+    "normalized_title": "media streams",
+    "normalized_name": "media streams",
+    "tokens": [
+      "media",
+      "streams"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Migration - Dedicated Region",
+    "category": "Migration",
+    "name": "Dedicated Region",
+    "normalized_title": "migration dedicated region",
+    "normalized_name": "dedicated region",
+    "tokens": [
+      "dedicated",
+      "region"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Migration - Estate Explorer",
+    "category": "Migration",
+    "name": "Estate Explorer",
+    "normalized_title": "migration estate explorer",
+    "normalized_name": "estate explorer",
+    "tokens": [
+      "estate",
+      "explorer"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Migration - Migration Workbench",
+    "category": "Migration",
+    "name": "Migration Workbench",
+    "normalized_title": "migration migration workbench",
+    "normalized_name": "migration workbench",
+    "tokens": [
+      "migration",
+      "workbench"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Migration - OCI Migrate",
+    "category": "Migration",
+    "name": "OCI Migrate",
+    "normalized_title": "migration oci migrate",
+    "normalized_name": "oci migrate",
+    "tokens": [
+      "oci",
+      "migrate"
+    ],
+    "acronyms": [
+      "oci"
+    ],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Migration - Oracle Database Migration Service",
+    "category": "Migration",
+    "name": "Oracle Database Migration Service",
+    "normalized_title": "migration oracle database migration service",
+    "normalized_name": "oracle database migration service",
+    "tokens": [
+      "oracle",
+      "database",
+      "migration",
+      "service"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Migration - Roving Edge Infrastructure",
+    "category": "Migration",
+    "name": "Roving Edge Infrastructure",
+    "normalized_title": "migration roving edge infrastructure",
+    "normalized_name": "roving edge infrastructure",
+    "tokens": [
+      "roving",
+      "edge",
+      "infrastructure"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - BYOIP",
+    "category": "Networking",
+    "name": "BYOIP",
+    "normalized_title": "networking byoip",
+    "normalized_name": "byoip",
+    "tokens": [
+      "byoip"
+    ],
+    "acronyms": [
+      "byoip"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Backbone",
+    "category": "Networking",
+    "name": "Backbone",
+    "normalized_title": "networking backbone",
+    "normalized_name": "backbone",
+    "tokens": [
+      "backbone"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - CDN",
+    "category": "Networking",
+    "name": "CDN",
+    "normalized_title": "networking cdn",
+    "normalized_name": "cdn",
+    "tokens": [
+      "cdn"
+    ],
+    "acronyms": [
+      "cdn"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Customer Data Center",
+    "category": "Networking",
+    "name": "Customer Data Center",
+    "normalized_title": "networking customer data center",
+    "normalized_name": "customer data center",
+    "tokens": [
+      "customer",
+      "data",
+      "center"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Customer Premises Equipment CPE",
+    "category": "Networking",
+    "name": "Customer Premises Equipment CPE",
+    "normalized_title": "networking customer premises equipment cpe",
+    "normalized_name": "customer premises equipment cpe",
+    "tokens": [
+      "customer",
+      "premises",
+      "equipment",
+      "cpe"
+    ],
+    "acronyms": [
+      "cpe"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - DNS",
+    "category": "Networking",
+    "name": "DNS",
+    "normalized_title": "networking dns",
+    "normalized_name": "dns",
+    "tokens": [
+      "dns"
+    ],
+    "acronyms": [
+      "dns"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Dynamic Routing Gateway DRG",
+    "category": "Networking",
+    "name": "Dynamic Routing Gateway DRG",
+    "normalized_title": "networking dynamic routing gateway drg",
+    "normalized_name": "dynamic routing gateway drg",
+    "tokens": [
+      "dynamic",
+      "routing",
+      "gateway",
+      "drg"
+    ],
+    "acronyms": [
+      "drg"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Flexible Load Balancer",
+    "category": "Networking",
+    "name": "Flexible Load Balancer",
+    "normalized_title": "networking flexible load balancer",
+    "normalized_name": "flexible load balancer",
+    "tokens": [
+      "flexible",
+      "load",
+      "balancer"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - IP Pools",
+    "category": "Networking",
+    "name": "IP Pools",
+    "normalized_title": "networking ip pools",
+    "normalized_name": "ip pools",
+    "tokens": [
+      "ip",
+      "pools"
+    ],
+    "acronyms": [
+      "ip"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Internet Gateway",
+    "category": "Networking",
+    "name": "Internet Gateway",
+    "normalized_title": "networking internet gateway",
+    "normalized_name": "internet gateway",
+    "tokens": [
+      "internet",
+      "gateway"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Load Balancer",
+    "category": "Networking",
+    "name": "Load Balancer",
+    "normalized_title": "networking load balancer",
+    "normalized_name": "load balancer",
+    "tokens": [
+      "load",
+      "balancer"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - NAT Gateway",
+    "category": "Networking",
+    "name": "NAT Gateway",
+    "normalized_title": "networking nat gateway",
+    "normalized_name": "nat gateway",
+    "tokens": [
+      "nat",
+      "gateway"
+    ],
+    "acronyms": [
+      "nat"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Network Switch",
+    "category": "Networking",
+    "name": "Network Switch",
+    "normalized_title": "networking network switch",
+    "normalized_name": "network switch",
+    "tokens": [
+      "network",
+      "switch"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Remote Peering Gateway",
+    "category": "Networking",
+    "name": "Remote Peering Gateway",
+    "normalized_title": "networking remote peering gateway",
+    "normalized_name": "remote peering gateway",
+    "tokens": [
+      "remote",
+      "peering",
+      "gateway"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Route Table",
+    "category": "Networking",
+    "name": "Route Table",
+    "normalized_title": "networking route table",
+    "normalized_name": "route table",
+    "tokens": [
+      "route",
+      "table"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Route Table and Security List",
+    "category": "Networking",
+    "name": "Route Table and Security List",
+    "normalized_title": "networking route table and security list",
+    "normalized_name": "route table and security list",
+    "tokens": [
+      "route",
+      "table",
+      "and",
+      "security",
+      "list"
+    ],
+    "acronyms": [],
+    "source": "toolkit-v24.2-icons-page"
+  },
+  {
+    "title": "Networking - Service Gateway",
+    "category": "Networking",
+    "name": "Service Gateway",
+    "normalized_title": "networking service gateway",
+    "normalized_name": "service gateway",
+    "tokens": [
+      "service",
+      "gateway"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - VTAP",
+    "category": "Networking",
+    "name": "VTAP",
+    "normalized_title": "networking vtap",
+    "normalized_name": "vtap",
+    "tokens": [
+      "vtap"
+    ],
+    "acronyms": [
+      "vtap"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Networking - Virtual Cloud Network VCN",
+    "category": "Networking",
+    "name": "Virtual Cloud Network VCN",
+    "normalized_title": "networking virtual cloud network vcn",
+    "normalized_name": "virtual cloud network vcn",
+    "tokens": [
+      "virtual",
+      "cloud",
+      "network",
+      "vcn"
+    ],
+    "acronyms": [
+      "vcn"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Alarms",
+    "category": "Observability and Management",
+    "name": "Alarms",
+    "normalized_title": "observability and management alarms",
+    "normalized_name": "alarms",
+    "tokens": [
+      "alarms"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Application Performance Management",
+    "category": "Observability and Management",
+    "name": "Application Performance Management",
+    "normalized_title": "observability and management application performance management",
+    "normalized_name": "application performance management",
+    "tokens": [
+      "application",
+      "performance",
+      "management"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Auditing",
+    "category": "Observability and Management",
+    "name": "Auditing",
+    "normalized_title": "observability and management auditing",
+    "normalized_name": "auditing",
+    "tokens": [
+      "auditing"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Events",
+    "category": "Observability and Management",
+    "name": "Events",
+    "normalized_title": "observability and management events",
+    "normalized_name": "events",
+    "tokens": [
+      "events"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Health Checks",
+    "category": "Observability and Management",
+    "name": "Health Checks",
+    "normalized_title": "observability and management health checks",
+    "normalized_name": "health checks",
+    "tokens": [
+      "health",
+      "checks"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Logging",
+    "category": "Observability and Management",
+    "name": "Logging",
+    "normalized_title": "observability and management logging",
+    "normalized_name": "logging",
+    "tokens": [
+      "logging"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Logging Analytics",
+    "category": "Observability and Management",
+    "name": "Logging Analytics",
+    "normalized_title": "observability and management logging analytics",
+    "normalized_name": "logging analytics",
+    "tokens": [
+      "logging",
+      "analytics"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Monitoring",
+    "category": "Observability and Management",
+    "name": "Monitoring",
+    "normalized_title": "observability and management monitoring",
+    "normalized_name": "monitoring",
+    "tokens": [
+      "monitoring"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Operations Insights",
+    "category": "Observability and Management",
+    "name": "Operations Insights",
+    "normalized_title": "observability and management operations insights",
+    "normalized_name": "operations insights",
+    "tokens": [
+      "operations",
+      "insights"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Queuing",
+    "category": "Observability and Management",
+    "name": "Queuing",
+    "normalized_title": "observability and management queuing",
+    "normalized_name": "queuing",
+    "tokens": [
+      "queuing"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Search",
+    "category": "Observability and Management",
+    "name": "Search",
+    "normalized_title": "observability and management search",
+    "normalized_name": "search",
+    "tokens": [
+      "search"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - VCN Flow Logs",
+    "category": "Observability and Management",
+    "name": "VCN Flow Logs",
+    "normalized_title": "observability and management vcn flow logs",
+    "normalized_name": "vcn flow logs",
+    "tokens": [
+      "vcn",
+      "flow",
+      "logs"
+    ],
+    "acronyms": [
+      "vcn"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Observability and Management - Workflow",
+    "category": "Observability and Management",
+    "name": "Workflow",
+    "normalized_title": "observability and management workflow",
+    "normalized_name": "workflow",
+    "tokens": [
+      "workflow"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Connector",
+    "category": "Physical",
+    "name": "Connector",
+    "normalized_title": "physical connector",
+    "normalized_name": "connector",
+    "tokens": [
+      "connector"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Connector - Labeled - Horizontal",
+    "category": "Physical",
+    "name": "Connector - Labeled - Horizontal",
+    "normalized_title": "physical connector labeled horizontal",
+    "normalized_name": "connector labeled horizontal",
+    "tokens": [
+      "connector",
+      "labeled",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Connector - Labeled - Vertical",
+    "category": "Physical",
+    "name": "Connector - Labeled - Vertical",
+    "normalized_title": "physical connector labeled vertical",
+    "normalized_name": "connector labeled vertical",
+    "tokens": [
+      "connector",
+      "labeled",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Example - 1",
+    "category": "Physical",
+    "name": "Example - 1",
+    "normalized_title": "physical example 1",
+    "normalized_name": "example 1",
+    "tokens": [
+      "example",
+      "1"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Example - 2",
+    "category": "Physical",
+    "name": "Example - 2",
+    "normalized_title": "physical example 2",
+    "normalized_name": "example 2",
+    "tokens": [
+      "example",
+      "2"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Example - 3",
+    "category": "Physical",
+    "name": "Example - 3",
+    "normalized_title": "physical example 3",
+    "normalized_name": "example 3",
+    "tokens": [
+      "example",
+      "3"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Example - 4",
+    "category": "Physical",
+    "name": "Example - 4",
+    "normalized_title": "physical example 4",
+    "normalized_name": "example 4",
+    "tokens": [
+      "example",
+      "4"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Example - 5",
+    "category": "Physical",
+    "name": "Example - 5",
+    "normalized_title": "physical example 5",
+    "normalized_name": "example 5",
+    "tokens": [
+      "example",
+      "5"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Example - 6",
+    "category": "Physical",
+    "name": "Example - 6",
+    "normalized_title": "physical example 6",
+    "normalized_name": "example 6",
+    "tokens": [
+      "example",
+      "6"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - Availability Domain",
+    "category": "Physical",
+    "name": "Grouping - Availability Domain",
+    "normalized_title": "physical grouping availability domain",
+    "normalized_name": "grouping availability domain",
+    "tokens": [
+      "grouping",
+      "availability",
+      "domain"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - Compartment",
+    "category": "Physical",
+    "name": "Grouping - Compartment",
+    "normalized_title": "physical grouping compartment",
+    "normalized_name": "grouping compartment",
+    "tokens": [
+      "grouping",
+      "compartment"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - Fault Domain",
+    "category": "Physical",
+    "name": "Grouping - Fault Domain",
+    "normalized_title": "physical grouping fault domain",
+    "normalized_name": "grouping fault domain",
+    "tokens": [
+      "grouping",
+      "fault",
+      "domain"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - OCI Region",
+    "category": "Physical",
+    "name": "Grouping - OCI Region",
+    "normalized_title": "physical grouping oci region",
+    "normalized_name": "grouping oci region",
+    "tokens": [
+      "grouping",
+      "oci",
+      "region"
+    ],
+    "acronyms": [
+      "oci"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - Subnet",
+    "category": "Physical",
+    "name": "Grouping - Subnet",
+    "normalized_title": "physical grouping subnet",
+    "normalized_name": "grouping subnet",
+    "tokens": [
+      "grouping",
+      "subnet"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - Tenancy",
+    "category": "Physical",
+    "name": "Grouping - Tenancy",
+    "normalized_title": "physical grouping tenancy",
+    "normalized_name": "grouping tenancy",
+    "tokens": [
+      "grouping",
+      "tenancy"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - Tier",
+    "category": "Physical",
+    "name": "Grouping - Tier",
+    "normalized_title": "physical grouping tier",
+    "normalized_name": "grouping tier",
+    "tokens": [
+      "grouping",
+      "tier"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - User Group",
+    "category": "Physical",
+    "name": "Grouping - User Group",
+    "normalized_title": "physical grouping user group",
+    "normalized_name": "grouping user group",
+    "tokens": [
+      "grouping",
+      "user",
+      "group"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Grouping - VCN",
+    "category": "Physical",
+    "name": "Grouping - VCN",
+    "normalized_title": "physical grouping vcn",
+    "normalized_name": "grouping vcn",
+    "tokens": [
+      "grouping",
+      "vcn"
+    ],
+    "acronyms": [
+      "vcn"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Special Connectors - FastConnect - Horizontal",
+    "category": "Physical",
+    "name": "Special Connectors - FastConnect - Horizontal",
+    "normalized_title": "physical special connectors fastconnect horizontal",
+    "normalized_name": "special connectors fastconnect horizontal",
+    "tokens": [
+      "special",
+      "connectors",
+      "fastconnect",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Special Connectors - FastConnect - Vertical",
+    "category": "Physical",
+    "name": "Special Connectors - FastConnect - Vertical",
+    "normalized_title": "physical special connectors fastconnect vertical",
+    "normalized_name": "special connectors fastconnect vertical",
+    "tokens": [
+      "special",
+      "connectors",
+      "fastconnect",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Special Connectors - Remote Peering - Horizontal",
+    "category": "Physical",
+    "name": "Special Connectors - Remote Peering - Horizontal",
+    "normalized_title": "physical special connectors remote peering horizontal",
+    "normalized_name": "special connectors remote peering horizontal",
+    "tokens": [
+      "special",
+      "connectors",
+      "remote",
+      "peering",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Special Connectors - Remote Peering - Vertical",
+    "category": "Physical",
+    "name": "Special Connectors - Remote Peering - Vertical",
+    "normalized_title": "physical special connectors remote peering vertical",
+    "normalized_name": "special connectors remote peering vertical",
+    "tokens": [
+      "special",
+      "connectors",
+      "remote",
+      "peering",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Special Connectors - Site-to-site-VPN - Vertical",
+    "category": "Physical",
+    "name": "Special Connectors - Site-to-site-VPN - Vertical",
+    "normalized_title": "physical special connectors site to site vpn vertical",
+    "normalized_name": "special connectors site to site vpn vertical",
+    "tokens": [
+      "special",
+      "connectors",
+      "site",
+      "to",
+      "site",
+      "vpn",
+      "vertical"
+    ],
+    "acronyms": [
+      "vpn"
+    ],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Templates - horizontal",
+    "category": "Physical",
+    "name": "Templates - horizontal",
+    "normalized_title": "physical templates horizontal",
+    "normalized_name": "templates horizontal",
+    "tokens": [
+      "templates",
+      "horizontal"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Templates - horizontal - with FastConnect",
+    "category": "Physical",
+    "name": "Templates - horizontal - with FastConnect",
+    "normalized_title": "physical templates horizontal with fastconnect",
+    "normalized_name": "templates horizontal with fastconnect",
+    "tokens": [
+      "templates",
+      "horizontal",
+      "with",
+      "fastconnect"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Physical - Templates - vertical",
+    "category": "Physical",
+    "name": "Templates - vertical",
+    "normalized_title": "physical templates vertical",
+    "normalized_name": "templates vertical",
+    "tokens": [
+      "templates",
+      "vertical"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Back up Restore",
+    "category": "Storage",
+    "name": "Back up Restore",
+    "normalized_title": "storage back up restore",
+    "normalized_name": "back up restore",
+    "tokens": [
+      "back",
+      "up",
+      "restore"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Block Storage",
+    "category": "Storage",
+    "name": "Block Storage",
+    "normalized_title": "storage block storage",
+    "normalized_name": "block storage",
+    "tokens": [
+      "block",
+      "storage"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Block Storage Cloning",
+    "category": "Storage",
+    "name": "Block Storage Cloning",
+    "normalized_title": "storage block storage cloning",
+    "normalized_name": "block storage cloning",
+    "tokens": [
+      "block",
+      "storage",
+      "cloning"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Buckets",
+    "category": "Storage",
+    "name": "Buckets",
+    "normalized_title": "storage buckets",
+    "normalized_name": "buckets",
+    "tokens": [
+      "buckets"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Elastic Performance",
+    "category": "Storage",
+    "name": "Elastic Performance",
+    "normalized_title": "storage elastic performance",
+    "normalized_name": "elastic performance",
+    "tokens": [
+      "elastic",
+      "performance"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - File Storage",
+    "category": "Storage",
+    "name": "File Storage",
+    "normalized_title": "storage file storage",
+    "normalized_name": "file storage",
+    "tokens": [
+      "file",
+      "storage"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Local Storage",
+    "category": "Storage",
+    "name": "Local Storage",
+    "normalized_title": "storage local storage",
+    "normalized_name": "local storage",
+    "tokens": [
+      "local",
+      "storage"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Object Storage",
+    "category": "Storage",
+    "name": "Object Storage",
+    "normalized_title": "storage object storage",
+    "normalized_name": "object storage",
+    "tokens": [
+      "object",
+      "storage"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Persistent Volume",
+    "category": "Storage",
+    "name": "Persistent Volume",
+    "normalized_title": "storage persistent volume",
+    "normalized_name": "persistent volume",
+    "tokens": [
+      "persistent",
+      "volume"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  },
+  {
+    "title": "Storage - Service Gateway",
+    "category": "Storage",
+    "name": "Service Gateway",
+    "normalized_title": "storage service gateway",
+    "normalized_name": "service gateway",
+    "tokens": [
+      "service",
+      "gateway"
+    ],
+    "acronyms": [],
+    "source": "oci-library.xml"
+  }
+]

@@ -1,14 +1,14 @@
 """Searchable OCI service catalog for the "Add OCI services" panel.
 
 The results page lets a user look up OCI services (Networking, Storage, PaaS, ...), fill in
-sizing, and add them to the BOM — the way Oracle's own Cost Estimator works. This module is
+sizing, and add them to the BOM - the way Oracle's own Cost Estimator works. This module is
 the catalog behind that search.
 
 Two layers:
-  1. CURATED services — the things a solutions engineer actually adds to a BOM, each with a
+  1. CURATED services - the things a solutions engineer actually adds to a BOM, each with a
      verified rate and explicit sizing fields (GB, count, ports, OCPU, ...). Rates are the
      app's own price data (data/oci_price_list.json / oci_service_prices.json), NOT invented.
-  2. RAW search fallback — full-text over all 629 price-list SKUs so nothing is unreachable;
+  2. RAW search fallback - full-text over all 629 price-list SKUs so nothing is unreachable;
      these add as a plain quantity x unit rate.
 
 Every entry declares a `basis` so the monthly cost is computed one way everywhere:
@@ -25,18 +25,18 @@ from pathlib import Path
 
 HOURS_PER_MONTH = 730
 
-# Autonomous AI Database (serverless) rates — customer-supplied OCI price-list values.
+# Autonomous AI Database (serverless) rates - customer-supplied OCI price-list values.
 ADB_ECPU_RATE = 0.336       # per ECPU-hour (B95702 ATP / B95701 ADW; B95713/B95712 dedicated)
 ADB_STORAGE_ATP = 0.1953    # ATP / AJD / APEX database storage per GB-month (B95706)
 ADB_STORAGE_ADW = 0.0299    # ADW / Lakehouse database storage per GB-month (B95754)
 ADB_BACKUP_RATE = 0.0299    # serverless Autonomous DB backup storage per GB-month (B95754)
-# Dedicated (Exadata Cloud Infrastructure) — Hosted Environment per hour, X11M.
+# Dedicated (Exadata Cloud Infrastructure) - Hosted Environment per hour, X11M.
 ADB_EXA_DB_SERVER = 6.3014      # Exadata Database Server per hour (B112666)
 ADB_EXA_STORAGE_SERVER = 5.4795  # Exadata Storage Server per hour (B112667)
 ADB_OBJ_BACKUP = 0.0255     # dedicated backup -> Object Storage per GB-month (B91628)
 ADB_OBJ_BACKUP_FREE = 10    # first 10 GB of object-storage backup is free
 
-# Oracle Integration Cloud (OIC) — per 5,000-messages/hour "message pack" per hour.
+# Oracle Integration Cloud (OIC) - per 5,000-messages/hour "message pack" per hour.
 OIC_STD_RATE = 0.6452       # Standard edition, per message-pack-hour (B89639)
 OIC_ENT_RATE = 1.2903       # Enterprise edition, per message-pack-hour (B109559)
 OIC_MSG_PER_PACK_HR = 5000  # 1 pack = 5,000 messages/hour (payload <=50KB each)
@@ -45,13 +45,13 @@ OIC_MSG_PER_PACK_HR = 5000  # 1 pack = 5,000 messages/hour (payload <=50KB each)
 #   monthly -> ceil(total messages per month / (hours * 5,000))   (e.g. 730*5,000 = 3.65M/pack)
 
 
-# MySQL HeatWave Database Service — customer-supplied OCI price-list values.
+# MySQL HeatWave Database Service - customer-supplied OCI price-list values.
 MYSQL_ECPU_RATE = 0.0366     # MySQL Database ECPU per hour (B108030)
 MYSQL_STORAGE_RATE = 0.04    # MySQL storage / backup / inter-region egress per GB-mo (B92426/B92483/B109169)
 MYSQL_HW_RATE = 0.011        # HeatWave capacity per hour (B96626)
 MYSQL_HW_STORAGE_RATE = 0.02  # HeatWave storage per GB-mo (B96625)
 
-# OCI Database with PostgreSQL — customer-supplied OCI price-list values.
+# OCI Database with PostgreSQL - customer-supplied OCI price-list values.
 PG_MANAGED_OCPU_RATE = 0.098   # managed PostgreSQL OCPU per hour (B99060)
 PG_STORAGE_RATE = 0.072        # database-optimized storage per GB-mo (B99062)
 PG_COMPUTE_OCPU_RATE = 0.03    # underlying AMD E5 compute OCPU per hour (B97384)
@@ -60,13 +60,17 @@ PG_COMPUTE_OCPU_RATE_INTEL = 0.04    # Intel X9 compute OCPU per hour
 PG_COMPUTE_MEM_RATE_INTEL = 0.0015   # Intel X9 compute memory per GB-hr
 PG_VPU_RATE = 0.0017           # block-volume performance units per GB-mo (B91962)
 
-# Object Storage — tiered with free allowances.
-OBJ_STORAGE_RATE = 0.0255      # per GB-month after the free tier (B91628)
-OBJ_STORAGE_FREE_GB = 10       # first 10 GB/month free
-OBJ_REQUEST_RATE = 0.0034      # per 10,000 requests after the free tier (B91627)
-OBJ_REQUEST_FREE_UNITS = 5     # first 50,000 requests (5 units of 10k) free
+# Object Storage - tiered with free allowances.
+OBJ_STORAGE_RATE = 0.0255          # Standard, per GB-month after free tier (B91628)
+OBJ_STORAGE_FREE_GB = 10           # first 10 GB/month free
+OBJ_IA_STORAGE_RATE = 0.0100       # Infrequent Access, per GB-month (B93000)
+OBJ_IA_RETRIEVAL_RATE = 0.0100     # Infrequent Access, per GB retrieved (B93001)
+OBJ_IA_RETRIEVAL_FREE_GB = 10      # first 10 GB retrieved/month free
+ARCHIVE_STORAGE_RATE = 0.0026      # Archive, per GB-month after free tier (B91633)
+OBJ_REQUEST_RATE = 0.0034          # per 10,000 requests after free tier (B91627)
+OBJ_REQUEST_FREE_UNITS = 5         # first 50,000 requests (5 units of 10k) free
 
-# Web Application Firewall — instance + request tiers with free allowances.
+# Web Application Firewall - instance + request tiers with free allowances.
 WAF_INSTANCE_RATE = 5.00       # per WAF instance per month after the first (B94579)
 WAF_INSTANCE_FREE = 1          # first instance free
 WAF_REQUEST_RATE = 0.60        # per 1,000,000 incoming requests after the free tier (B94277)
@@ -89,7 +93,7 @@ SQL_ENT_RATE = 1.47        # SQL Server Enterprise (B91372)
 SQL_STD_RATE = 0.37        # SQL Server Standard (B91373)
 # SQL Server Express is free ($0).
 
-# Secure Desktops — desktop fee + underlying E6 compute + block volumes (boot + optional).
+# Secure Desktops - desktop fee + underlying E6 compute + block volumes (boot + optional).
 DESKTOP_UNIT_RATE = 20.00      # Secure Desktop per month (B95518)
 DESKTOP_OCPU_RATE = 0.03       # E6 Standard compute OCPU per hour (B111129)
 DESKTOP_MEM_RATE = 0.002       # E6 Standard compute memory per GB-hr (B111130)
@@ -128,6 +132,28 @@ def _service_prices():
 
 _PRICES = _price_list()
 _SVC = _service_prices()
+
+_FASTCONNECT = _SVC.get("OCI FastConnect") or {}
+_FASTCONNECT_SOURCE_RATES = _FASTCONNECT.get("speedRates") or {}
+_FASTCONNECT_SOURCE_SKUS = _FASTCONNECT.get("speedSkus") or {}
+FASTCONNECT_SPEED_RATES = {
+    "1G": float(_FASTCONNECT_SOURCE_RATES.get("1G", 0.2125)),
+    "10G": float(_FASTCONNECT_SOURCE_RATES.get("10G", 1.275)),
+    "100G": float(_FASTCONNECT_SOURCE_RATES.get("100G", 10.75)),
+    "400G": float(_FASTCONNECT_SOURCE_RATES.get("400G", 20.00)),
+}
+FASTCONNECT_SPEED_SKUS = {
+    "1G": str(_FASTCONNECT_SOURCE_SKUS.get("1G") or "B88325"),
+    "10G": str(_FASTCONNECT_SOURCE_SKUS.get("10G") or "B88326"),
+    "100G": str(_FASTCONNECT_SOURCE_SKUS.get("100G") or "B93126"),
+    "400G": str(_FASTCONNECT_SOURCE_SKUS.get("400G") or "B107975"),
+}
+FASTCONNECT_SPEED_LABELS = {
+    "1G": "1 Gbps",
+    "10G": "10 Gbps",
+    "100G": "100 Gbps",
+    "400G": "400 Gbps",
+}
 
 
 def _rate(sku, fallback=None):
@@ -174,6 +200,123 @@ def _sel(key, label, options, default):
 GROUPS = ["Compute", "Storage", "Networking", "Database", "Integration", "Security",
           "Observability", "AI & Machine Learning", "Licensing", "Other Services"]
 
+# Every curated service has an explicit, bundled OCI icon contract. "fallback" means the
+# selected icon is the closest honest visual available in the bundled Oracle library.
+ARCHITECTURE_ICON_BY_ID = {
+    "block": ("Storage - Block Storage", "direct"),
+    "object": ("Storage - Object Storage", "direct"),
+    "object_ia": ("Storage - Object Storage", "direct"),
+    "file": ("Storage - File Storage", "direct"),
+    "archive": ("Storage - Object Storage", "direct"),
+    "lb": ("Networking - Flexible Load Balancer", "direct"),
+    "egress": ("Networking - Service Gateway", "fallback"),
+    "fastconnect": ("Networking - Dynamic Routing Gateway DRG", "fallback"),
+    "dns": ("Networking - DNS", "direct"),
+    "adb": ("Database - Autonomous DB", "direct"),
+    "mysql": ("Database - MySQL", "direct"),
+    "pg": ("Database - Database System", "fallback"),
+    "dbbackup": ("Storage - Object Storage", "fallback"),
+    "recovery": ("Storage - Object Storage", "fallback"),
+    "oic": ("Developer Services - Integrations", "direct"),
+    "waf": ("Identity and Security - WAF", "direct"),
+    "kms": ("Identity and Security - Vault", "direct"),
+    "fsdr": ("Governance and Administration - Cloud Advisor", "fallback"),
+    "logging": ("Observability and Management - Logging", "direct"),
+    "desktops": ("Compute - Virtual Machine VM", "fallback"),
+    "winlic": ("Compute - Virtual Machine VM", "fallback"),
+    "sqllic": ("Database - Database System", "fallback"),
+}
+
+ARCHITECTURE_GROUP_ICONS = {
+    "Compute": "Compute - Virtual Machine VM",
+    "Storage": "Storage - Object Storage",
+    "Networking": "Networking - Service Gateway",
+    "Database": "Database - Database System",
+    "Integration": "Developer Services - Integrations",
+    "Security": "Identity and Security - Vault",
+    "Observability": "Observability and Management - Monitoring",
+    "Obs. & Management": "Observability and Management - Monitoring",
+    "AI & Machine Learning": "Analytics and AI",
+    "Licensing": "Compute - Virtual Machine VM",
+    "Other Services": "Compute - Functions",
+}
+
+# Ordered from most specific to broadest. This gives raw price-list SKUs the same
+# deterministic product-to-icon contract as curated services instead of reducing every
+# uncommon service to its broad catalog group.
+ARCHITECTURE_NAME_ICONS = [
+    ("autonomous data warehouse", "Database - Autonomous Data Warehouse ADW", "direct"),
+    ("autonomous transaction processing", "Database - Autonomous Transaction Processing ATP", "direct"),
+    ("autonomous recovery", "Storage - Object Storage", "fallback"),
+    ("database backup", "Storage - Object Storage", "fallback"),
+    ("autonomous", "Database - Autonomous DB", "direct"),
+    ("container engine for kubernetes", "Developer Services - Container Engine for Kubernetes", "direct"),
+    ("kubernetes engine", "Developer Services - Container Engine for Kubernetes", "direct"),
+    ("container registry", "Developer Services - Container Registry", "direct"),
+    ("api gateway", "Developer Services - API Gateway", "direct"),
+    ("object storage", "Storage - Object Storage", "direct"),
+    ("block volume", "Storage - Block Storage", "direct"),
+    ("block storage", "Storage - Block Storage", "direct"),
+    ("file storage", "Storage - File Storage", "direct"),
+    ("load balancer", "Networking - Flexible Load Balancer", "direct"),
+    ("fastconnect", "Networking - Dynamic Routing Gateway DRG", "fallback"),
+    ("data transfer", "Networking - Service Gateway", "fallback"),
+    ("service gateway", "Networking - Service Gateway", "direct"),
+    ("web application firewall", "Identity and Security - WAF", "direct"),
+    ("key management", "Identity and Security - Vault", "direct"),
+    ("secure desktop", "Compute - Virtual Machine VM", "fallback"),
+    ("windows server", "Compute - Virtual Machine VM", "fallback"),
+    ("sql server", "Database - Database System", "fallback"),
+    ("integration cloud", "Developer Services - Integrations", "direct"),
+    ("application integration", "Developer Services - Integrations", "direct"),
+    ("generative ai", "Analytics and AI", "fallback"),
+    ("goldengate", "Database - GoldenGate", "direct"),
+    ("postgres", "Database - Database System", "fallback"),
+    ("mysql", "Database - MySQL", "direct"),
+    ("heatwave", "Database - MySQL", "direct"),
+    ("exadata", "Database - Exadata", "direct"),
+    ("nosql", "Database - NoSQL", "direct"),
+    ("function", "Compute - Functions", "direct"),
+    ("logging", "Observability and Management - Logging", "direct"),
+    ("monitoring", "Observability and Management - Monitoring", "direct"),
+    ("vault", "Identity and Security - Vault", "direct"),
+    ("waf", "Identity and Security - WAF", "direct"),
+    ("dns", "Networking - DNS", "direct"),
+]
+
+
+def architecture_mapping(name="", group=""):
+    """Return the bundled OCI icon title and the honesty level of the match."""
+    normalized_name = _norm(name)
+    for keyword, icon_title, resolution in ARCHITECTURE_NAME_ICONS:
+        if keyword in normalized_name:
+            return icon_title, resolution
+    return (
+        ARCHITECTURE_GROUP_ICONS.get(
+            group,
+            ARCHITECTURE_GROUP_ICONS["Other Services"],
+        ),
+        "category-fallback",
+    )
+
+
+def architecture_group(name="", group=""):
+    """Place raw SKUs in the diagram zone implied by their resolved OCI icon."""
+    icon_title, _resolution = architecture_mapping(name, group)
+    prefix_groups = {
+        "Storage -": "Storage",
+        "Networking -": "Networking",
+        "Database -": "Database",
+        "Developer Services -": "Integration",
+        "Identity and Security -": "Security",
+        "Observability and Management -": "Observability",
+        "Analytics and AI": "AI & Machine Learning",
+    }
+    for prefix, mapped_group in prefix_groups.items():
+        if icon_title.startswith(prefix):
+            return mapped_group
+    return group or "Other Services"
+
 # Names/keywords that mark a line as 3rd-party licensing (never OCI-discounted).
 _THIRD_PARTY_TERMS = ("windows", "sql server", "license", "licence", "byol")
 
@@ -186,9 +329,12 @@ def _curated():
 
     def add(id, group, name, sku, rate, unit, basis, fields, note="", free=None,
             third_party=False):
+        architecture_icon, architecture_resolution = ARCHITECTURE_ICON_BY_ID[id]
         C.append({"id": id, "group": group, "name": name, "sku": sku,
                   "rate": rate, "unit": unit, "basis": basis, "fields": fields,
                   "note": note, "free": free or {}, "source": "curated",
+                  "architectureIcon": architecture_icon,
+                  "architectureResolution": architecture_resolution,
                   # 3rd-party licensing (Windows, SQL Server, ...) is NOT eligible for the
                   # OCI discount; native OCI services are.
                   "thirdParty": third_party})
@@ -199,18 +345,28 @@ def _curated():
         [_sf("gb", "Capacity", "GB", 1024, 128),
          _sf("vpus", "Performance (VPUs/GB)", "VPU", 10, 10)],
         "Balanced = 10 VPUs/GB. Storage + performance units both priced.")
-    add("object", "Storage", "Object Storage — Standard", "B91628", OBJ_STORAGE_RATE,
+    add("object", "Storage", "Object Storage - Standard", "B91628", OBJ_STORAGE_RATE,
         "GB + requests", "month",
         [_sf("gb", "Storage Capacity", "GB", 1000, 1, 0),
          _sf("requests", "Requests (10k units)", "10k req", 0, 1, 0)],
         "Storage $0.0255/GB-mo (first 10 GB free) + requests $0.0034 per 10,000 (first 50,000 "
         "free). Requests are entered in units of 10,000. SKUs B91628/B91627.")
+    add("object_ia", "Storage", "Object Storage - Infrequent Access", "B93000",
+        OBJ_IA_STORAGE_RATE, "GB + retrieval + requests", "month",
+        [_sf("gb", "Storage Capacity", "GB", 1000, 1, 0),
+         _sf("retrievalGb", "Data Retrieved / month", "GB", 0, 1, 0),
+         _sf("requests", "Requests (10k units)", "10k req", 0, 1, 0)],
+        "Storage $0.0100/GB-mo (first 10 GB free) + retrieval $0.0100/GB (first 10 GB free) "
+        "+ requests $0.0034 per 10,000 (first 50,000 free). SKUs B93000/B93001/B91627.")
     add("file", "Storage", "File Storage (NFS)", "B89057",
         _svc_rate("OCI File Storage", fallback=0.30), "GB / month", "month",
         [_sf("gb", "Capacity", "GB", 1024, 128)])
-    add("archive", "Storage", "Archive Storage", "B89145",
-        _svc_rate("OCI Archive Storage", fallback=0.003), "GB / month", "month",
-        [_sf("gb", "Capacity", "GB", 10240, 1024)])
+    add("archive", "Storage", "Object Storage - Archive", "B91633",
+        ARCHIVE_STORAGE_RATE, "GB + requests", "month",
+        [_sf("gb", "Storage Capacity", "GB", 1000, 1, 0),
+         _sf("requests", "Requests (10k units)", "10k req", 0, 1, 0)],
+        "Storage $0.0026/GB-mo (first 10 GB free) + requests $0.0034 per 10,000 "
+        "(first 50,000 free). SKUs B91633/B91627.")
 
     # ---- Networking ----
     add("lb", "Networking", "Flexible Load Balancer", "B93031",
@@ -221,11 +377,17 @@ def _curated():
         _svc_rate("OCI Outbound Data Transfer", fallback=0.0085), "GB / month", "month",
         [_sf("gb", "Egress", "GB", 0, 1024)],
         "First 10 TB/region/month is free.", free={"gb": 10240})
-    add("fastconnect", "Networking", "FastConnect port (10 Gbps)", "B?-FASTCONNECT",
-        _svc_rate("OCI FastConnect", "speedRates", fallback={}).get("10G", 1.275)
-        if isinstance(_svc_rate("OCI FastConnect", "speedRates", fallback={}), dict) else 1.275,
-        "port / hour", "hour", [_sf("ports", "Ports", "port", 1, 1, 1)],
-        "Per provisioned port-hour; FastConnect traffic is not metered.")
+    add("fastconnect", "Networking", "FastConnect port", FASTCONNECT_SPEED_SKUS["10G"],
+        FASTCONNECT_SPEED_RATES["10G"], "port / hour", "hour",
+        [_sel("speed", "Port speed",
+              [(key, FASTCONNECT_SPEED_LABELS[key])
+               for key in ("1G", "10G", "100G", "400G")], "10G"),
+         _sf("ports", "Ports", "port", 1, 1, 1)],
+        "Choose a 1, 10, 100, or 400 Gbps provisioned port. Private virtual-circuit "
+        "traffic has no separate inbound or outbound transfer charge.")
+    C[-1]["speedRates"] = FASTCONNECT_SPEED_RATES
+    C[-1]["speedSkus"] = FASTCONNECT_SPEED_SKUS
+    C[-1]["speedLabels"] = FASTCONNECT_SPEED_LABELS
     add("dns", "Networking", "DNS (metered queries)", "B88516",
         _svc_rate("OCI DNS", fallback=0.85), "per 1M queries", "op",
         [_sf("millions", "Queries per month", "million", 1, 1)],
@@ -291,7 +453,7 @@ def _curated():
         [_sf("gb", "Backup capacity", "GB", 500, 100)])
     add("recovery", "Database", "Autonomous Recovery Service", "B95240", 0.0306,
         "GB / month", "month", [_sf("gb", "Protected capacity", "GB", 100, 50)],
-        "Oracle Database Autonomous Recovery Service — virtualized GB per month.")
+        "Oracle Database Autonomous Recovery Service - virtualized GB per month.")
 
     # ---- Integration ----
     add("oic", "Integration", "Application Integration (OIC)", "B89639", OIC_STD_RATE,
@@ -360,7 +522,7 @@ def _curated():
     # ---- 3rd-party licensing (NOT discounted) ----
     add("winlic", "Licensing", "Windows Server license", "B88318", _rate("B88318", 0.092),
         "OCPU / hour", "hour", [_sf("ocpu", "Licensed OCPUs", "OCPU", 2, 1, 1)],
-        "3rd-party Microsoft licensing — excluded from the OCI discount.", third_party=True)
+        "3rd-party Microsoft licensing - excluded from the OCI discount.", third_party=True)
     add("sqllic", "Licensing", "SQL Server License", "B91372", SQL_ENT_RATE,
         "OCPU / hour", "hour",
         [_sel("edition", "Edition",
@@ -368,7 +530,7 @@ def _curated():
                ("express", "Express (free)")], "enterprise"),
          _sf("ocpu", "Licensed OCPUs", "OCPU", 1, 1, 1)],
         "License-included Microsoft SQL Server (OCI marketplace image): Enterprise $1.47/OCPU-hr "
-        "(B91372), Standard $0.37/OCPU-hr (B91373), Express $0. 3rd-party licensing — excluded "
+        "(B91372), Standard $0.37/OCPU-hr (B91373), Express $0. 3rd-party licensing - excluded "
         "from the OCI discount.", third_party=True)
 
     return [c for c in C if isinstance(c["rate"], (int, float))]
@@ -382,7 +544,7 @@ def line_cost(entry, values, hours=HOURS_PER_MONTH):
     """Monthly USD for a filled-in catalog entry. Deterministic; mirrors the app's math,
     including free tiers (egress 10 TB, WAF 10M requests, Logging 10 GB).
 
-    `hours` is the app's hours-per-month setting — anything billed per hour (ECPU, OCPU,
+    `hours` is the app's hours-per-month setting - anything billed per hour (ECPU, OCPU,
     load-balancer-hour, port-hour) multiplies by it, so the catalog follows the same hours
     the compute rows use rather than a static 730.
     """
@@ -462,6 +624,16 @@ def line_cost(entry, values, hours=HOURS_PER_MONTH):
     if entry["id"] == "object":
         return round(max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB) * OBJ_STORAGE_RATE
                      + max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS) * OBJ_REQUEST_RATE, 2)
+    if entry["id"] == "object_ia":
+        return round(max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB) * OBJ_IA_STORAGE_RATE
+                     + max(0.0, v.get("retrievalGb", 0) - OBJ_IA_RETRIEVAL_FREE_GB)
+                     * OBJ_IA_RETRIEVAL_RATE
+                     + max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS)
+                     * OBJ_REQUEST_RATE, 2)
+    if entry["id"] == "archive":
+        return round(max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB) * ARCHIVE_STORAGE_RATE
+                     + max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS)
+                     * OBJ_REQUEST_RATE, 2)
 
     # OCI Database with PostgreSQL: managed OCPU + DB-optimized storage + underlying compute
     # (per-processor OCPU/memory, x nodes) + block-volume performance units.
@@ -505,6 +677,11 @@ def line_cost(entry, values, hours=HOURS_PER_MONTH):
         ecpu = v.get("p_db_ecpu", 0) + v.get("s_db_ecpu", 0)
         oic = v.get("p_oic", 0) + v.get("s_oic", 0)
         return round((ocpu * FSDR_OCPU_RATE + ecpu * FSDR_ECPU_RATE + oic * FSDR_OIC_RATE) * hours, 2)
+
+    if entry["id"] == "fastconnect":
+        speed = str(values.get("speed") or "10G").upper()
+        speed_rate = FASTCONNECT_SPEED_RATES.get(speed, FASTCONNECT_SPEED_RATES["10G"])
+        return round(v.get("ports", 0) * speed_rate * hours, 2)
 
     # Block volume: capacity + performance units, two SKUs.
     if entry["id"] == "block":
@@ -562,7 +739,7 @@ def _raw_matches(q, limit=25):
 
 
 def line_breakdown(entry, values, hours=HOURS_PER_MONTH):
-    """Per-SKU line items for a filled-in catalog entry — the full paper trail (like the OCI
+    """Per-SKU line items for a filled-in catalog entry - the full paper trail (like the OCI
     estimator's 'Pricing Details'). Each item: {sku, desc, qty, rate, hours, monthly}. The
     sum of the items equals line_cost(entry, values, hours)."""
     hours = float((values.get("__hours") if values else 0) or 0) or float(hours or HOURS_PER_MONTH)
@@ -622,9 +799,28 @@ def line_breakdown(entry, values, hours=HOURS_PER_MONTH):
         li("B95485", "Full Stack DR - Compute + DB Member OCPUs", ocpu, FSDR_OCPU_RATE, True)
         li("B110274", "Full Stack DR - Database Member ECPUs", ecpu, FSDR_ECPU_RATE, True)
         li("B112110", "Full Stack DR - OIC Message Packs", oic, FSDR_OIC_RATE, True)
+    elif cid == "fastconnect":
+        speed = str(values.get("speed") or "10G").upper()
+        speed = speed if speed in FASTCONNECT_SPEED_RATES else "10G"
+        li(FASTCONNECT_SPEED_SKUS[speed],
+           f"FastConnect {FASTCONNECT_SPEED_LABELS[speed]} port",
+           v.get("ports", 0), FASTCONNECT_SPEED_RATES[speed], True)
     elif cid == "object":
         li("B91628", "Object Storage - Storage", max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB), OBJ_STORAGE_RATE)
         li("B91627", "Object Storage - Requests", max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS), OBJ_REQUEST_RATE)
+    elif cid == "object_ia":
+        li("B93000", "Object Storage - Infrequent Access Storage",
+           max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB), OBJ_IA_STORAGE_RATE)
+        li("B93001", "Object Storage - Infrequent Access Retrieval",
+           max(0.0, v.get("retrievalGb", 0) - OBJ_IA_RETRIEVAL_FREE_GB),
+           OBJ_IA_RETRIEVAL_RATE)
+        li("B91627", "Object Storage - Requests",
+           max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS), OBJ_REQUEST_RATE)
+    elif cid == "archive":
+        li("B91633", "Object Storage - Archive Storage",
+           max(0.0, v.get("gb", 0) - OBJ_STORAGE_FREE_GB), ARCHIVE_STORAGE_RATE)
+        li("B91627", "Object Storage - Requests",
+           max(0.0, v.get("requests", 0) - OBJ_REQUEST_FREE_UNITS), OBJ_REQUEST_RATE)
     elif cid == "waf":
         li("B94579", "Web Application Firewall - Instance", max(0.0, v.get("instances", 0) - WAF_INSTANCE_FREE), WAF_INSTANCE_RATE)
         li("B94277", "Web Application Firewall - Requests", max(0.0, v.get("requests", 0) - WAF_REQUEST_FREE), WAF_REQUEST_RATE)
@@ -696,7 +892,7 @@ def _entry_by_id(cid):
 
 
 def price_extras(extra_services, hours=HOURS_PER_MONTH):
-    """Re-price the services the user added, authoritatively, from the catalog — never
+    """Re-price the services the user added, authoritatively, from the catalog - never
     trusting the client's number. `hours` is the app's hours-per-month setting so per-hour
     services follow it. Returns a clean list the exporter can consume:
         [{name, group, sku, unit, monthly, sizing}]  plus a total.
@@ -717,6 +913,15 @@ def price_extras(extra_services, hours=HOURS_PER_MONTH):
             third = bool(entry.get("thirdParty"))
             rate = float(entry.get("rate") or 0)
             basis = entry.get("basis", "month")
+            architecture_icon = entry["architectureIcon"]
+            architecture_resolution = entry["architectureResolution"]
+            architecture_service_group = group
+            if cid == "fastconnect":
+                speed = str(values.get("speed") or "10G").upper()
+                speed = speed if speed in FASTCONNECT_SPEED_RATES else "10G"
+                name = f"FastConnect port ({FASTCONNECT_SPEED_LABELS[speed]})"
+                sku = FASTCONNECT_SPEED_SKUS[speed]
+                rate = FASTCONNECT_SPEED_RATES[speed]
         else:
             # A raw price-list SKU (raw:<sku>): basis carried on the client record.
             rate = float(s.get("rate") or 0)
@@ -729,6 +934,8 @@ def price_extras(extra_services, hours=HOURS_PER_MONTH):
             unit = s.get("unit", "unit")
             fields = s.get("fields") or []
             third = bool(s.get("thirdParty")) or group == "Licensing"
+            architecture_icon, architecture_resolution = architecture_mapping(name, group)
+            architecture_service_group = architecture_group(name, group)
         # Primary billed quantity for display. OIC shows the auto-sized message packs.
         if cid == "oic":
             qty = oic_packs(values, svc_hours)
@@ -750,10 +957,21 @@ def price_extras(extra_services, hours=HOURS_PER_MONTH):
         else:
             skus = [{"sku": sku, "desc": name, "qty": round(qty, 4), "rate": rate,
                      "hours": hours_used, "monthly": round(monthly, 2)}]
+        if sku and not any(line.get("sku") == sku for line in skus):
+            skus.insert(
+                0,
+                {"sku": sku, "desc": name, "qty": round(qty, 4), "rate": rate,
+                 "hours": hours_used, "monthly": 0.0},
+            )
+        if not skus:
+            skus = [{"sku": sku or "N/A", "desc": name, "qty": round(qty, 4),
+                     "rate": rate, "hours": hours_used, "monthly": round(monthly, 2)}]
         out.append({"name": name, "group": group, "sku": sku, "unit": unit,
                     "monthly": round(monthly, 2), "sizing": sizing, "thirdParty": third,
                     "rate": rate, "qty": round(qty, 4), "basis": basis, "hours": hours_used,
-                    "skus": skus})
+                    "skus": skus, "architectureIcon": architecture_icon,
+                    "architectureResolution": architecture_resolution,
+                    "architectureGroup": architecture_service_group})
         total += monthly
     return out, round(total, 2)
 

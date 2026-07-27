@@ -48,7 +48,7 @@ CONTAINER_STYLES = {
     'subnet':      'rounded=0;whiteSpace=wrap;html=1;fillColor=none;'
                    'strokeColor=#AE562C;dashed=1;dashPattern=2 2;verticalAlign=top;'
                    'align=left;spacing=4;fontSize=15;fontColor=#AE562C;',
-    # Availability Domain — Oracle draws these as solid-bordered light containers, distinct
+    # Availability Domain - Oracle draws these as solid-bordered light containers, distinct
     # from the orange dashed subnets/VCNs.
     'ad':          'rounded=1;arcSize=3;whiteSpace=wrap;html=1;fillColor=#E9F0F0;'
                    'strokeColor=#5E7D82;dashed=0;verticalAlign=top;align=left;'

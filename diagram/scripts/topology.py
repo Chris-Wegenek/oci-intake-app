@@ -38,7 +38,7 @@ SHOW_LEGEND = (not A.no_legend) and SPEC.get("show_legend", True)
 os.makedirs(OUT, exist_ok=True)
 
 # --------------------------------------------------------------------------
-# Palette — Oracle-ish. Override any of these from spec["palette"].
+# Palette - Oracle-ish. Override any of these from spec["palette"].
 # --------------------------------------------------------------------------
 P = dict(
     WHITE="#FFFFFF", INK="#1B1B1B", SUB="#5B5750",
@@ -147,7 +147,7 @@ for rid, members in groups.items():
     if has_sftp:   # optional SFTPGo + Object Storage inset (AWS Transfer Family replacement)
         scx, scy, scw, sch = vx + vw - 330, vy + 48, 312, vh - 66
         rect(scx, scy, scw, sch, fill="#F1F7F2", stroke=GREEN, dash=True, r=8, lw=1.3)
-        text(scx + 12, scy + 20, "SFTP service — replaces AWS Transfer Family", size=9.2, bold=True, color=GREEN)
+        text(scx + 12, scy + 20, "SFTP service - replaces AWS Transfer Family", size=9.2, bold=True, color=GREEN)
         rect(scx + 18, scy + 34, 120, 96, fill=WHITE, stroke=GREEN, r=8, lw=1.6)
         icon("VM", scx + 59, scy + 44, 38, 44)
         text(scx + 78, scy + 110, "SFTPGo", size=10, bold=True, color=INK, anchor="c")
@@ -172,7 +172,7 @@ for rid, members in groups.items():
     for R, bh in zip(members, heights):
         sx, sy, sw, sh = left_x, my, sites_w, bh
         rect(sx, sy, sw, sh, fill=ONP_FILL, stroke=ONP_BORDER, r=12, lw=1.6)
-        text(sx + 16, sy + 24, f"Customer Sites — {R['area']}", size=13, bold=True, color="#33505C")
+        text(sx + 16, sy + 24, f"Customer Sites - {R['area']}", size=13, bold=True, color="#33505C")
         if R.get("anchor"):
             text(sx + 16, sy + 42, f"Anchor services: {R['anchor']}", size=9.2, color=SUB)
 
@@ -247,7 +247,7 @@ def draw_legend():
     n_vpn = sum(1 for R in REGIONS if not R["hub"]["conn"].startswith("FastConnect"))
     n_fc = sum(1 for R in REGIONS if R["hub"]["conn"].startswith("FastConnect"))
     rows = [
-        (f"Site-to-Site VPN (IPSec) — {n_vpn} region(s), redundant tunnels", "$0",
+        (f"Site-to-Site VPN (IPSec) - {n_vpn} region(s), redundant tunnels", "$0",
          "OCI does not charge for VPN connections"),
         ("DRG · VCN · subnets · route tables · Internet/NAT/Service gateways", "$0",
          "No hourly or per-GB charge on OCI"),
@@ -269,7 +269,7 @@ if SHOW_LEGEND:
     draw_legend()
 
 # ==========================================================================
-# RENDER — pycairo → PNG + SVG
+# RENDER - pycairo → PNG + SVG
 # ==========================================================================
 def hx(c):
     c = c.lstrip("#")
@@ -367,7 +367,7 @@ sctx = cairo.Context(svgsurf)
 sctx.set_source_rgb(1, 1, 1); sctx.paint(); render(sctx); svgsurf.finish()
 
 # ==========================================================================
-# EMIT editable .drawio — same coordinates, icons as SVG data URIs
+# EMIT editable .drawio - same coordinates, icons as SVG data URIs
 # ==========================================================================
 def icon_datauri(name):
     ic = ICONS[name]; parts = []

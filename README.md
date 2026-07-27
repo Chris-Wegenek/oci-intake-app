@@ -14,20 +14,17 @@ The first screen lets you choose `On-prem inventory` for server/application spre
 
 ## OpenAI mode
 
-The upload endpoint can use the OpenAI Responses API to inspect workbook sheets, identify the inventory table, and map messy spreadsheet columns into the app's canonical server/application fields. OpenAI calls are connected by default when `OPENAI_API_KEY` is present, using the medium-tier `gpt-5.4-mini` unless overridden. Set `OPENAI_API_ENABLED=false` to disconnect them temporarily. If the OpenAI call is unavailable or disabled, upload falls back to the rule-based workbook parser.
+OpenAI is used in exactly two workflow areas:
 
-Upload normalization also understands JSON-in-cell columns such as AWS `tags`. OpenAI can map tag keys like `Name`, `appId`, `environment`, and `os` into the preview table instead of treating the full JSON string as one field.
+1. **Inventory scrub:** the upload endpoint uses the Responses API with a strict JSON schema to identify the inventory table and map messy source columns into the fixed Review columns: Application Name, Machine Name, Environment, OCPUs, RAM, Storage, and Hours Running. Deterministic validation checks row counts, required fields, units, and mixed MiB/GB populations before accepting the AI result.
+2. **Architecture plan:** the architecture endpoint asks OpenAI for a constrained OCI landing-zone plan. Deterministic code keeps all quantities and user region/AD/DR choices authoritative, renders the draw.io and PNG files, validates the XML and image pixels, and includes the plan plus QA report in the architecture ZIP.
 
-The review table also includes an AI edit box. It calls `/api/edit-table` with the current rows and applies the returned changes, approval updates, or new rows before pricing.
+Pricing, cloud-bill mapping, Review edits, and all BOM math remain deterministic. OpenAI never writes rates, totals, or raw draw.io XML.
 
-Cloud bill upload uses service-aware parsing plus an additional OpenAI mapping pass after parsing. It groups repeated bill-line patterns, compares them against Oracle's cross-cloud service mapping guidance and cloud price-list metering rules, applies deterministic OCI target mappings first, and writes the inferred OCI service/product and review confidence back to the editable table.
-
-By default, the cloud-bill OpenAI pass sends sanitized service/meter pattern summaries only. It does not send filenames, account labels, source costs, row tags, or row-level billing details unless `OPENAI_BILL_INCLUDE_PRIVATE_CONTEXT=true` is explicitly set.
-
-The pricing endpoint always performs deterministic SKU math from the supplied rate card so the app is testable locally. If OpenAI calls are enabled, `/api/price` also calls the OpenAI Responses API to validate/enrich the SKU mapping. Set `OPENAI_UPLOAD_MODEL`, `OPENAI_BILL_MODEL`, `OPENAI_BILL_REASONING_EFFORT`, `OPENAI_TABLE_EDIT_MODEL`, and `OPENAI_PRICING_MODEL` to tune the upload-cleaning, cloud-bill mapping, table-editing, and pricing-review calls independently. `OPENAI_MODEL` remains a shared fallback.
+Both assists use the lower-cost `gpt-5-mini` model with low reasoning effort by default. If OpenAI is unavailable, upload and architecture generation continue with validated deterministic fallbacks.
 
 ```bash
-OPENAI_API_KEY=... OPENAI_MODEL=gpt-5.4-mini OPENAI_UPLOAD_MODEL=gpt-5.4-mini OPENAI_BILL_MODEL=gpt-5.4-mini OPENAI_BILL_REASONING_EFFORT=medium OPENAI_TABLE_EDIT_MODEL=gpt-5.4-mini OPENAI_PRICING_MODEL=gpt-5.4-mini /Users/gus/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 app.py
+OPENAI_API_KEY=... OPENAI_MODEL=gpt-5-mini OPENAI_UPLOAD_MODEL=gpt-5-mini OPENAI_BILL_MODEL=gpt-5-mini OPENAI_ARCHITECTURE_MODEL=gpt-5-mini /Users/gus/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 app.py
 ```
 
 For local development, copy `.env.example` to `.env.local` and put your real key there. `.env.local` is intentionally ignored by Git.
@@ -40,13 +37,13 @@ In Vercel, add these environment variables before deploying:
 
 - `OPENAI_API_KEY`: your OpenAI API key
 - `OPENAI_API_ENABLED`: optional; set to `false` to temporarily disconnect OpenAI calls
-- `OPENAI_MODEL`: optional shared fallback, defaults to `gpt-5.4-mini`
-- `OPENAI_UPLOAD_MODEL`: optional, defaults to `gpt-5.4-mini`
-- `OPENAI_BILL_MODEL`: optional, defaults to `gpt-5.4-mini`
-- `OPENAI_BILL_REASONING_EFFORT`: optional, defaults to `medium` for the cloud-bill mapping pass
-- `OPENAI_BILL_INCLUDE_PRIVATE_CONTEXT`: optional, defaults to `false`; keep this off unless you want the cloud-bill mapping prompt to include richer row context
-- `OPENAI_TABLE_EDIT_MODEL`: optional, defaults to `gpt-5.4-mini`
-- `OPENAI_PRICING_MODEL`: optional, defaults to `gpt-5.4-mini`
+- `OPENAI_MODEL`: optional shared fallback, defaults to `gpt-5-mini`
+- `OPENAI_UPLOAD_MODEL`: optional, defaults to `gpt-5-mini`
+- `OPENAI_UPLOAD_REASONING_EFFORT`: optional, defaults to `low`
+- `OPENAI_BILL_MODEL`: optional unresolved cloud-bill mapper, defaults to `gpt-5-mini`
+- `OPENAI_BILL_REASONING_EFFORT`: optional, defaults to `low`
+- `OPENAI_ARCHITECTURE_MODEL`: optional, defaults to `gpt-5-mini`
+- `OPENAI_ARCHITECTURE_REASONING_EFFORT`: optional, defaults to `low`
 
 Do not commit the real API key to GitHub. The app reads it from Vercel at runtime.
 

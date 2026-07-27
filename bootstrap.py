@@ -4,7 +4,7 @@ Why this exists
 ---------------
 The Full BOM export died in the wild with "You must install Pillow to fetch image
 objects". Pillow wasn't in requirements.txt, so nobody's virtualenv had it, and openpyxl
-raises that ImportError from deep inside save() — the export failed on the decorative
+raises that ImportError from deep inside save() - the export failed on the decorative
 Oracle logo before it ever reached the numbers. The dependency was invisible until it
 broke, and the fix ("go run pip install") was something a user of this app should never
 have to know about.
@@ -22,7 +22,7 @@ import os
 import subprocess
 import sys
 
-# (importable module name, pip requirement) — the module name is what we actually check,
+# (importable module name, pip requirement) - the module name is what we actually check,
 # because "pillow" installs as "PIL" and a missing one is only discovered at import time.
 REQUIREMENTS = [
     ("pandas", "pandas"),
@@ -30,7 +30,7 @@ REQUIREMENTS = [
     ("PIL", "pillow"),          # nice-to-have; embedding now works without it too
     # NOTE: pycairo is intentionally NOT auto-installed. It compiles against system cairo
     # (brew install cairo / apt install libcairo2-dev) and a bare `pip install pycairo`
-    # hangs or fails on machines without those libs — which would block app startup. It's
+    # hangs or fails on machines without those libs - which would block app startup. It's
     # optional: without it the .drawio diagram still builds, only the embedded PNG is
     # skipped. Install it yourself to get the rendered diagram (see requirements.txt).
     ("xlrd", "xlrd"),
@@ -70,7 +70,7 @@ def ensure(quiet=False):
         print(f"[setup] installing into {sys.executable} ...", flush=True)
 
     # Fail fast. If there's no network, pip's default retry/backoff hangs startup for a
-    # minute per package — the server must always come up, installed or not.
+    # minute per package - the server must always come up, installed or not.
     base = [sys.executable, "-m", "pip", "install", "--retries", "1", "--timeout", "10",
             "--disable-pip-version-check", *packages]
     # Debian/Ubuntu system Pythons refuse to install without this; harmless elsewhere.
@@ -93,7 +93,7 @@ def ensure(quiet=False):
         _warn(packages, errs[-1] if errs else detail[-300:])
         return []
 
-    # The new packages landed on disk after this process started — let import see them.
+    # The new packages landed on disk after this process started - let import see them.
     importlib.invalidate_caches()
     still = [p for _, p in _missing()]
     if still:

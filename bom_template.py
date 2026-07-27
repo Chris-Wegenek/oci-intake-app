@@ -1,4 +1,4 @@
-"""Full BOM export — the 12-sheet Oracle BOM deliverable.
+"""Full BOM export - the 12-sheet Oracle BOM deliverable.
 
 Rebuilds the customer-facing BOM workbook (Table of Contents, Assumptions, Rate
 Card, Pricing Overview, Compute, Storage, Networking, DR, Security KMS,
@@ -48,7 +48,7 @@ SPEC_PATH = Path(__file__).resolve().parent / "data" / "bom_template_spec.json"
 # openpyxl uses Pillow ONLY to read an image's width/height when embedding. That single
 # dependency kept dropping the architecture diagram (and logos) on machines without Pillow.
 # We don't need Pillow for that: PNG dimensions live in the file header. When Pillow is
-# missing we parse the header ourselves and monkeypatch openpyxl so images embed anyway —
+# missing we parse the header ourselves and monkeypatch openpyxl so images embed anyway -
 # the image bytes are written from the original file, never from PIL.
 try:
     import PIL  # noqa: F401
@@ -58,7 +58,7 @@ except ImportError:
 
 
 def _png_dimensions(src):
-    """(width, height) from a PNG's IHDR header — no Pillow needed. src is a path or bytes."""
+    """(width, height) from a PNG's IHDR header - no Pillow needed. src is a path or bytes."""
     import struct
     if hasattr(src, "read"):
         pos = src.tell(); head = src.read(24); src.seek(pos)
@@ -74,7 +74,7 @@ def _png_dimensions(src):
 
 class _HeaderImage:
     """Stand-in for a PIL image. openpyxl's Image class only touches .size, .format, a
-    readable .fp, and .close() — never any real decoding — so this is all it needs to embed
+    readable .fp, and .close() - never any real decoding - so this is all it needs to embed
     a PNG. The raw bytes are carried through unchanged."""
     def __init__(self, data):
         import io
@@ -462,7 +462,7 @@ def _find_field(fields, *needle_sets):
 
 
 def _distinct_sites(fields, rows):
-    """How many distinct sites the inventory actually names — None when it has no site
+    """How many distinct sites the inventory actually names - None when it has no site
     column at all (most VM exports don't). Drives whether the diagram draws remote sites."""
     key = _find_field(fields, ["site"], ["location"], ["datacenter"], ["data", "center"],
                       ["campus"], ["facility"])
@@ -512,7 +512,7 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     vpu_ref = rate_refs.get("vpu")
     vpus_ref = rate_refs.get("vpus")
     protos["O"] = (f"=ROUND(K{R}*N{R}*'Rate Card'!$C${ram_ref},2)" if ram_ref else 0)
-    # Compute optimization adjusts the OCPU/RAM QUANTITIES (columns J and K) — it must NOT
+    # Compute optimization adjusts the OCPU/RAM QUANTITIES (columns J and K) - it must NOT
     # also discount the price here, or it would double-count. Price flows straight from the
     # optimized sizing.
     protos["P"] = (f"=ROUND(J{R}*N{R}*'Rate Card'!$C${ocpu_ref},2)" if ocpu_ref else 0)
@@ -588,7 +588,7 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
                 ws[f"{c}{r}"] = Translator(
                     proto, origin=f"{c}{COMPUTE_FIRST_ROW}").translate_formula(f"{c}{r}")
         # The source workbook shipped its data rows COLLAPSED (hidden=True on all 1,061 of
-        # them), and the spec reproduces that faithfully — so every server we wrote was
+        # them), and the spec reproduces that faithfully - so every server we wrote was
         # invisible in the export and the sheet looked empty. Show the rows we populate.
         rd = ws.row_dimensions[r]
         rd.hidden = False
@@ -804,7 +804,7 @@ def _collect_rate_card_entries(shape, block_rate, vpu_rate, default_vpus, hours,
     # Every distinct mapped-service SKU that appears in the priced line items (covers
     # cloud-bill services: OIC, ADW, Load Balancer, WAF, DNS, Object Storage, etc.). A SKU
     # can appear on many lines (e.g. OIC's single priced anchor plus zero-cost consolidated
-    # rows) — keep the line with the highest unit rate so the rate card shows the real rate.
+    # rows) - keep the line with the highest unit rate so the rate card shows the real rate.
     core_skus = {e["sku"] for e in entries if e["sku"] and e["sku"] != "N/A"}
     info = {}
 
@@ -829,8 +829,19 @@ def _collect_rate_card_entries(shape, block_rate, vpu_rate, default_vpus, hours,
         try:
             import oci_catalog
             priced, _ = oci_catalog.price_extras(extra_services, hours)
-            for e in priced:
-                note_used(_clean(e.get("sku")), _clean(e.get("name")), _clean(e.get("unit")), None)
+            for service in priced:
+                service_lines = service.get("skus") or [{
+                    "sku": service.get("sku"),
+                    "desc": service.get("name"),
+                    "rate": service.get("rate"),
+                }]
+                for line in service_lines:
+                    note_used(
+                        _clean(line.get("sku")),
+                        _clean(line.get("desc")) or _clean(service.get("name")),
+                        _clean(service.get("unit")),
+                        line.get("rate"),
+                    )
         except Exception:
             pass
 
@@ -857,7 +868,7 @@ def _write_rate_card(ws, entries):
         for i in range(1, 7):
             ws.cell(r, i).value = None
 
-    ws.cell(4, 1).value = "RATE CARD — ONLY THE SKUS / RATES USED IN THIS BUILD"
+    ws.cell(4, 1).value = "RATE CARD - ONLY THE SKUS / RATES USED IN THIS BUILD"
     headers = ["SKU", "Input", "Value", "Unit", "Workbook Use / Note"]
     for i, (c, h) in enumerate(zip(cols, headers), 1):
         cell = ws.cell(RATE_CARD_HDR_ROW, i)
@@ -893,7 +904,7 @@ def _write_rate_card(ws, entries):
 def embed_architecture(ws_po, png_path, anchor_spec=None):
     """Drop this BOM's generated diagram into the Pricing Overview's architecture slot.
 
-    The template no longer carries an architecture picture — only its ANCHOR (the cell
+    The template no longer carries an architecture picture - only its ANCHOR (the cell
     footprint the picture occupied), kept in the spec as `architecture_anchor`. The image
     itself was the source workbook's own architecture drawing: 637 KB of another customer's
     diagram, decoded and inserted on every export just to be overwritten. Storing the
@@ -960,7 +971,7 @@ CUSTOMER_TOKEN = "{{CUSTOMER}}"
 def _apply_customer_name(wb, bom_name):
     """Swap the template's {{CUSTOMER}} token for the BOM name the user typed.
 
-    The template is deliberately customer-neutral — it must never ship one client's name
+    The template is deliberately customer-neutral - it must never ship one client's name
     (or servers, or numbers) inside another client's deliverable. Every customer-specific
     string in the spec is the token; this is the only place a real name enters the
     workbook. With no BOM name, it degrades to a generic "the customer".
@@ -986,7 +997,7 @@ def _apply_customer_name(wb, bom_name):
 def _set_toc(ws, bom_name):
     name = (bom_name or "").strip()
     title = name or "OCI Bill of Materials"
-    ws["A1"] = f"{title} — OCI BOM"
+    ws["A1"] = f"{title} - OCI BOM"
     ws["B5"] = title
     ws["B6"] = f"{title} OCI estimate"
     ws["B7"] = "OCI BOM + Architecture Generator"
@@ -1191,7 +1202,7 @@ def _cloud_effective_hours(pr):
 
 def _add_cloud_bill_services(wb, pricing):
     """Set the Pricing Overview lines from the app's EXACT per-row monthly so the whole
-    cloud bill ties out — every service, not just compute.
+    cloud bill ties out - every service, not just compute.
 
     Each bill line's monthly is allocated to one Overview line by category. Compute rows
     carry non-OCPU/RAM costs too (attached storage, data transfer...), so compute is split
@@ -1306,7 +1317,7 @@ def _add_product_group_topics(wb, pricing):
         ws2.column_dimensions["B"].width = 46
         ws2.column_dimensions["C"].width = 18
         ws2.column_dimensions["D"].width = 18
-        ws2["A1"] = f"{grp} — OCI mapped services"
+        ws2["A1"] = f"{grp} - OCI mapped services"
         ws2["A1"].font = Font(name="Calibri", size=14, bold=True)
         for c, txt in ((1, "AWS Service"), (2, "OCI Product"),
                        (3, "AWS Monthly"), (4, "OCI Monthly")):
@@ -1337,7 +1348,7 @@ def _add_product_group_topics(wb, pricing):
 def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, is_ax=False):
     """Relabel and fill the Compute-optimization block.
 
-    The optimization does NOT discount the price directly — it shrinks each VM's OCPU and
+    The optimization does NOT discount the price directly - it shrinks each VM's OCPU and
     RAM quantities (columns J/K) via ceil(value*(1-pct)), floored at 2, and the price then
     flows from the smaller sizing. B9 is a record of what was applied ("% approximation"),
     not a live multiplier. For Ax shapes the base %% deepens with the source instance's
@@ -1350,7 +1361,7 @@ def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, i
         ws_compute["B9"] = f"{lo}–{hi}%" if lo != hi else f"{hi}%"
         if is_ax:
             ws_compute["C9"] = (
-                f"% approximation — Ax base OCPU ~{int(round(ocpu_pct*100))}%, RAM ~"
+                f"% approximation - Ax base OCPU ~{int(round(ocpu_pct*100))}%, RAM ~"
                 f"{int(round(ram_pct*100))}%, doubled (×2) for each generation the source "
                 "instance is behind the newest OCI generation (1 gen = base, 2 gens = ×2, "
                 "3 gens = ×4, …), capped at 95%. Applied to the sizing in columns J and K "
@@ -1359,7 +1370,7 @@ def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, i
             )
         else:
             ws_compute["C9"] = (
-                f"% approximation — OCPU reduced ~{int(round(ocpu_pct*100))}%, RAM ~"
+                f"% approximation - OCPU reduced ~{int(round(ocpu_pct*100))}%, RAM ~"
                 f"{int(round(ram_pct*100))}%, applied to the sizing in columns J and K as "
                 "ceil(value × (1 − %)) with a floor of 2. Price follows the reduced "
                 "sizing; this % is not a direct price discount."
@@ -1367,7 +1378,7 @@ def _set_optimization(ws_compute, rightsized=False, ocpu_pct=0.0, ram_pct=0.0, i
     else:
         ws_compute["B9"] = "0%"
         ws_compute["C9"] = (
-            "% approximation — no compute optimization applied (Rightsize off, or the "
+            "% approximation - no compute optimization applied (Rightsize off, or the "
             "selected shape is not eligible). Sizing is carried over as-is."
         )
     ws_compute["F9"] = (
@@ -1835,7 +1846,7 @@ def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
     # Give SQL Server licensing a real home instead of a magic number: move it OUT of the
     # discountable service cells (Compute SQL from B11, Database SQL from B12) and fold it into
     # the 3rd-party licensing line (B17), relabeled "Windows + SQL". Every discount formula can
-    # then reference cells only — no embedded constants — and B17 (Windows + SQL) is never
+    # then reference cells only - no embedded constants - and B17 (Windows + SQL) is never
     # discounted. Only what's actually removed is folded in, so nothing is double-counted.
     moved = 0.0
     for ref, amt in (("B11", sqlc), ("B12", sqld)):
@@ -1852,7 +1863,7 @@ def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
     ws["B18"] = "=SUM(B9:B16)*(1-$B$7)+B17"
     ws["B19"] = "=B18*12"
 
-    # OCI Cost Profile (D:H, rows 10-13): mirror the same math — discount the service refs,
+    # OCI Cost Profile (D:H, rows 10-13): mirror the same math - discount the service refs,
     # leave the licensing ref ($B$17) at list. Cell references only. String substitution keeps
     # each formula's Consumption-Ramp range intact.
     subs = [
@@ -1996,7 +2007,7 @@ def _zero_unmodeled_sheets(wb):
         anx.cell(r, 9).value = 0
 
 
-# Sheets that always stay visible even when "empty" — they carry the deliverable's
+# Sheets that always stay visible even when "empty" - they carry the deliverable's
 # framing, rates, totals and ramp, so they're meaningful regardless of inventory.
 _CORE_SHEETS = {
     "Table of Contents", "Assumptions", "Rate Card", "Pricing Overview",
@@ -2083,8 +2094,8 @@ RAMP_MAX_MONTHS = 60
 # Rows here are the ON-PREM layout positions. In cloud-bill mode the baseline band is shifted
 # UP by po_delta rows (see _relayout_pricing_overview), so every row is reduced by po_delta.
 # `rows` can list two cells (Networking + Security/KMS are one ramp line). `discountable` marks
-# the lines the OCI discount (Pricing Overview $B$7) applies to — everything except 3rd-party
-# licensing — so the grid ties to Total Monthly = SUM(discountable)*(1-discount) + licensing.
+# the lines the OCI discount (Pricing Overview $B$7) applies to - everything except 3rd-party
+# licensing - so the grid ties to Total Monthly = SUM(discountable)*(1-discount) + licensing.
 _GRID_COMPONENTS = [
     ("Compute (OCPUs)", [13], True),
     ("RAM", [14], True),
@@ -2124,7 +2135,7 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
     from openpyxl.utils import get_column_letter
 
     # Windows licensing is ramped as its own component only when it's actually in the BOM.
-    # (Not discountable — the OCI discount never applies to 3rd-party licensing.)
+    # (Not discountable - the OCI discount never applies to 3rd-party licensing.)
     components = list(_GRID_COMPONENTS)
     if include_windows:
         components.append(("3rd Party Licensing", [21], False))
@@ -2367,7 +2378,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
 
         # Only use a REAL application column. If the inventory has none, leave Master
         # Application blank (and the Applications sheet empty) rather than duplicating
-        # the server name — no invented data. Cloud bills have no application grouping,
+        # the server name - no invented data. Cloud bills have no application grouping,
         # so never carry an "app" here (the inventory-key match can otherwise land on an
         # unrelated column like mapping confidence).
         app_name = "" if is_cloud_bill else rv("app")
@@ -2380,7 +2391,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             "virt": virt,
             "os_name": rv("os_name"),
             "os_family": rv("os_family"),
-            # Full precision — rounding here would put the workbook a few cents off the
+            # Full precision - rounding here would put the workbook a few cents off the
             # app's total across hundreds of rows, and the two must tie out exactly.
             "vcpu": float(vcpu) if vcpu else None,
             "memory_gb": float(specs.get("memoryGb") or 0) or None,
@@ -2393,7 +2404,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             # Per-row monthly hours from the data source (the app already priced each row at
             # its own hours). Falls back to the global hours only when the row has none.
             # Cloud-bill: use the EFFECTIVE hours implied by the bill's metered usage
-            # (OCPU-hours / OCPU) so OCPU x hours x rate reproduces the app's actual cost —
+            # (OCPU-hours / OCPU) so OCPU x hours x rate reproduces the app's actual cost -
             # a bill line can cover far more than one instance's 730 hours.
             "hours": (_cloud_effective_hours(pr) if is_cloud_bill
                       else float(pr.get("hoursPerMonth") or 0) or None),
@@ -2413,7 +2424,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             })
 
     # Cloud-bill: itemize the storage services on the Storage sheet (the compute-loop above
-    # skipped them). This is display only — the Storage line total is set on the Pricing
+    # skipped them). This is display only - the Storage line total is set on the Pricing
     # Overview by _add_cloud_bill_services, so there's no double count.
     if cloud_comparison:
         storage_rows = _cloud_storage_rows(cloud_comparison.get("pricing") or pricing)
@@ -2424,8 +2435,8 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         storage_rows.extend(_extra_storage_rows(_extra_priced))
     windows_monthly = sum(float(r.get("windowsLicenseMonthly") or 0)
                           for r in (pricing or {}).get("rows", []))
-    # Build the Rate Card FIRST — from only the SKUs/rates used in this build, sorted
-    # alphabetically — so the Compute/Storage formulas can reference the exact cells it
+    # Build the Rate Card FIRST - from only the SKUs/rates used in this build, sorted
+    # alphabetically - so the Compute/Storage formulas can reference the exact cells it
     # placed each rate on (transparency, and it ties out to the app).
     shape_label = (shape or {}).get("shortLabel") or (shape or {}).get("label") or ""
     rate_entries = _collect_rate_card_entries(
@@ -2485,7 +2496,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         _relayout_notes = _relayout_pricing_overview(wb["Pricing Overview"], delta=4)
         # OCI discount input (A7 label / B7 editable %). The Total Monthly applies it LIVE to
         # the discountable OCI services and leaves 3rd-party licensing (Windows + SQL Server) at
-        # list — matching the app's headline math. Everything downstream (Total Annual, the
+        # list - matching the app's headline math. Everything downstream (Total Annual, the
         # comparison blocks, chart) references B18/B19, so editing B7 re-flows the whole sheet.
         # SQL licensing is bundled in service categories, so split it by group (Compute -> B11,
         # Database/other -> B12) so the discount can exclude it exactly.
@@ -2518,19 +2529,29 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             source_cloud=_cc_pricing.get("sourceCloud") or "aws",
             estimated=bool(_cc_pricing.get("sourceCostEstimated")))
 
-    # Architecture diagram generated from THIS BOM (deterministic; no model call).
-    # If the diagram toolchain isn't available the export still succeeds — the template's
+    # Architecture diagram generated from THIS BOM. The optional AI plan is constrained
+    # metadata; graph geometry, quantities, rendering, and validation remain deterministic.
+    # If the diagram toolchain isn't available the export still succeeds - the template's
     # reference picture just stays in place.
     arch_png = None
     if include_diagram:
         try:
             import bom_diagram
-            _, arch_png = bom_diagram.build_architecture(
+            arch_drawio, arch_png = bom_diagram.build_architecture(
                 pricing, rows, keys, bom_name,
                 (shape or {}).get("shortLabel") or (shape or {}).get("label") or "",
                 sites=_distinct_sites(fields or [], rows or []),
                 extra_priced=_extra_priced, diagram_options=diagram_options or {})
             if arch_png:
+                import app as _app_qa
+                _architecture_qa = _app_qa.architecture_artifact_qa(
+                    arch_drawio, arch_png
+                )
+                if not _architecture_qa["passed"]:
+                    raise ValueError(
+                        "Architecture output failed validation: "
+                        + " ".join(_architecture_qa["issues"])
+                    )
                 # Drop the diagram to the BOTTOM of the sheet, below the comparison blocks.
                 # The spec anchor sits at Excel rows 29-72; shift it down so it starts at
                 # ~row 52 (2 rows below the comparison area) and keeps its 43-row height.
@@ -2552,7 +2573,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
                 if cloud_comparison and _relayout_notes and _diag_bottom:
                     _place_overview_notes(wb["Pricing Overview"], _diag_bottom + 1, _relayout_notes)
         except Exception:
-            # Don't swallow the reason silently — a missing diagram was undebuggable.
+            # Don't swallow the reason silently - a missing diagram was undebuggable.
             import traceback
             traceback.print_exc()
             arch_png = None
@@ -2566,7 +2587,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         for c in range(4, 17):
             ws_po.cell(27, c).value = None
             ws_po.cell(27, c).style = "Normal"
-        # No diagram to anchor to — still place the re-homed footnotes just below the
+        # No diagram to anchor to - still place the re-homed footnotes just below the
         # comparison blocks so they aren't lost.
         if cloud_comparison and _relayout_notes:
             _place_overview_notes(ws_po, 52, _relayout_notes)
@@ -2610,7 +2631,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         traceback.print_exc()
 
     # Embed the app workflow (hidden _workflow sheet) so this Full BOM can be re-imported
-    # via "Load previous BOM" — same as the Quick/comparison export.
+    # via "Load previous BOM" - same as the Quick/comparison export.
     if workflow_json:
         try:
             import bom_export

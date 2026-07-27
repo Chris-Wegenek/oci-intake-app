@@ -10,6 +10,8 @@ const state = {
     amd: "e6-standard-ax",
   },
   pricing: null,
+  uploadReady: false,
+  workflowMaxUnlockedStep: 0,
   intakeMode: "on_prem",
   providerHint: "auto",
   uploadMetadata: {},
@@ -18,12 +20,10 @@ const state = {
   hideWindowsPricing: false,
   hideSqlPricing: false,
   cpuUnit: "auto",
+  // Legacy payload fields remain fixed so server-side fallbacks use the standard month.
   hoursPerMonth: 730,
-  // True once the user edits the hours field — then it overrides any per-row hours from
-  // the data source. Off by default so the data source's own hours are used.
   hoursOverride: false,
   bomName: "",
-  ociDiscount: 0,
   oicMessagePacks: 1,
   // Services the user added from the "Add OCI services" panel. Each: {id, catalogId, name,
   // group, sku, unit, basis, values, monthly}. Included in totals and both BOM exports.
@@ -119,11 +119,13 @@ const PROCESSOR_VENDORS = [
 let activeFill = null;
 
 const PREVIEW_FIELD_RULES = [
-  { label: "Application Name", contains: ["application name"] },
-  { label: "Environment", contains: ["environment"] },
-  { label: "OCPUs", containsAny: [["ocpus per server"], ["ocpu"], ["number of cpu cores per server"], ["number of cpus"], ["vcpu"], ["cpu cores"], ["cores"]] },
-  { label: "RAM (GB)", containsAny: [["memory per server"], ["memory"], ["ram"]] },
-  { label: "Storage (GB)", containsAny: [["local storage"], ["shared storage"], ["total allocated storage"], ["database size"], ["total storage"], ["storage gb"], ["disk gb"]] },
+  { key: "application_name", label: "Application Name", contains: ["application name"], required: true },
+  { key: "machine_name", label: "Machine Name", containsAny: [["machine name"], ["server name"], ["host name"], ["hostname"], ["vm name"], ["instance name"]], required: true },
+  { label: "Environment", contains: ["environment"], required: true },
+  { label: "OCPUs", containsAny: [["ocpus per server"], ["ocpu"], ["number of cpu cores per server"], ["number of cpus"], ["vcpu"], ["cpu cores"], ["cores"]], required: true },
+  { label: "RAM (GB)", containsAny: [["memory per server"], ["memory"], ["ram"]], required: true },
+  { label: "Storage (GB)", containsAny: [["local storage"], ["shared storage"], ["total allocated storage"], ["database size"], ["total storage"], ["storage gb"], ["disk gb"]], required: true },
+  { label: "Hours Running", containsAny: [["hours running"], ["hours per month"], ["monthly hours"], ["running hours"], ["uptime hours"], ["hours"]], required: true },
 ];
 
 const FULL_SERVICE_PREVIEW_FIELD_RULES = [
@@ -152,8 +154,14 @@ const CLOUD_BILL_PREVIEW_FIELD_RULES = [
   { label: "Confidence", containsAny: [["mapping confidence"], ["confidence"], ["review status"]] },
 ];
 
-const MANUAL_REVIEW_FIELDS = [
+const HOURS_RUNNING_FIELD = { key: "hours_running", label: "Hours Running" };
+const REVIEW_IDENTITY_FIELDS = [
   { key: "application_name", label: "Application Name" },
+  { key: "machine_name", label: "Machine Name" },
+];
+
+const MANUAL_REVIEW_FIELDS = [
+  ...REVIEW_IDENTITY_FIELDS,
   { key: "environment", label: "Environment" },
   {
     key: "application_details_number_of_cpu_cores_per_server",
@@ -161,9 +169,14 @@ const MANUAL_REVIEW_FIELDS = [
   },
   { key: "application_details_memory_per_server_gb", label: "Application Details: Memory per server (GB)" },
   { key: "application_details_local_storage_gb", label: "Application Details: Local Storage (GB)" },
+  HOURS_RUNNING_FIELD,
 ];
 
 const els = {
+  headerSettings: document.querySelector("#headerSettings"),
+  settingsToggle: document.querySelector("#settingsToggle"),
+  settingsMenu: document.querySelector("#settingsMenu"),
+  darkModeToggle: document.querySelector("#darkModeToggle"),
   fileInput: document.querySelector("#fileInput"),
   dropZone: document.querySelector("#dropZone"),
   modeOnPrem: document.querySelector("#modeOnPrem"),
@@ -183,6 +196,7 @@ const els = {
   shapePage: document.querySelector("#shapePage"),
   networkingPage: document.querySelector("#networkingPage"),
   architecturePage: document.querySelector("#architecturePage"),
+  deliverablesPage: document.querySelector("#deliverablesPage"),
   reviewPanel: document.querySelector("#reviewPanel"),
   resultsPage: document.querySelector("#resultsPage"),
   otherCloudsPage: document.querySelector("#otherCloudsPage"),
@@ -199,9 +213,6 @@ const els = {
   cancelAddColumn: document.querySelector("#cancelAddColumn"),
   missingOnlyToggle: document.querySelector("#missingOnlyToggle"),
   missingOnlySummary: document.querySelector("#missingOnlySummary"),
-  tableEditPrompt: document.querySelector("#tableEditPrompt"),
-  applyTableEdit: document.querySelector("#applyTableEdit"),
-  tableEditStatus: document.querySelector("#tableEditStatus"),
   priceButton: document.querySelector("#priceButton"),
   priceShapeButton: document.querySelector("#priceShapeButton"),
   hideGpuToggle: document.querySelector("#hideGpuToggle"),
@@ -210,11 +221,10 @@ const els = {
   cpuUnitSwitches: document.querySelectorAll(".cpuunit-switch"),
   cpuUnitDetected: document.getElementById("cpuUnitDetected"),
   cpuUnitRow: document.getElementById("cpuUnitRow"),
-  hoursPerMonth: document.querySelector("#hoursPerMonth"),
-  exportExcel: document.querySelector("#exportExcel"),
   exportFullBom: document.querySelector("#exportFullBom"),
   downloadDiagram: document.querySelector("#downloadDiagram"),
-  exportJson: document.querySelector("#exportJson"),
+  deliverablesFullBom: document.querySelector("#deliverablesFullBom"),
+  deliverablesDiagram: document.querySelector("#deliverablesDiagram"),
   loadWorkflow: document.querySelector("#loadWorkflow"),
   loadWorkflowFile: document.querySelector("#loadWorkflowFile"),
   loadPrevBom: document.querySelector("#loadPrevBom"),
@@ -223,14 +233,12 @@ const els = {
   convertBomFile: document.querySelector("#convertBomFile"),
   convertBomStatus: document.querySelector("#convertBomStatus"),
   bomName: document.querySelector("#bomName"),
-  ociDiscount: document.querySelector("#ociDiscount"),
   oicMessagePacks: document.querySelector("#oicMessagePacks"),
   oicMessagePacksControl: document.querySelector("#oicMessagePacksControl"),
-  addServicesToggle: document.querySelector("#addServicesToggle"),
-  addServicesBody: document.querySelector("#addServicesBody"),
   serviceSearch: document.querySelector("#serviceSearch"),
   serviceChips: document.querySelector("#serviceChips"),
   serviceResults: document.querySelector("#serviceResults"),
+  serviceCartReview: document.querySelector("#serviceCartReview"),
   serviceCartList: document.querySelector("#serviceCartList"),
   serviceCartCount: document.querySelector("#serviceCartCount"),
   serviceCartTotal: document.querySelector("#serviceCartTotal"),
@@ -241,11 +249,14 @@ const els = {
   selectedDocClear: document.querySelector("#selectedDocClear"),
   inventoryNotice: document.querySelector("#inventoryNotice"),
   switchToOnPrem: document.querySelector("#switchToOnPrem"),
+  continueToReviewFromUpload: document.querySelector("#continueToReviewFromUpload"),
   backToUploadFromReview: document.querySelector("#backToUploadFromReview"),
   backToReviewFromShape: document.querySelector("#backToReviewFromShape"),
   backToShapeFromNetworking: document.querySelector("#backToShapeFromNetworking"),
   continueToPriceFromServices: document.querySelector("#continueToPriceFromServices"),
   backToCompareFromArchitecture: document.querySelector("#backToCompareFromArchitecture"),
+  continueToDeliverables: document.querySelector("#continueToDeliverables"),
+  backToArchitectureFromDeliverables: document.querySelector("#backToArchitectureFromDeliverables"),
   backToServicesFromPrice: document.querySelector("#backToServicesFromPrice"),
   continueToOtherClouds: document.querySelector("#continueToOtherClouds"),
   backToPriceFromOtherClouds: document.querySelector("#backToPriceFromOtherClouds"),
@@ -256,6 +267,10 @@ const els = {
   architectureShape: document.querySelector("#architectureShape"),
   otherCloudsShape: document.querySelector("#otherCloudsShape"),
   architectureExportStatus: document.querySelector("#architectureExportStatus"),
+  deliverablesBomStatus: document.querySelector("#deliverablesBomStatus"),
+  deliverablesArchitectureStatus: document.querySelector("#deliverablesArchitectureStatus"),
+  deliverablesBomFilename: document.querySelector("#deliverablesBomFilename"),
+  deliverablesArchitectureFilename: document.querySelector("#deliverablesArchitectureFilename"),
   processorPicker: document.querySelector("#processorPicker"),
   shapeDropdown: document.querySelector("#shapeDropdown"),
   shapeVendorTitle: document.querySelector("#shapeVendorTitle"),
@@ -312,24 +327,47 @@ const els = {
   steps: document.querySelectorAll(".step"),
 };
 
-// "Add OCI services to the BOM" expand/collapse. Delegated on document and re-querying
-// the nodes on every click, so it works regardless of load order or any later re-render.
-document.addEventListener("click", (event) => {
-  const toggle = event.target.closest("#addServicesToggle");
-  if (!toggle) return;
-  const body = document.querySelector("#addServicesBody");
-  if (!body) return;
-  const willOpen = body.hasAttribute("hidden");
-  body.toggleAttribute("hidden", !willOpen);
-  toggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
-  toggle.classList.toggle("is-open", willOpen);
-  const icon = toggle.querySelector(".add-services-toggle-icon");
-  if (icon) icon.textContent = willOpen ? "－" : "＋";  // − when open, ＋ when closed
-  if (willOpen && typeof fetchCatalog === "function"
-      && !(state.catalog && state.catalog.groups && state.catalog.groups.length)) {
-    fetchCatalog();
+const THEME_STORAGE_KEY = "oci-intake-theme";
+
+function applyTheme(theme, persist = true) {
+  const nextTheme = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = nextTheme;
+  if (els.darkModeToggle) els.darkModeToggle.checked = nextTheme === "dark";
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    } catch (error) {
+      // The theme still applies for this session when storage is unavailable.
+    }
   }
-});
+}
+
+function setSettingsOpen(open) {
+  if (!els.settingsMenu || !els.settingsToggle) return;
+  els.settingsMenu.hidden = !open;
+  els.settingsToggle.setAttribute("aria-expanded", String(open));
+}
+
+(function wireSettingsMenu() {
+  if (!els.settingsToggle || !els.settingsMenu) return;
+  applyTheme(document.documentElement.dataset.theme, false);
+
+  els.settingsToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setSettingsOpen(els.settingsMenu.hidden);
+  });
+  els.darkModeToggle?.addEventListener("change", (event) => {
+    applyTheme(event.target.checked ? "dark" : "light");
+  });
+  document.addEventListener("click", (event) => {
+    if (!els.headerSettings?.contains(event.target)) setSettingsOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || els.settingsMenu.hidden) return;
+    setSettingsOpen(false);
+    els.settingsToggle.focus();
+  });
+})();
 
 // Diagram & DR options: region picks + AD split. The primary region's AD count enables
 // the "split across ADs" toggle; a 1-AD region can't split.
@@ -533,16 +571,137 @@ function rowSourceName(row) {
   return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
 }
 
+const WORKFLOW_STEP_ORDER = [
+  "upload",
+  "review",
+  "shape",
+  "networking",
+  "price",
+  "other-clouds",
+  "architecture",
+  "deliverables",
+];
+
+const WORKFLOW_STEP_LABELS = {
+  upload: "Upload",
+  review: "Review",
+  shape: "Shape",
+  networking: "Services",
+  price: "Price",
+  "other-clouds": "Compare",
+  architecture: "Architecture",
+  deliverables: "Deliverables",
+};
+
+function workflowStepIndex(step) {
+  return WORKFLOW_STEP_ORDER.indexOf(step);
+}
+
+function isWorkflowStepUnlocked(step) {
+  const index = workflowStepIndex(step);
+  return index >= 0 && index <= Number(state.workflowMaxUnlockedStep || 0);
+}
+
+function setWorkflowButtonLock(button, locked, message = "") {
+  if (!button) return;
+  button.disabled = Boolean(locked);
+  if (locked && message) {
+    button.dataset.workflowLock = "true";
+    button.title = message;
+  } else if (button.dataset.workflowLock === "true") {
+    delete button.dataset.workflowLock;
+    button.removeAttribute("title");
+  }
+}
+
+function syncWorkflowAvailability() {
+  const highest = Math.max(
+    0,
+    Math.min(WORKFLOW_STEP_ORDER.length - 1, Number(state.workflowMaxUnlockedStep) || 0),
+  );
+  state.workflowMaxUnlockedStep = highest;
+
+  els.steps.forEach((item) => {
+    const step = item.dataset.step;
+    const locked = workflowStepIndex(step) > highest;
+    item.disabled = locked;
+    item.classList.toggle("is-locked", locked);
+    if (locked) {
+      const previous = WORKFLOW_STEP_ORDER[workflowStepIndex(step) - 1];
+      item.title = `Complete ${WORKFLOW_STEP_LABELS[previous]} to unlock ${WORKFLOW_STEP_LABELS[step]}.`;
+    } else {
+      item.removeAttribute("title");
+    }
+  });
+
+  const hasUploadedRows = state.uploadReady && state.rows.length > 0;
+  const hasApprovedRows = state.rows.some((row) => row.__approved !== false);
+  setWorkflowButtonLock(
+    els.continueToReviewFromUpload,
+    !hasUploadedRows,
+    "Choose and finish parsing a spreadsheet first.",
+  );
+  setWorkflowButtonLock(
+    els.priceButton,
+    !isWorkflowStepUnlocked("review") || !hasApprovedRows,
+    "Keep at least one reviewed row approved to continue.",
+  );
+  setWorkflowButtonLock(
+    els.priceShapeButton,
+    !isWorkflowStepUnlocked("shape") || !state.selectedShape || !hasApprovedRows,
+    "Choose an OCI shape to continue.",
+  );
+  setWorkflowButtonLock(
+    els.continueToPriceFromServices,
+    !isWorkflowStepUnlocked("networking") || !state.pricing,
+    "Prepare workload pricing from Shape first.",
+  );
+  setWorkflowButtonLock(
+    els.continueToOtherClouds,
+    !isWorkflowStepUnlocked("price") || !state.pricing,
+    "Prepare the OCI estimate first.",
+  );
+  setWorkflowButtonLock(
+    els.continueToArchitectureFromOtherClouds,
+    !isWorkflowStepUnlocked("other-clouds") || !state.pricing,
+    "View the cloud comparison first.",
+  );
+  setWorkflowButtonLock(
+    els.continueToDeliverables,
+    !isWorkflowStepUnlocked("architecture") || !state.pricing,
+    "Configure the architecture first.",
+  );
+}
+
+function unlockWorkflowStep(step) {
+  const index = workflowStepIndex(step);
+  if (index < 0) return;
+  state.workflowMaxUnlockedStep = Math.max(Number(state.workflowMaxUnlockedStep) || 0, index);
+  syncWorkflowAvailability();
+}
+
+function resetWorkflowProgress() {
+  state.uploadReady = false;
+  state.workflowMaxUnlockedStep = 0;
+  syncWorkflowAvailability();
+}
+
 function setStep(step) {
   els.steps.forEach((item) => {
     const isActive = item.dataset.step === step;
     item.classList.toggle("is-active", isActive);
     if (isActive) {
       item.setAttribute("aria-current", "step");
+      const nav = item.parentElement;
+      if (nav && nav.scrollWidth > nav.clientWidth) {
+        const left = Math.max(0, item.offsetLeft + item.offsetWidth - nav.clientWidth);
+        nav.scrollTo({ left, behavior: "smooth" });
+      }
     } else {
       item.removeAttribute("aria-current");
     }
   });
+  syncWorkflowAvailability();
 }
 
 function setPricePageStatus(message = "", tone = "") {
@@ -645,6 +804,159 @@ function uniqueFieldKey(label) {
     index += 1;
   }
   return key;
+}
+
+function isHoursRunningField(field) {
+  const label = normalizeText(field?.label || field?.sourceColumn || "");
+  return label === "hours"
+    || label.includes("hours running")
+    || label.includes("hours per month")
+    || label.includes("monthly hours")
+    || label.includes("running hours")
+    || label.includes("uptime hours");
+}
+
+function ensureHoursRunningReviewField() {
+  if (isCloudBillMode()) return;
+  let field = state.fields.find(isHoursRunningField);
+  if (!field) {
+    const key = state.fields.some((item) => item.key === HOURS_RUNNING_FIELD.key)
+      ? uniqueFieldKey(HOURS_RUNNING_FIELD.label)
+      : HOURS_RUNNING_FIELD.key;
+    field = {
+      ...HOURS_RUNNING_FIELD,
+      key,
+      sourceColumn: null,
+      important: true,
+      manual: true,
+    };
+    state.fields.push(field);
+  }
+  state.rows.forEach((row) => {
+    if (!hasCellContent(row[field.key])) row[field.key] = 730;
+  });
+}
+
+function isMachineIdentityLabel(value) {
+  const label = normalizeText(value);
+  return [
+    "machine name",
+    "machine id",
+    "server name",
+    "hostname",
+    "host name",
+    "vm name",
+    "virtual machine name",
+    "instance name",
+    "asset name",
+  ].some((term) => label.includes(term));
+}
+
+function isApplicationIdentityLabel(value) {
+  const label = normalizeText(value);
+  return ["application name", "application", "app name", "app"].includes(label);
+}
+
+function ensureIdentityReviewFields() {
+  if (isCloudBillMode()) return;
+  let applicationField = state.fields.find((field) => field?.key === "application_name");
+  let machineField = state.fields.find((field) => field?.key === "machine_name");
+  const applicationSourceFields = state.fields.filter(
+    (field) => field?.key !== "application_name"
+      && isApplicationIdentityLabel(field?.sourceHeader || field?.label),
+  );
+  const machineSourceFields = state.fields.filter(
+    (field) => field?.key !== "machine_name" && isMachineIdentityLabel(field?.sourceHeader || field?.label),
+  );
+
+  // Older saved workflows mapped server/host columns into application_name.
+  // Move those values into the new machine column when the source header is unambiguous.
+  if (applicationField && isMachineIdentityLabel(applicationField.sourceHeader || applicationField.label)) {
+    if (!machineField) {
+      machineField = {
+        ...REVIEW_IDENTITY_FIELDS[1],
+        sourceColumn: applicationField.sourceColumn || null,
+        sourceHeader: applicationField.sourceHeader || null,
+        important: true,
+        manual: true,
+      };
+      state.fields.push(machineField);
+    }
+    state.rows.forEach((row) => {
+      if (!hasCellContent(row[machineField.key]) && hasCellContent(row[applicationField.key])) {
+        row[machineField.key] = row[applicationField.key];
+        row[applicationField.key] = "";
+      }
+    });
+    applicationField.sourceColumn = null;
+    applicationField.sourceHeader = null;
+  }
+
+  REVIEW_IDENTITY_FIELDS.forEach((definition) => {
+    let field = state.fields.find((item) => item?.key === definition.key);
+    if (!field) {
+      const sourceFields = definition.key === "machine_name"
+        ? machineSourceFields
+        : applicationSourceFields;
+      const sourceField = sourceFields[0] || null;
+      field = {
+        ...definition,
+        sourceColumn: sourceField?.sourceColumn || null,
+        sourceHeader: sourceField?.sourceHeader || sourceField?.label || null,
+        important: true,
+        manual: true,
+      };
+      state.fields.push(field);
+    }
+    field.requiredIdentity = true;
+    state.rows.forEach((row) => {
+      if (!(field.key in row)) row[field.key] = "";
+    });
+  });
+
+  applicationField = state.fields.find((field) => field?.key === "application_name");
+  if (applicationField && applicationSourceFields.length) {
+    state.rows.forEach((row) => {
+      if (hasCellContent(row[applicationField.key])) return;
+      const sourceField = applicationSourceFields.find((field) => hasCellContent(row[field.key]));
+      if (sourceField) row[applicationField.key] = row[sourceField.key];
+    });
+  }
+
+  machineField = state.fields.find((field) => field?.key === "machine_name");
+  if (machineField && machineSourceFields.length) {
+    state.rows.forEach((row) => {
+      if (hasCellContent(row[machineField.key])) return;
+      const sourceField = machineSourceFields.find((field) => hasCellContent(row[field.key]));
+      if (sourceField) row[machineField.key] = row[sourceField.key];
+    });
+  }
+}
+
+function ensureFixedReviewContractFields() {
+  if (isCloudBillMode()) return;
+  ensureIdentityReviewFields();
+  ensureHoursRunningReviewField();
+  PREVIEW_FIELD_RULES.forEach((rule, index) => {
+    if (findField(rule)) return;
+    const fallback = MANUAL_REVIEW_FIELDS[index];
+    if (!fallback) return;
+    const key = state.fields.some((field) => field?.key === fallback.key)
+      ? uniqueFieldKey(fallback.label)
+      : fallback.key;
+    const field = {
+      ...fallback,
+      key,
+      sourceColumn: null,
+      sourceHeader: null,
+      important: true,
+      manual: true,
+    };
+    state.fields.push(field);
+    state.rows.forEach((row) => {
+      row[key] = isHoursRunningField(field) ? 730 : "";
+    });
+  });
 }
 
 function isManualField(field) {
@@ -776,12 +1088,12 @@ function isCloudBillMode() {
 
 function providerLabel(value = state.providerHint) {
   const labels = {
-    auto: "Auto-detect",
+    auto: "Auto-Detect",
     aws: "AWS",
     azure: "Azure",
     gcp: "GCP",
   };
-  return labels[value] || "Auto-detect";
+  return labels[value] || "Auto-Detect";
 }
 
 // Display name for the bill's source cloud ("AWS"/"Azure"/"GCP", else "Source").
@@ -797,20 +1109,17 @@ function sourceCostIsEstimated() {
 
 // Label for any "<cloud> cost" / "current cost" spot: append "(App Estimate)" when the figure
 // was reconstructed by the app because the uploaded bill carried no pricing.
-function sourceCostLabel(base = "Source cost") {
-  return sourceCostIsEstimated() ? `${cloudDisplayName()} cost (App Estimate)` : base;
+function sourceCostLabel(base = "Source Cost") {
+  return sourceCostIsEstimated() ? `${cloudDisplayName()} Cost (App Estimate)` : base;
 }
 
 function pricingActionLabel(action = "price") {
-  if (action === "rerun") {
-    return state.openaiApiConnected ? "Reprice on OCI" : "Reprice estimate";
-  }
-  return state.openaiApiConnected ? "Price on OCI" : "Price estimate";
+  return action === "rerun" ? "Reprice Estimate" : "Price Estimate";
 }
 
 function syncApiUi() {
   if (els.priceShapeButton && !els.priceShapeButton.disabled) {
-    els.priceShapeButton.textContent = "Continue to services";
+    els.priceShapeButton.textContent = "Continue to Services";
   }
   if (els.rerunPricing && !els.rerunPricing.disabled) {
     els.rerunPricing.textContent = pricingActionLabel("rerun");
@@ -818,7 +1127,7 @@ function syncApiUi() {
   syncModeUi();
   if (!state.rows.length && els.engineStatus) {
     els.engineStatus.textContent = state.openaiApiConnected
-      ? `OpenAI enabled: ${state.openaiModel || "configured model"}`
+      ? `OpenAI ready for uploads, unresolved bill mappings, and architecture: ${state.openaiModel || "configured model"}`
       : state.openaiApiEnabled
         ? "OpenAI API key missing"
         : "OpenAI temporarily disconnected";
@@ -828,7 +1137,15 @@ function syncApiUi() {
 function processorLogo(key) {
   if (key === "amd") return `<span class="processor-logo amd-logo"><span>AMD</span><i aria-hidden="true"></i></span>`;
   if (key === "intel") return `<span class="processor-logo intel-logo"><span>intel</span></span>`;
-  if (key === "arm") return `<span class="processor-logo arm-logo"><span>Ampere</span></span>`;
+  if (key === "arm") {
+    return `
+      <span class="processor-logo arm-logo">
+        <span class="arm-logo-frame">
+          <img src="/static/assets/ampere-logo.png" alt="Ampere" />
+        </span>
+      </span>
+    `;
+  }
   return "";
 }
 
@@ -867,7 +1184,7 @@ function renderShapeVendorMeta() {
   const shapes = shapesForVendor(vendor.key);
   const shapeCount = shapes.length;
   if (els.shapeVendorTitle) {
-    els.shapeVendorTitle.textContent = `${vendor.label} shapes`;
+    els.shapeVendorTitle.textContent = `${vendor.label} Shapes`;
   }
   if (els.shapeVendorDescription) {
     els.shapeVendorDescription.textContent = vendor.description;
@@ -904,6 +1221,7 @@ function setShape(shapeKey) {
   state.lastShapeByVendor[state.selectedVendor] = shape.key;
   state.rateCard = shape.rateCard || [];
   state.pricing = null;
+  syncWorkflowAvailability();
   renderRateCard();
   renderProcessorPicker();
   renderShapeChoices();
@@ -916,7 +1234,25 @@ async function fetchJson(url, options = {}, timeoutMs = 60000) {
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
-    const payload = await response.json();
+    const responseText = await response.text();
+    let payload;
+    try {
+      payload = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      const tooLarge =
+        response.status === 413
+        || /request entity too large|payload too large/i.test(responseText);
+      if (tooLarge) {
+        throw new Error(
+          "This file is too large for the upload gateway. Large CSV and TSV bills are compressed automatically; refresh the app and try again.",
+        );
+      }
+      throw new Error(
+        response.ok
+          ? "The server returned an unreadable response."
+          : `The server could not complete the request (${response.status}).`,
+      );
+    }
     return { response, payload };
   } catch (error) {
     if (error.name === "AbortError") {
@@ -929,6 +1265,10 @@ async function fetchJson(url, options = {}, timeoutMs = 60000) {
 }
 
 function findField(rule) {
+  if (rule.key) {
+    const keyedMatch = state.fields.find((field) => field?.key === rule.key);
+    if (keyedMatch) return { ...keyedMatch, label: rule.label };
+  }
   const matchGroups = (rule.containsAny || [rule.contains || []]).map((group) => group.map(normalizeText));
   const section = normalizeText(rule.section);
   const match = state.fields.find((field) => {
@@ -940,6 +1280,7 @@ function findField(rule) {
 }
 
 function previewFields() {
+  ensureFixedReviewContractFields();
   const rules = isCloudBillMode()
     ? CLOUD_BILL_PREVIEW_FIELD_RULES
     : state.fullServiceBeta
@@ -949,7 +1290,7 @@ function previewFields() {
   const seen = new Set();
   rules.forEach((rule) => {
     const field = findField(rule);
-    if (field && !seen.has(field.key) && shouldShowField(field)) {
+    if (field && !seen.has(field.key) && (rule.required || shouldShowField(field))) {
       fields.push(field);
       seen.add(field.key);
     }
@@ -974,16 +1315,16 @@ function syncModeUi() {
     els.providerHint.value = state.providerHint;
   }
   // Cloud bill accepts several formats; Chrome can grey out CSV/TSV even when listed,
-  // so don't filter at all here — the backend validates the file type on upload.
+  // so don't filter at all here - the backend validates the file type on upload.
   els.fileInput.accept = cloudBill ? "" : ".xlsx,.xls";
-  els.modeEyebrow.textContent = cloudBill ? "Cloud bill" : "On-prem inventory";
-  els.uploadHeading.textContent = cloudBill ? "Upload cloud bill" : "Upload inventory";
+  els.modeEyebrow.textContent = cloudBill ? "Cloud Bill" : "On-Prem Inventory";
+  els.uploadHeading.textContent = cloudBill ? "Upload Cloud Bill" : "Upload Inventory";
   els.uploadDescription.textContent = cloudBill
     ? "Upload an AWS, Azure, or GCP bill export. PDF invoices and CSV, TSV, or Excel exports are mapped to OCI-equivalent services and meters."
     : state.openaiApiConnected
     ? "Drop an Excel workbook here. OpenAI can inspect the workbook, choose the inventory table, and normalize server/application fields for review."
     : "Drop an Excel workbook here. The local parser will choose the inventory table and normalize CPU, RAM, storage, environment, and application fields for review.";
-  els.dropZone.querySelector("strong").textContent = cloudBill ? "Choose bill export" : "Choose spreadsheet";
+  els.dropZone.querySelector("strong").textContent = cloudBill ? "Choose Bill Export" : "Choose Spreadsheet";
   els.dropZoneHint.textContent = cloudBill
     ? "or drag a PDF, CSV, TSV, or Excel bill export onto this upload area"
     : "or drag the workbook onto this upload area";
@@ -992,9 +1333,10 @@ function syncModeUi() {
 function setIntakeMode(mode) {
   state.intakeMode = mode === "cloud_bill" ? "cloud_bill" : "on_prem";
   state.providerHint = state.intakeMode === "cloud_bill" ? state.providerHint : "auto";
-  clearIntakeStatuses();   // switching intake path — drop stale load/convert banners
+  clearIntakeStatuses();   // switching intake path - drop stale load/convert banners
   syncModeUi();
   state.pricing = null;
+  syncWorkflowAvailability();
   if (state.rows.length) {
     renderTable();
     renderShapeDetail();
@@ -1024,9 +1366,12 @@ function renderRateCard() {
 }
 
 function syncIntakeLayout() {
-  const hasReviewData = state.rows.length > 0;
-  els.intakePage.classList.toggle("has-review", hasReviewData);
-  els.pricingRail.classList.toggle("is-hidden", !hasReviewData);
+  // Upload and Review are editing surfaces. SKU and pricing results belong on the
+  // later workflow pages, so keep the legacy rail hidden and give the table full width.
+  els.intakePage.classList.remove("has-review");
+  els.pricingRail.classList.add("is-hidden");
+  els.pricingRail.hidden = true;
+  els.pricingRail.setAttribute("aria-hidden", "true");
 }
 
 function setUploadLoading(isLoading, fileName = "") {
@@ -1042,27 +1387,13 @@ function setUploadLoading(isLoading, fileName = "") {
         : `Parsing ${fileName}, finding the inventory table, and cleaning CPU, RAM, storage, OS, and environment fields.`
       : "Reading workbook sheets and normalizing server inventory fields.";
   }
-}
-
-function setTableEditStatus(message = "", tone = "") {
-  if (!els.tableEditStatus) return;
-  els.tableEditStatus.textContent = message;
-  els.tableEditStatus.className = "table-assistant-status";
-  if (tone) {
-    els.tableEditStatus.classList.add(`is-${tone}`);
-  }
-}
-
-function setTableEditLoading(isLoading) {
-  if (!els.applyTableEdit || !els.tableEditPrompt) return;
-  els.applyTableEdit.disabled = isLoading;
-  els.tableEditPrompt.disabled = isLoading;
-  els.applyTableEdit.textContent = isLoading ? "Applying..." : "Apply changes";
+  syncWorkflowAvailability();
 }
 
 function resetPricingAfterTableChange(statusText = "Table updated") {
   state.pricing = null;
   state.ramp.signature = "";
+  syncWorkflowAvailability();
   els.engineStatus.textContent = statusText;
   els.pricingSummary.className = "empty-state";
   els.pricingSummary.textContent = state.fullServiceBeta
@@ -1156,6 +1487,7 @@ function renderStats(meta = {}) {
   els.approvedCount.textContent = approved;
   els.sheetName.textContent = meta.sheetName || els.sheetName.textContent || "-";
   syncMissingFilterUi(fields);
+  syncWorkflowAvailability();
 }
 
 // CPU-unit interpretation. The parser stores the CPU column already halved
@@ -1202,9 +1534,7 @@ const DATA_CHECK_CONSEQUENCE = {
   os: "no OS split and no Windows licensing line",
   server: "Compute sheet rows will be unnamed",
   environment: "the Environment column stays blank",
-  tier: "the Tier column stays blank; spokes can't be split by tier",
   application: "the Applications sheet and Master Application column stay empty",
-  site: "no site-to-region topology diagram is drawn",
 };
 
 function renderDataCheck(check) {
@@ -1221,10 +1551,10 @@ function renderDataCheck(check) {
     const li = document.createElement("li");
     li.className = s.present ? "dc-ok" : "dc-missing";
     const detail = s.present
-      ? `${s.column} — ${formatNumber(s.populated)} of ${formatNumber(s.total)} rows`
-      : `not in this file — ${DATA_CHECK_CONSEQUENCE[s.key] || "left blank"}`;
+      ? `${s.column} - ${formatNumber(s.populated)} of ${formatNumber(s.total)} rows`
+      : `not in this file - ${DATA_CHECK_CONSEQUENCE[s.key] || "left blank"}`;
     li.innerHTML =
-      `<span class="dc-mark" aria-hidden="true">${s.present ? "✓" : "—"}</span>` +
+      `<span class="dc-mark" aria-hidden="true">${s.present ? "✓" : "-"}</span>` +
       `<span class="dc-label">${escapeHtml(s.label)}</span>` +
       `<span class="dc-detail">${escapeHtml(detail)}</span>`;
     list.appendChild(li);
@@ -1234,7 +1564,7 @@ function renderDataCheck(check) {
   const bits = [];
   if (!caps.priceCompute) bits.push("Compute can't be priced without both a CPU and a memory column.");
   if (caps.segmentBy) {
-    const by = { tier: "Tier", environment: "Environment", os: "OS family", application: "Application" }[caps.segmentBy];
+    const by = { environment: "Environment", os: "OS family", application: "Application" }[caps.segmentBy];
     bits.push(`Architecture spokes will be split by ${by}.`);
   }
   if (missing.length) bits.push(`Missing: ${missing.join(", ")}. Those stay blank.`);
@@ -1276,6 +1606,12 @@ function renderTable() {
       cellEditor.className = "cell-editor";
       const input = document.createElement("input");
       input.type = "text";
+      if (isHoursRunningField(field)) {
+        input.type = "number";
+        input.min = "1";
+        input.step = "1";
+        input.inputMode = "numeric";
+      }
       // The OCPUs column reflects the CPU-unit toggle: stored value is the parsed
       // (halved) OCPU; display it x2 when the source column is "Already OCPUs".
       const cpuField = isCpuField(field);
@@ -1432,7 +1768,6 @@ function endCellFill(event) {
 
   if (!rowsToFill) return;
   if (!hasCellContent(value)) {
-    setTableEditStatus("Enter a value before dragging the fill handle.", "warning");
     return;
   }
 
@@ -1441,7 +1776,6 @@ function endCellFill(event) {
   }
   renderTable();
   resetPricingAfterTableChange("Table filled down");
-  setTableEditStatus(`Copied "${value}" to ${rowsToFill} row${rowsToFill === 1 ? "" : "s"}.`, "success");
 }
 
 function cancelCellFill() {
@@ -1492,6 +1826,67 @@ function startCellFill(event) {
 }
 
 const PROVIDER_NAME_TO_VALUE = { aws: "aws", azure: "azure", gcp: "gcp" };
+const COMPRESSED_UPLOAD_THRESHOLD = 3.5 * 1024 * 1024;
+const MAX_COMPRESSED_UPLOAD_BYTES = 4 * 1000 * 1000;
+
+async function jsonRequestOptions(payload) {
+  const serialized = JSON.stringify(payload);
+  const body = new Blob([serialized], { type: "application/json" });
+  if (body.size < COMPRESSED_UPLOAD_THRESHOLD) {
+    return {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: serialized,
+    };
+  }
+  if (typeof CompressionStream === "undefined") {
+    throw new Error(
+      "This workflow is too large for an uncompressed request. Open it in a browser with gzip upload support and try again.",
+    );
+  }
+  const compressedStream = body.stream().pipeThrough(new CompressionStream("gzip"));
+  const compressedBody = await new Response(compressedStream).blob();
+  if (compressedBody.size > MAX_COMPRESSED_UPLOAD_BYTES) {
+    throw new Error(
+      "This workflow remains too large after compression. Reduce the bill date range and try again.",
+    );
+  }
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json+gzip" },
+    body: compressedBody,
+  };
+}
+
+async function compressedUploadRequest(file) {
+  if (
+    file.size < COMPRESSED_UPLOAD_THRESHOLD
+    || typeof CompressionStream === "undefined"
+  ) {
+    return null;
+  }
+  const compressedStream = file.stream().pipeThrough(new CompressionStream("gzip"));
+  const compressedBody = await new Response(compressedStream).blob();
+  if (compressedBody.size > MAX_COMPRESSED_UPLOAD_BYTES) {
+    throw new Error(
+      "This file remains too large after compression. Reduce the export to the billing columns and date range you need, then upload it again.",
+    );
+  }
+  return {
+    url: "/api/upload",
+    options: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/gzip",
+        "X-Upload-Filename": encodeURIComponent(file.name),
+        "X-Intake-Mode": state.intakeMode,
+        "X-Provider-Hint": state.providerHint,
+        "X-Full-Service-Beta": state.fullServiceBeta ? "true" : "false",
+      },
+      body: compressedBody,
+    },
+  };
+}
 
 function showSelectedDoc(name, sub) {
   if (!els.selectedDocTile) return;
@@ -1506,23 +1901,29 @@ function showSelectedDoc(name, sub) {
 
 async function uploadFile(file) {
   if (!file) return;
-  clearIntakeStatuses();   // starting a fresh upload — drop any load/convert banners
+  clearIntakeStatuses();   // starting a fresh upload - drop any load/convert banners
+  resetWorkflowProgress();
   state.lastUploadFile = file;
   showSelectedDoc(file.name, "Reading file…");
   setUploadLoading(true, file.name);
-  const body = new FormData();
-  body.append("file", file);
-  body.append("intakeMode", state.intakeMode);
-  body.append("providerHint", state.providerHint);
-  body.append("fullServiceBeta", state.fullServiceBeta ? "true" : "false");
 
   try {
-    const { response, payload } = await fetchJson(
-      "/api/upload",
-      {
+    const compressedRequest = await compressedUploadRequest(file);
+    const body = new FormData();
+    body.append("file", file);
+    body.append("intakeMode", state.intakeMode);
+    body.append("providerHint", state.providerHint);
+    body.append("fullServiceBeta", state.fullServiceBeta ? "true" : "false");
+    const request = compressedRequest || {
+      url: "/api/upload",
+      options: {
         method: "POST",
         body,
       },
+    };
+    const { response, payload } = await fetchJson(
+      request.url,
+      request.options,
       100000,
     );
     if (!response.ok) {
@@ -1539,6 +1940,8 @@ async function uploadFile(file) {
     state.uploadMetadata = payload.metadata || {};
     state.intakeMode = payload.metadata?.intakeMode || state.intakeMode;
     state.fullServiceBeta = state.intakeMode === "cloud_bill";
+    ensureIdentityReviewFields();
+    ensureHoursRunningReviewField();
     const docModeLabel = state.intakeMode === "cloud_bill"
       ? `${payload.metadata?.detectedProvider || "Cloud"} bill`
       : "On-prem inventory";
@@ -1565,13 +1968,9 @@ async function uploadFile(file) {
     state.pricing = null;
     syncModeUi();
 
-    els.uploadStatus.textContent = "";
-    showIntakePage();
-    els.uploadPanel.classList.add("is-hidden");
-    els.reviewPanel.classList.remove("is-hidden");
     const parserLabel =
       payload.metadata?.parser === "llm-assisted"
-        ? "OpenAI normalized"
+        ? "OpenAI scrubbed"
         : payload.metadata?.parser === "cloud-bill-adapter"
           ? "Cloud bill parser"
           : payload.metadata?.parser === "cloud-bill-pdf"
@@ -1591,12 +1990,19 @@ async function uploadFile(file) {
     renderShapeChoices();
     renderShapeDetail();
     renderTable();
+    state.uploadReady = state.rows.length > 0;
+    if (!state.uploadReady) {
+      throw new Error("No usable rows were found in that spreadsheet.");
+    }
+    unlockWorkflowStep("review");
+    showUploadPage();
+    els.uploadStatus.textContent = "Spreadsheet ready. Continue to review.";
+    els.uploadStatus.style.color = "var(--success)";
     syncIntakeLayout();
-    setStep("review");
     els.engineStatus.textContent = isCloudBillMode()
       ? `${detectedProvider || providerLabel()} bill upload`
       : payload.metadata?.parser === "llm-assisted"
-        ? "OpenAI normalized upload"
+        ? "OpenAI scrubbed upload"
         : "Ready for approval";
     els.pricingSummary.className = "empty-state";
     const notes = payload.metadata?.extractionNotes || [];
@@ -1614,6 +2020,9 @@ async function uploadFile(file) {
 }
 
 function setUploadingError(error) {
+  state.uploadReady = false;
+  state.workflowMaxUnlockedStep = 0;
+  syncWorkflowAvailability();
   els.uploadStatus.textContent = error.message;
   els.uploadStatus.style.color = "var(--danger)";
 }
@@ -1625,7 +2034,7 @@ function makeBlankRow(prefix = "manual") {
     __approved: true,
   };
   state.fields.forEach((field) => {
-    row[field.key] = "";
+    row[field.key] = isHoursRunningField(field) ? 730 : "";
   });
   return row;
 }
@@ -1665,7 +2074,6 @@ function initializeManualReviewTable() {
   els.engineStatus.textContent = "Manual entry";
   els.pricingSummary.className = "empty-state";
   els.pricingSummary.textContent = "Fill in one or more rows, then choose the OCI flex shape to price.";
-  setTableEditStatus("Blank table ready. Add rows or columns as needed.", "success");
 }
 
 function ensureReviewRows() {
@@ -1699,11 +2107,9 @@ function hideAddColumnForm() {
 function addManualColumn(label) {
   const cleanLabel = String(label || "").trim();
   if (!state.rows.length) {
-    setTableEditStatus("Upload a workbook or bill first.", "error");
-    return;
+    ensureReviewRows();
   }
   if (!cleanLabel) {
-    setTableEditStatus("Name the new column first.", "error");
     els.newColumnName?.focus();
     return;
   }
@@ -1732,7 +2138,6 @@ function addManualColumn(label) {
 
   renderTable();
   resetPricingAfterTableChange(wasExisting ? "Column revealed" : "Manual column added");
-  setTableEditStatus(`${field.label} column ${wasExisting ? "is now visible" : "added"}.`, "success");
   hideAddColumnForm();
   focusReviewField(field.key);
 }
@@ -1740,55 +2145,6 @@ function addManualColumn(label) {
 function submitAddColumn(event) {
   event.preventDefault();
   addManualColumn(els.newColumnName?.value);
-}
-
-async function applyTableEdit() {
-  const instruction = els.tableEditPrompt.value.trim();
-  if (!state.rows.length) {
-    setTableEditStatus("Upload a workbook first.", "error");
-    return;
-  }
-  if (!instruction) {
-    setTableEditStatus("Describe the change first.", "error");
-    els.tableEditPrompt.focus();
-    return;
-  }
-
-  setTableEditLoading(true);
-  setTableEditStatus("Applying table changes...");
-
-  try {
-    const { response, payload } = await fetchJson(
-      "/api/edit-table",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instruction,
-          fields: state.fields,
-          rows: state.rows,
-          fullServiceBeta: state.fullServiceBeta,
-        }),
-      },
-      90000,
-    );
-    if (!response.ok) {
-      throw new Error(payload.error || "Table edit failed.");
-    }
-
-    state.rows = payload.rows || state.rows;
-    renderTable();
-    resetPricingAfterTableChange(state.openaiApiConnected ? "Table updated by OpenAI" : "Table updated");
-    els.tableEditPrompt.value = "";
-
-    const warnings = Array.isArray(payload.warnings) ? payload.warnings.filter(Boolean) : [];
-    const summary = payload.summary || `Applied ${payload.appliedChanges?.length || 0} table update(s).`;
-    setTableEditStatus([summary, ...warnings.slice(0, 2)].join(" "), warnings.length ? "warning" : "success");
-  } catch (error) {
-    setTableEditStatus(error.message, "error");
-  } finally {
-    setTableEditLoading(false);
-  }
 }
 
 async function priceRows({ keepView = false, destination = "price" } = {}) {
@@ -1810,29 +2166,26 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
     : `Mapping SKUs for ${selectedShape().label}`;
 
   try {
+    const requestOptions = await jsonRequestOptions({
+      fields: state.fields,
+      rows: state.rows,
+      shape: state.selectedShape,
+      intakeMode: state.intakeMode,
+      providerHint: state.providerHint,
+      fullServiceBeta: state.fullServiceBeta,
+      hideGpuPricing: state.hideGpuPricing,
+      hideWindowsPricing: state.hideWindowsPricing,
+      hideSqlPricing: state.hideSqlPricing,
+      cpuUnit: state.cpuUnit,
+      shapeOverrides: state.shapeOverrides,
+      costOverrides: state.costOverrides,
+      hoursPerMonth: state.hoursPerMonth,
+      hoursOverride: state.hoursOverride,
+      oicMessagePacks: state.oicMessagePacks,
+    });
     const { response, payload } = await fetchJson(
       "/api/price",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fields: state.fields,
-          rows: state.rows,
-          shape: state.selectedShape,
-          intakeMode: state.intakeMode,
-          providerHint: state.providerHint,
-          fullServiceBeta: state.fullServiceBeta,
-          hideGpuPricing: state.hideGpuPricing,
-          hideWindowsPricing: state.hideWindowsPricing,
-        hideSqlPricing: state.hideSqlPricing,
-          cpuUnit: state.cpuUnit,
-          shapeOverrides: state.shapeOverrides,
-          costOverrides: state.costOverrides,
-          hoursPerMonth: state.hoursPerMonth,
-          hoursOverride: state.hoursOverride,
-          oicMessagePacks: state.oicMessagePacks,
-        }),
-      },
+      requestOptions,
       70000,
     );
     if (!response.ok) {
@@ -1848,10 +2201,13 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
       const y = window.scrollY;
       requestAnimationFrame(() => window.scrollTo({ top: y }));
     } else if (destination === "networking") {
+      unlockWorkflowStep("networking");
       showNetworkingPage();
     } else if (destination === "architecture") {
+      unlockWorkflowStep("architecture");
       showArchitecturePage();
     } else {
+      unlockWorkflowStep("price");
       showResultsPage();
     }
     return payload;
@@ -1862,37 +2218,33 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
     if (destination === "price") {
       setPricePageStatus(`Pricing could not be completed: ${error.message}`, "error");
     } else if (destination === "networking") {
-      showNetworkingPage();
       setNetworkingPageStatus(`Pricing could not be completed: ${error.message}`, "error");
     } else if (destination === "architecture") {
       setArchitectureExportStatus(`Pricing could not be completed: ${error.message}`, "error");
     }
     return null;
   } finally {
-    els.priceButton.disabled = false;
-    els.priceButton.textContent = "Continue to shape";
-    els.priceShapeButton.disabled = false;
-    els.priceShapeButton.textContent = "Continue to services";
+    els.priceButton.textContent = "Continue to Shape";
+    els.priceShapeButton.textContent = "Continue to Services";
     if (els.rerunPricing) { els.rerunPricing.disabled = false; els.rerunPricing.textContent = pricingActionLabel("rerun"); }
     if (els.priceSpinner) els.priceSpinner.hidden = true;
+    syncWorkflowAvailability();
   }
 }
 
-// The Full BOM takes a few seconds (12 sheets + the architecture diagram), so the overlay
-// walks through what it's doing rather than sitting on one frozen line — otherwise a slow
-// build is indistinguishable from a dead button.
-const FULL_BOM_STAGES = [
-  "Pricing every server against the OCI rate card…",
-  "Building Compute, Storage and Applications sheets…",
-  "Rendering the OCI architecture diagram…",
-  "Laying out the Pricing Overview and Consumption Ramp…",
-  "Finishing the workbook — almost there…",
-];
+function setDeliverableStatus(element, message, tone = "") {
+  if (!element) return;
+  element.textContent = message;
+  if (tone) element.dataset.tone = tone;
+  else delete element.dataset.tone;
+}
 
-async function exportToExcel(template = "quick") {
-  const isFull = template === "full";
-  const button = isFull ? els.exportFullBom : els.exportExcel;
-  const original = button ? button.textContent : "";
+async function exportToExcel(triggerButton = null) {
+  const template = "quick";
+  const button = triggerButton || els.exportFullBom || els.deliverablesFullBom;
+  const isDeliverablesBom = button === els.deliverablesFullBom;
+  const exportLabel = "BOM";
+  const original = button ? button.innerHTML : "";
   const overlay = document.querySelector("#exportOverlay");
   const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
 
@@ -1900,7 +2252,12 @@ async function exportToExcel(template = "quick") {
   // button is worse than a message saying why.
   if (!state.pricing) {
     els.engineStatus.textContent =
-      "Nothing to export yet — run \"Reprice estimate\" first, then try the BOM again.";
+      "Nothing to export yet - run \"Reprice estimate\" first, then try the BOM again.";
+    setDeliverableStatus(
+      els.deliverablesBomStatus,
+      "Prepare the estimate before downloading the BOM.",
+      "error",
+    );
     return;
   }
 
@@ -1908,18 +2265,13 @@ async function exportToExcel(template = "quick") {
   let failed = false;
   if (button) {
     button.disabled = true;
-    button.textContent = isFull ? "Building Full BOM..." : "Exporting...";
+    button.textContent = "Exporting BOM...";
+  }
+  if (isDeliverablesBom) {
+    setDeliverableStatus(els.deliverablesBomStatus, "Building the BOM...");
   }
   if (overlayText) {
-    const stages = FULL_BOM_STAGES;
-    overlayText.textContent = isFull ? stages[0] : "Generating your Excel workbook…";
-    if (isFull) {
-      let i = 0;
-      stageTimer = setInterval(() => {
-        i = Math.min(i + 1, stages.length - 1);
-        overlayText.textContent = stages[i];
-      }, 1200);
-    }
+    overlayText.textContent = "Generating your Excel workbook…";
   }
   if (overlay) overlay.hidden = false;
   try {
@@ -1935,43 +2287,42 @@ async function exportToExcel(template = "quick") {
       for (let m = monthly.length; m < contractMonths; m += 1) monthly.push(state.ramp.ceiling);
     }
     const ramp = { ceiling: state.ramp.ceiling, monthly };
+    const exportPayload = {
+      fields: state.fields,
+      rows: state.rows,
+      shape: state.selectedShape,
+      intakeMode: state.intakeMode,
+      providerHint: state.providerHint,
+      fullServiceBeta: state.fullServiceBeta,
+      hideGpuPricing: state.hideGpuPricing,
+      hideWindowsPricing: state.hideWindowsPricing,
+      hideSqlPricing: state.hideSqlPricing,
+      cpuUnit: state.cpuUnit,
+      shapeOverrides: state.shapeOverrides,
+      costOverrides: state.costOverrides,
+      hoursPerMonth: state.hoursPerMonth,
+      hoursOverride: state.hoursOverride,
+      bomName: state.bomName || "",
+      ociDiscount: 0,
+      oicMessagePacks: state.oicMessagePacks,
+      ramp,
+      existingInfraCost: state.existingInfraCost || 0,
+      workflowState: collectWorkflowState(),
+      // A converted OCI BOM is already priced; export it in the AWS cloud-compare
+      // workbook format straight from the converted pricing (no re-pricing).
+      converted: !!(state.pricing && state.pricing.converted),
+      convertedPricing: (state.pricing && state.pricing.converted)
+        ? { rows: state.pricing.rows, totals: state.pricing.totals }
+        : null,
+      // Services added from the "Add OCI services" panel - priced server-side and folded
+      // into the export totals and the matching Pricing Overview lines.
+      extraServices: state.extraServices || [],
+      // Region / AD-split / DR-region choices for the architecture diagram.
+      diagramOptions: state.diagramOptions || {},
+      template, // "quick" = compact BOM+Overview, "full" = 12-sheet deliverable
+    };
     const response = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fields: state.fields,
-        rows: state.rows,
-        shape: state.selectedShape,
-        intakeMode: state.intakeMode,
-        providerHint: state.providerHint,
-        fullServiceBeta: state.fullServiceBeta,
-        hideGpuPricing: state.hideGpuPricing,
-        hideWindowsPricing: state.hideWindowsPricing,
-        hideSqlPricing: state.hideSqlPricing,
-        cpuUnit: state.cpuUnit,
-        shapeOverrides: state.shapeOverrides,
-        costOverrides: state.costOverrides,
-        hoursPerMonth: state.hoursPerMonth,
-        hoursOverride: state.hoursOverride,
-        bomName: state.bomName || "",
-        ociDiscount: (state.ociDiscount || 0) / 100,
-        oicMessagePacks: state.oicMessagePacks,
-        ramp,
-        existingInfraCost: state.existingInfraCost || 0,
-        workflowState: collectWorkflowState(),
-        // A converted OCI BOM is already priced; export it in the AWS cloud-compare
-        // workbook format straight from the converted pricing (no re-pricing).
-        converted: !!(state.pricing && state.pricing.converted),
-        convertedPricing: (state.pricing && state.pricing.converted)
-          ? { rows: state.pricing.rows, totals: state.pricing.totals }
-          : null,
-        // Services added from the "Add OCI services" panel — priced server-side and folded
-        // into the export totals and the matching Pricing Overview lines.
-        extraServices: state.extraServices || [],
-        // Region / AD-split / DR-region choices for the architecture diagram.
-        diagramOptions: state.diagramOptions || {},
-        template, // "quick" = compact BOM+Overview, "full" = 12-sheet deliverable
-      }),
+      ...await jsonRequestOptions(exportPayload),
     });
     if (!response.ok) {
       let message = "Export failed.";
@@ -1989,7 +2340,7 @@ async function exportToExcel(template = "quick") {
     // Filename = the BOM name the user typed at the top + today's date, so repeat exports
     // never silently overwrite each other in Downloads.
     const safeName = (state.bomName || "").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_");
-    const suffix = isFull ? "_Full_BOM" : "_BOM";
+    const suffix = "_BOM";
     const today = new Date();
     const stamp = [
       today.getFullYear(),
@@ -2001,15 +2352,21 @@ async function exportToExcel(template = "quick") {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    // Confirm it landed — the browser saves silently, which reads as "nothing happened".
-    els.engineStatus.textContent = `${isFull ? "Full BOM" : "Quick BOM"} downloaded: ${link.download}`;
+    // Confirm it landed - the browser saves silently, which reads as "nothing happened".
+    els.engineStatus.textContent = `${exportLabel} downloaded: ${link.download}`;
+    if (isDeliverablesBom) {
+      setDeliverableStatus(els.deliverablesBomStatus, `Downloaded ${link.download}`, "success");
+    }
   } catch (error) {
     // A failed export used to just blink the overlay and write to a status line nobody
     // was looking at, so it read as "nothing happened". Say it out loud, and don't
     // dismiss until the user acknowledges it.
     failed = true;
-    const msg = `${isFull ? "Full BOM" : "Quick BOM"} export failed — ${error.message}`;
+    const msg = `${exportLabel} export failed - ${error.message}`;
     els.engineStatus.textContent = msg;
+    if (isDeliverablesBom) {
+      setDeliverableStatus(els.deliverablesBomStatus, msg, "error");
+    }
     console.error("BOM export failed", error);
     if (stageTimer) clearInterval(stageTimer);
     stageTimer = null;
@@ -2034,7 +2391,7 @@ async function exportToExcel(template = "quick") {
     if (stageTimer) clearInterval(stageTimer);
     if (button) {
       button.disabled = false;
-      button.textContent = original;
+      button.innerHTML = original;
     }
     const spinner = overlay ? overlay.querySelector(".export-spinner") : null;
     if (!failed) {
@@ -2046,7 +2403,7 @@ async function exportToExcel(template = "quick") {
 
 // Capture the COMPLETE app state so a saved workflow restores the window exactly:
 // the table data plus every user modification (shape/cost overrides, approvals,
-// filters, selections, discount, ramp, column choices, mode, etc.).
+// filters, selections, ramp, column choices, mode, etc.).
 function collectWorkflowState() {
   return {
     __workflow: "oci-bom-app",
@@ -2057,14 +2414,20 @@ function collectWorkflowState() {
     fullServiceBeta: state.fullServiceBeta,
     hideGpuPricing: state.hideGpuPricing,
     hideWindowsPricing: state.hideWindowsPricing,
+    hideSqlPricing: state.hideSqlPricing,
     cpuUnit: state.cpuUnit,
     hoursPerMonth: state.hoursPerMonth,
+    hoursOverride: state.hoursOverride,
     bomName: state.bomName,
-    ociDiscount: state.ociDiscount,
     oicMessagePacks: state.oicMessagePacks,
     selectedShape: state.selectedShape,
+    selectedVendor: state.selectedVendor,
+    lastShapeByVendor: state.lastShapeByVendor || {},
     existingInfraCost: state.existingInfraCost,
     crossCloudTopTier: state.crossCloudTopTier,
+    workflowMaxUnlockedStep: state.workflowMaxUnlockedStep,
+    uploadMetadata: state.uploadMetadata || {},
+    showMissingOnly: state.showMissingOnly,
     // Add-in OCI services ("Add OCI services" panel) and the full diagram layout selections
     // (region, AD split + which resources, DR region + replication) so a reload restores the
     // exact BOM and architecture the user built.
@@ -2087,60 +2450,138 @@ function collectWorkflowState() {
   };
 }
 
-async function exportWorkflowJson() {
-  if (!state.rows || !state.rows.length) return;
-  const btn = els.exportJson;
-  const original = btn ? btn.textContent : "";
-  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-  if (els.priceSpinner) {
-    els.priceSpinner.querySelector(".price-spinner-text").textContent = "Saving workflow…";
-    els.priceSpinner.hidden = false;
-  }
-  // Let the spinner paint before the (potentially large) serialize/stringify.
-  await new Promise((r) => requestAnimationFrame(() => r()));
-  try {
-    const blob = new Blob([JSON.stringify(collectWorkflowState(), null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    const safe = (state.bomName || "workflow").trim().replace(/[\\/:*?"<>|]+/g, "_").replace(/\s+/g, "_") || "workflow";
-    link.download = `${safe}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = original; }
-    if (els.priceSpinner) {
-      els.priceSpinner.hidden = true;
-      els.priceSpinner.querySelector(".price-spinner-text").textContent = "Updating…";
-    }
-  }
-}
-
 // Restore a saved workflow object into state, then re-price to rebuild the window.
 async function applyWorkflowState(wf) {
-  if (!wf || !wf.rows) throw new Error("That file has no saved workflow data.");
+  if (!wf || !Array.isArray(wf.rows)) {
+    throw new Error("That file has no saved workflow data.");
+  }
+  const defaultDiagramOptions = {
+    ...state_diagramOptions_default,
+    adSplitResources: { ...state_diagramOptions_default.adSplitResources },
+    drReplicate: { ...state_diagramOptions_default.drReplicate },
+  };
+  Object.assign(state, {
+    intakeMode: "on_prem",
+    providerHint: "auto",
+    fullServiceBeta: false,
+    hideGpuPricing: false,
+    hideWindowsPricing: false,
+    hideSqlPricing: false,
+    cpuUnit: "auto",
+    hoursPerMonth: 730,
+    hoursOverride: false,
+    bomName: "",
+    oicMessagePacks: 1,
+    selectedShape: "e6-standard-ax",
+    selectedVendor: "amd",
+    lastShapeByVendor: { amd: "e6-standard-ax" },
+    existingInfraCost: 0,
+    crossCloudTopTier: false,
+    uploadReady: false,
+    workflowMaxUnlockedStep: 0,
+    uploadMetadata: {},
+    showMissingOnly: false,
+    extraServices: [],
+    diagramOptions: defaultDiagramOptions,
+    fields: [],
+    rows: [],
+    shapeOverrides: {},
+    costOverrides: {},
+    approvedFlags: {},
+    hiddenSources: {},
+    selectedRows: {},
+    columnPrefs: {},
+    resultSort: { key: "document", direction: "asc" },
+  });
   const assign = [
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
-    "hideWindowsPricing", "hideSqlPricing", "hoursPerMonth", "hoursOverride",
-    "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
-    "crossCloudTopTier", "extraServices", "diagramOptions", "fields", "rows",
+    "hideWindowsPricing", "hideSqlPricing",
+    "cpuUnit",
+    "bomName", "oicMessagePacks", "selectedShape", "existingInfraCost",
+    "selectedVendor", "lastShapeByVendor", "crossCloudTopTier", "uploadMetadata",
+    "workflowMaxUnlockedStep",
+    "showMissingOnly", "extraServices", "fields", "rows",
     "shapeOverrides", "costOverrides",
     "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs", "resultSort",
   ];
   assign.forEach((k) => { if (wf[k] !== undefined) state[k] = wf[k]; });
+  const savedDiagramOptions =
+    wf.diagramOptions && typeof wf.diagramOptions === "object" ? wf.diagramOptions : {};
+  state.diagramOptions = {
+    ...defaultDiagramOptions,
+    ...savedDiagramOptions,
+    adSplitResources: {
+      ...defaultDiagramOptions.adSplitResources,
+      ...(savedDiagramOptions.adSplitResources || {}),
+    },
+    drReplicate: {
+      ...defaultDiagramOptions.drReplicate,
+      ...(savedDiagramOptions.drReplicate || {}),
+    },
+  };
+  state.extraServices = Array.isArray(state.extraServices) ? state.extraServices : [];
+  state.fields = Array.isArray(state.fields) ? state.fields : [];
+  ensureIdentityReviewFields();
+  ensureHoursRunningReviewField();
+  state.lastShapeByVendor =
+    state.lastShapeByVendor && typeof state.lastShapeByVendor === "object"
+      ? state.lastShapeByVendor
+      : {};
+  [
+    "shapeOverrides", "costOverrides", "approvedFlags", "hiddenSources",
+    "selectedRows", "columnPrefs",
+  ].forEach((key) => {
+    if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
+      state[key] = {};
+    }
+  });
+  if (!state.resultSort || typeof state.resultSort !== "object") {
+    state.resultSort = { key: "document", direction: "asc" };
+  }
+  state.cpuUnit = ["auto", "vcpu", "ocpu"].includes(state.cpuUnit) ? state.cpuUnit : "auto";
+  state.hoursPerMonth = 730;
+  state.hoursOverride = false;
+  state.uploadReady = state.rows.length > 0;
+  state.workflowMaxUnlockedStep = state.uploadReady
+    ? Math.max(
+        workflowStepIndex("price"),
+        Math.min(
+          WORKFLOW_STEP_ORDER.length - 1,
+          Number(state.workflowMaxUnlockedStep) || 0,
+        ),
+      )
+    : 0;
+  syncWorkflowAvailability();
+  const restoredShape = state.rateCards.find((shape) => shape.key === state.selectedShape);
+  if (restoredShape) {
+    state.selectedVendor = shapeVendor(restoredShape);
+    state.lastShapeByVendor[state.selectedVendor] = restoredShape.key;
+    state.rateCard = restoredShape.rateCard || [];
+  } else {
+    state.selectedVendor = normalizeVendorKey(state.selectedVendor) || "amd";
+  }
   if (wf.ramp) {
-    state.ramp.months = wf.ramp.months || state.ramp.months;
-    state.ramp.ceiling = wf.ramp.ceiling || 0;
+    state.ramp.months = Math.max(1, Math.min(60, Number(wf.ramp.months) || 12));
+    state.ramp.ceiling = Number(wf.ramp.ceiling) || 0;
     state.ramp.points = Array.isArray(wf.ramp.points) ? wf.ramp.points : [];
     state.ramp.signature = null;
     state.ramp.restorePending = state.ramp.points.length > 0;
+  } else {
+    state.ramp.months = 12;
+    state.ramp.ceiling = 0;
+    state.ramp.points = [];
+    state.ramp.signature = null;
+    state.ramp.restorePending = false;
   }
   // Reflect restored simple inputs back into their controls if present.
   if (els.bomName) els.bomName.value = state.bomName || "";
-  if (els.ociDiscount) els.ociDiscount.value = state.ociDiscount || 0;
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
+  syncModeUi();
+  setCpuUnit(state.cpuUnit);
+  syncVendorForSelectedShape();
+  renderProcessorPicker();
+  renderShapeChoices();
+  renderShapeDetail();
   // Reflect the restored licensing/GPU toggles into their checkboxes.
   if (els.hideGpuToggle) els.hideGpuToggle.checked = !!state.hideGpuPricing;
   if (els.hideWindowsToggle) els.hideWindowsToggle.checked = !!state.hideWindowsPricing;
@@ -2172,7 +2613,7 @@ async function applyWorkflowState(wf) {
   if (typeof renderTable === "function") renderTable();
   await priceRows();
   // priceRows() doesn't touch the "Add OCI services" panel, so re-render the cart and fold the
-  // restored add-in services back into the results totals — otherwise a reloaded BOM shows an
+  // restored add-in services back into the results totals - otherwise a reloaded BOM shows an
   // empty cart and drops the extras the user selected last time.
   if (typeof renderServiceCart === "function") renderServiceCart();
   if (typeof refreshResultsTotals === "function") refreshResultsTotals();
@@ -2201,10 +2642,10 @@ function setWorkflowStatus(name, message, state) {
 
 async function loadWorkflowFromFile(file) {
   if (!file) return;
-  clearIntakeStatuses();   // switching to load — clear the convert banner
+  clearIntakeStatuses();   // switching to load - clear the convert banner
   const nm = file.name || "file";
   const okExt = /\.(json|xlsx)$/i.test(nm);
-  setWorkflowStatus(nm, okExt ? "loaded — checking…" : "not a .json or .xlsx file", okExt ? "loading" : "error");
+  setWorkflowStatus(nm, okExt ? "loaded - checking…" : "not a .json or .xlsx file", okExt ? "loading" : "error");
   if (!okExt) return;
   if (els.priceSpinner) {
     els.priceSpinner.querySelector(".price-spinner-text").textContent = "Loading workflow…";
@@ -2223,32 +2664,71 @@ async function loadWorkflowFromFile(file) {
       wf = payload.workflow;
     }
     await applyWorkflowState(wf);
-    setWorkflowStatus(nm, "✓ Accepted — BOM restored", "ok");
+    setWorkflowStatus(nm, "✓ Accepted - BOM restored", "ok");
   } catch (error) {
     els.engineStatus.textContent = `Workflow load failed: ${error.message}`;
     if (els.priceSpinner) els.priceSpinner.hidden = true;
-    setWorkflowStatus(nm, `✕ Not accepted — ${error.message}`, "error");
+    setWorkflowStatus(nm, `✕ Not accepted - ${error.message}`, "error");
   } finally {
     if (els.priceSpinner) els.priceSpinner.querySelector(".price-spinner-text").textContent = "Updating…";
   }
+}
+
+function summarizePricingRows(pricingRows, cloudBill) {
+  const sortedRows = pricingRows
+    .slice()
+    .sort((a, b) => Number(b.monthly || 0) - Number(a.monthly || 0));
+
+  if (cloudBill) {
+    return sortedRows.slice(0, 10).map((row) => ({
+      name: fallbackEntityName(row),
+      environment: row.environment || "-",
+      monthly: Number(row.monthly || 0),
+      workloadCount: 1,
+    }));
+  }
+
+  const groups = new Map();
+  sortedRows.forEach((row) => {
+    const name = String(row.applicationName || fallbackEntityName(row)).trim() || "Workload";
+    const environment = String(row.environment || "-").trim() || "-";
+    const key = `${name.toLocaleLowerCase()}\u0000${environment.toLocaleLowerCase()}`;
+    const group = groups.get(key) || {
+      name,
+      environment,
+      monthly: 0,
+      workloadCount: 0,
+    };
+    group.monthly += Number(row.monthly || 0);
+    group.workloadCount += 1;
+    groups.set(key, group);
+  });
+
+  return Array.from(groups.values())
+    .sort((a, b) => b.monthly - a.monthly)
+    .slice(0, 10);
 }
 
 function renderPricing(pricing) {
   const shape = pricing.selectedShape || selectedShape();
   const cloudBill = pricing.intakeMode === "cloud_bill" || pricing.cloudBillMode;
   const modeLabel = cloudBill ? "Cloud bill" : pricing.fullServiceBeta ? "Full service" : shape.label;
-  els.engineStatus.textContent = `${modeLabel}: ${pricing.engine === "llm-assisted" ? "OpenAI-assisted" : "Local mapping"}`;
+  els.engineStatus.textContent = `${modeLabel}: deterministic pricing`;
   els.pricingSummary.className = "pricing-result";
 
   const warning = pricing.llmWarning ? `<p class="warning">${pricing.llmWarning}</p>` : "";
-  const rows = pricing.rows
-    .slice()
-    .sort((a, b) => b.monthly - a.monthly)
-    .slice(0, 10)
+  const rows = summarizePricingRows(pricing.rows, cloudBill)
     .map(
       (row) => `
         <tr>
-          <td>${escapeHtml(fallbackEntityName(row))}</td>
+          <td>
+            <span class="pricing-summary-name">${escapeHtml(row.name)}</span>
+            ${
+              !cloudBill && row.workloadCount > 1
+                ? `<small>${formatNumber(row.workloadCount)} workload rows</small>`
+                : ""
+            }
+          </td>
           <td>${escapeHtml(row.environment || "-")}</td>
           <td>${formatCurrency(row.monthly)}</td>
         </tr>
@@ -2286,10 +2766,11 @@ function showIntakePage() {
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   syncIntakeLayout();
-  if (state.rows.length) {
+  if (state.rows.length && isWorkflowStepUnlocked("review")) {
     els.uploadPanel.classList.add("is-hidden");
     els.reviewPanel.classList.remove("is-hidden");
     setStep("review");
@@ -2305,6 +2786,7 @@ function showUploadPage() {
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   els.uploadPanel.classList.remove("is-hidden");
@@ -2315,11 +2797,15 @@ function showUploadPage() {
 }
 
 function showReviewPage() {
-  ensureReviewRows();
+  if (!state.rows.length || !isWorkflowStepUnlocked("review")) {
+    showUploadPage();
+    return;
+  }
   els.intakePage.classList.remove("is-hidden");
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   els.uploadPanel.classList.add("is-hidden");
@@ -2331,7 +2817,7 @@ function showReviewPage() {
 }
 
 function showShapePage() {
-  if (!state.rows.length) {
+  if (!state.rows.length || !isWorkflowStepUnlocked("shape")) {
     showReviewPage();
     return;
   }
@@ -2339,6 +2825,7 @@ function showShapePage() {
   els.shapePage.classList.remove("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   renderProcessorPicker();
@@ -2349,10 +2836,15 @@ function showShapePage() {
 }
 
 function showNetworkingPage() {
+  if (!isWorkflowStepUnlocked("networking")) {
+    showShapePage();
+    return;
+  }
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.remove("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   if (els.networkingShape) {
@@ -2362,7 +2854,7 @@ function showNetworkingPage() {
   if (state.pricing) {
     setNetworkingPageStatus();
   } else if (state.rows.length) {
-    setNetworkingPageStatus("Continue from Shape to prepare workload pricing. Services added here will be retained.");
+    setNetworkingPageStatus();
   } else {
     setNetworkingPageStatus("Upload inventory before building the complete estimate.");
   }
@@ -2375,10 +2867,15 @@ function showNetworkingPage() {
 }
 
 function showArchitecturePage() {
+  if (!isWorkflowStepUnlocked("architecture")) {
+    showOtherCloudsPage();
+    return;
+  }
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.remove("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   if (els.architectureShape) {
@@ -2407,10 +2904,15 @@ function showArchitecturePage() {
 }
 
 function showResultsPage() {
+  if (!isWorkflowStepUnlocked("price")) {
+    showNetworkingPage();
+    return;
+  }
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.remove("is-hidden");
   els.otherCloudsPage.classList.add("is-hidden");
   setStep("price");
@@ -2418,10 +2920,15 @@ function showResultsPage() {
 }
 
 function showOtherCloudsPage() {
+  if (!isWorkflowStepUnlocked("other-clouds")) {
+    showResultsPage();
+    return;
+  }
   els.intakePage.classList.add("is-hidden");
   els.shapePage.classList.add("is-hidden");
   els.networkingPage.classList.add("is-hidden");
   els.architecturePage.classList.add("is-hidden");
+  els.deliverablesPage.classList.add("is-hidden");
   els.resultsPage.classList.add("is-hidden");
   els.otherCloudsPage.classList.remove("is-hidden");
   if (els.otherCloudsShape) {
@@ -2430,6 +2937,65 @@ function showOtherCloudsPage() {
   }
   renderCrossCloud();
   setStep("other-clouds");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function deliverableBaseName() {
+  return (state.bomName || "OCI")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_") || "OCI";
+}
+
+function showDeliverablesPage() {
+  if (!isWorkflowStepUnlocked("deliverables")) {
+    showArchitecturePage();
+    return;
+  }
+  els.intakePage.classList.add("is-hidden");
+  els.shapePage.classList.add("is-hidden");
+  els.networkingPage.classList.add("is-hidden");
+  els.architecturePage.classList.add("is-hidden");
+  els.resultsPage.classList.add("is-hidden");
+  els.otherCloudsPage.classList.add("is-hidden");
+  els.deliverablesPage.classList.remove("is-hidden");
+
+  const base = deliverableBaseName();
+  const today = new Date();
+  const stamp = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
+  ].join("-");
+  if (els.deliverablesBomFilename) {
+    els.deliverablesBomFilename.textContent = `${base}_BOM_${stamp}.xlsx`;
+  }
+  if (els.deliverablesArchitectureFilename) {
+    els.deliverablesArchitectureFilename.textContent = `${base}_architecture.zip`;
+  }
+
+  const diagramUnavailable = state.pricing?.diagramAvailable === false;
+  if (els.deliverablesFullBom) {
+    els.deliverablesFullBom.disabled = !state.pricing;
+  }
+  if (els.deliverablesDiagram) {
+    els.deliverablesDiagram.disabled = !state.pricing || diagramUnavailable;
+  }
+  setDeliverableStatus(
+    els.deliverablesBomStatus,
+    state.pricing ? "Ready to generate." : "Prepare pricing before downloading.",
+    state.pricing ? "" : "error",
+  );
+  setArchitectureExportStatus(
+    diagramUnavailable
+      ? state.pricing.diagramUnavailableReason ||
+        "This converted BOM does not contain workload-level sizing for an architecture diagram."
+      : state.pricing
+      ? "Ready to generate."
+      : "Prepare pricing before downloading.",
+    diagramUnavailable || !state.pricing ? "error" : "",
+  );
+  setStep("deliverables");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -2465,7 +3031,24 @@ async function openOtherCloudsStep() {
   els.uploadStatus.style.color = "var(--danger)";
 }
 
+async function openDeliverablesStep() {
+  if (state.pricing) {
+    showDeliverablesPage();
+    return;
+  }
+  if (state.rows.length) {
+    showResultsPage();
+    const pricing = await priceRows({ destination: "price" });
+    if (pricing) showDeliverablesPage();
+    return;
+  }
+  showUploadPage();
+  els.uploadStatus.textContent = "Upload inventory before downloading deliverables.";
+  els.uploadStatus.style.color = "var(--danger)";
+}
+
 function navigateStep(step) {
+  if (!isWorkflowStepUnlocked(step)) return;
   if (step === "upload") {
     showUploadPage();
     return;
@@ -2492,6 +3075,10 @@ function navigateStep(step) {
   }
   if (step === "other-clouds") {
     openOtherCloudsStep();
+    return;
+  }
+  if (step === "deliverables") {
+    openDeliverablesStep();
   }
 }
 
@@ -2501,7 +3088,7 @@ function aggregateSkuCosts(pricing) {
     (row.lineItems || []).forEach((item) => {
       // Group by SKU. Line items with NO sku (SQL/ADW license-included, carried-over AWS
       // cost, etc.) are grouped by their description instead of all being lumped under
-      // whichever empty-SKU line came first — otherwise SQL licenses + Autonomous DW get
+      // whichever empty-SKU line came first - otherwise SQL licenses + Autonomous DW get
       // mislabeled as "Carried over from source AWS cost". Trailing size hints like
       // "(4 OCPU)" / "(GB-mo)" are stripped so same-kind lines merge into one bucket.
       const label = item.sku
@@ -2682,34 +3269,14 @@ function rampMonthlyValues() {
   return values;
 }
 
-// OCI monthly total after the user's OCI discount (set near the ramp graph),
-// using the same per-row rule as the export: carried/free lines stay at cost,
-// everything else is reduced by the discount. At 0% this equals totals.monthly.
-function ociEffectiveMonthly(pricing) {
-  if (!pricing || !pricing.totals) return 0;
-  const d = (state.ociDiscount || 0) / 100;
-  if (!d) return Number(pricing.totals.monthly || 0);
-  const rows = pricing.rows || [];
-  let t = 0;
-  for (const r of rows) {
-    const m = Number(r.monthly || 0);
-    if ((r.costAction || "") === "carry" || !m) t += m;
-    else t += m * (1 - d);
-  }
-  return t;
-}
-
-function ociMonthlyWithWindows(pricing) {
-  // OCI services monthly + Windows 3rd-party licensing (0 when Hide Windows is on), so the
-  // ramp ceiling matches the BOM's Total Monthly Cost and both ramps carry Windows.
-  const services = Number(pricing?.totals?.monthly || 0);
-  const windows = (pricing?.rows || []).reduce(
-    (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
-  return Math.max(0, services + windows);
+function ociMonthlyTotal(pricing) {
+  // The backend monthly total already includes Windows licensing line items.
+  // Added services are client-side selections, so include only those here.
+  return Math.max(0, Number(pricing?.totals?.monthly || 0) + extraServicesMonthly());
 }
 
 function initializeConsumptionRamp(pricing) {
-  const ceiling = ociMonthlyWithWindows(pricing);
+  const ceiling = ociMonthlyTotal(pricing);
   const shapeKey = pricing.selectedShape?.key || state.selectedShape;
   const signature = `${shapeKey}:${ceiling}:${pricing.rows.length}`;
   if (state.ramp.signature !== signature) {
@@ -2794,7 +3361,7 @@ function renderConsumptionRamp() {
   }
 
   els.rampChart.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  els.rampCeilingLabel.textContent = `BOM maximum ${formatCurrency(ceiling)}/mo`;
+  els.rampCeilingLabel.textContent = `BOM Maximum ${formatCurrency(ceiling)}/mo`;
   els.rampPeakMonth.value = selected ? selected.month : "";
   els.rampPeakMonthly.max = ceiling.toFixed(2);
   els.rampPeakMonthly.value = selected ? selected.monthly.toFixed(2) : "";
@@ -2808,16 +3375,6 @@ function renderConsumptionRamp() {
   const contractYears = Math.max(rampYears, 3);
   const contractMonths = contractYears * 12;
   const fullYear = ceiling * 12;
-  // OCI discount applies to the money tiles (matching the export) but NOT to the ramp
-  // dots/graph — the curve stays a list-price consumption shape. Exclude 3rd-party
-  // licensing from the discount by deriving the ratio from the priced totals.
-  const p = state.pricing;
-  let discRatio = 1;
-  if (p && p.totals) {
-    const listCeil = ociMonthlyWithWindows(p);
-    const windows = Math.max(0, listCeil - Number(p.totals.monthly || 0));
-    if (listCeil > 0) discRatio = (ociEffectiveMonthly(p) + windows) / listCeil;
-  }
   const yearListSpend = (y) =>
     y < rampYears
       ? values.slice(y * 12, (y + 1) * 12).reduce((sum, value) => sum + value, 0)
@@ -2825,8 +3382,8 @@ function renderConsumptionRamp() {
   let contractListTotal = 0;
   for (let y = 0; y < contractYears; y += 1) contractListTotal += yearListSpend(y);
 
-  els.rampThreeYearTotal.textContent = formatCurrency(contractListTotal * discRatio);
-  els.rampAvgMonthly.textContent = formatCurrency((contractListTotal * discRatio) / contractMonths);
+  els.rampThreeYearTotal.textContent = formatCurrency(contractListTotal);
+  els.rampAvgMonthly.textContent = formatCurrency(contractListTotal / contractMonths);
   [
     [els.rampYearOneTotal, yearListSpend(0)],
     [els.rampYearTwoTotal, yearListSpend(1)],
@@ -2835,9 +3392,8 @@ function renderConsumptionRamp() {
     [els.rampYearFiveTotal, yearListSpend(4)],
   ].forEach(([element, listValue]) => {
     if (!element) return;
-    const value = listValue * discRatio;
-    element.textContent = formatCompactCurrency(value);
-    element.title = formatCurrency(value);
+    element.textContent = formatCompactCurrency(listValue);
+    element.title = formatCurrency(listValue);
   });
   // Show/hide years 4-5 for the chosen contract length.
   if (els.rampYearFourBox) els.rampYearFourBox.hidden = contractYears < 4;
@@ -2845,7 +3401,7 @@ function renderConsumptionRamp() {
   const years = contractYears;
   if (els.rampHeading) {
     const m = state.ramp.months || 36;
-    els.rampHeading.textContent = `Build a ${m}-month ramp`;
+    els.rampHeading.textContent = `Build a ${m}-Month Ramp`;
     // Keep the "selected dot month" control in step with the chosen ramp length.
     if (els.rampPeakMonth) {
       els.rampPeakMonth.max = String(m);
@@ -3007,9 +3563,10 @@ function renderResults(pricing) {
   const topRows = pricing.rows.slice().sort((a, b) => b.monthly - a.monthly);
   const skuCosts = aggregateSkuCosts(pricing);
   const maxMonthly = topRows[0]?.monthly || 1;
-  const engineLabel = pricing.engine === "llm-assisted" ? "OpenAI-assisted" : "local deterministic";
+  const engineLabel = "local deterministic";
   const shape = pricing.selectedShape || selectedShape();
   const cloudBill = pricing.intakeMode === "cloud_bill" || pricing.cloudBillMode;
+  const convertedBom = Boolean(pricing.converted);
   const serviceRows = pricing.totals.mappedServiceRows || 0;
   const reviewRows = pricing.totals.unpricedServiceRows || 0;
 
@@ -3019,8 +3576,16 @@ function renderResults(pricing) {
     : pricing.fullServiceBeta
     ? `${pricing.rows.length} approved items priced with OCI service mapping; ${serviceRows} service mappings priced and ${reviewRows} items need review.`
     : `${pricing.rows.length} approved workloads priced on ${shape.label} with ${engineLabel} SKU validation.`;
-  els.topListHeading.textContent = cloudBill ? "Top source lines" : "Top workloads";
-  els.detailHeading.textContent = cloudBill ? "Cloud bill mapping detail" : "Application Cost Details";
+  els.topListHeading.textContent = cloudBill
+    ? "Top Source Lines"
+    : convertedBom
+      ? "Top OCI Line Items"
+      : "Top Workloads";
+  els.detailHeading.textContent = cloudBill
+    ? "Cloud Bill Mapping Detail"
+    : convertedBom
+      ? "OCI BOM Line Details"
+      : "Application Cost Details";
   els.resultRowCount.textContent = cloudBill
     ? `${pricing.rows.length} source lines`
     : pricing.fullServiceBeta
@@ -3034,40 +3599,48 @@ function renderResults(pricing) {
   const memoryScale = Math.min(100, Math.max(12, (pricing.totals.memoryGb || reviewRows || 0) / Math.max(1, pricing.totals.memoryGb || serviceRows || reviewRows || 1) * 100));
   const storageGb = Number(pricing.totals.blockStorageGb || 0) + Number(pricing.totals.fileStorageGb || 0)
     + Number(pricing.totals.cloudStorageGb || 0);
+  const hasComputeSizing =
+    Number(pricing.totals.ocpus || 0) > 0 ||
+    Number(pricing.totals.memoryGb || 0) > 0;
+  const hasIdentifiedSpecs =
+    hasComputeSizing ||
+    storageGb > 0;
   const storageScale = Math.min(100, Math.max(12, Math.log10(Math.max(10, storageGb || 0)) * 20));
-  const discPct = state.ociDiscount || 0;
-  const extrasList = extraServicesMonthly();          // list price (for the "before discount" figure)
-  const extras = extraServicesEffective();            // after OCI discount (excl. 3rd-party licensing)
-  // Windows (and other 3rd-party) licensing is a real OCI charge — include it in the
-  // headline so it matches the ramp ceiling, the Full BOM, and the actual OCI bill.
-  // It's never discounted (3rd-party), so it's added at list on top of discounted services.
+  const extras = extraServicesMonthly();
+  // Windows licensing is already included in pricing.totals.monthly. Keep its amount
+  // visible in the supporting text without adding it to the headline a second time.
   const windowsLicensing = (pricing.rows || []).reduce(
     (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
-  const ociEff = ociEffectiveMonthly(pricing) + extras + windowsLicensing;
+  const ociEff = Number(pricing.totals.monthly || 0) + extras;
   const ociEffAnnual = ociEff * 12;
   const extrasMeta = (extras ? ` · incl. ${formatCompactCurrency(extras)} added services` : "")
     + (windowsLicensing ? ` · incl. ${formatCompactCurrency(windowsLicensing)} Windows licensing` : "");
+  const shapeOrSourceCard = convertedBom && !hasComputeSizing
+    ? resultKpiCard({
+        label: "Imported BOM",
+        value: "Service pricing",
+        meta: "No workload-level compute sizing was present",
+        accent: "#2f6f73",
+        fill: mappedShare || 62,
+      })
+    : resultKpiCard({
+        label: "Flex shape",
+        value: shape.shortLabel || shape.label,
+        meta: `$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr`,
+        accent: shape.accent || "#164f68",
+        fill: 62,
+      });
   const pricingCards = `
     ${resultKpiCard({
-      label: (cloudBill ? "OCI-equivalent monthly" : "Monthly run rate") + (discPct ? ` (after ${discPct}% discount)` : ""),
+      label: cloudBill ? "OCI-equivalent monthly" : "Monthly run rate",
       value: formatCompactCurrency(ociEff),
-      meta: (discPct
-        ? `${formatCompactCurrency(ociEffAnnual)} annualized · ${formatCompactCurrency(pricing.totals.monthly + extrasList + windowsLicensing)} list before discount`
-        : `${formatCompactCurrency(ociEffAnnual)} annualized`) + extrasMeta,
+      meta: `${formatCompactCurrency(ociEffAnnual)} annualized${extrasMeta}`,
       accent: "#c74634",
       fill: monthlyScale,
       primary: true,
-      title: discPct
-        ? `${formatCurrency(ociEff)} monthly after ${discPct}% OCI discount (list ${formatCurrency(pricing.totals.monthly + extrasList + windowsLicensing)}); 3rd-party licensing excluded from discount`
-        : `${formatCurrency(ociEff)} monthly; ${formatCurrency(ociEffAnnual)} annualized`,
+      title: `${formatCurrency(ociEff)} monthly; ${formatCurrency(ociEffAnnual)} annualized`,
     })}
-    ${resultKpiCard({
-      label: "Flex shape",
-      value: shape.shortLabel || shape.label,
-      meta: `$${Number(shape.computeRate || 0).toFixed(4)} OCPU/hr and $${Number(shape.memoryRate || 0).toFixed(4)} GB/hr`,
-      accent: shape.accent || "#164f68",
-      fill: 62,
-    })}
+    ${shapeOrSourceCard}
     ${
       cloudBill
         ? `${resultKpiCard({
@@ -3114,7 +3687,7 @@ function renderResults(pricing) {
     ${resultKpiCard({
       label: "Memory",
       value: formatKpiQuantity(pricing.totals.memoryGb, "GB"),
-      meta: "GB-hours at 730 hrs/mo",
+      meta: "Uses row hours, 730 default",
       accent: "#d4b483",
       fill: memoryScale,
       title: `${formatNumber(pricing.totals.memoryGb)} GB`,
@@ -3129,28 +3702,38 @@ function renderResults(pricing) {
     })}
   `;
 
-  els.resultsKpis.innerHTML = `
-    <section class="kpi-section" aria-label="Pricing summary">
+  const specsSection = hasIdentifiedSpecs
+    ? `
+    <section class="kpi-section" aria-label="Pricing Summary">
       <div class="kpi-section-heading">
         <span>Pricing summary</span>
         <em>Calculated from approved rows</em>
       </div>
       <div class="kpi-row pricing-kpi-row">${pricingCards}</div>
     </section>
-    <section class="kpi-section" aria-label="Specs identified">
+    <section class="kpi-section" aria-label="Specs Identified">
       <div class="kpi-section-heading">
         <span>Specs identified</span>
         <em>Normalized from the uploaded table</em>
       </div>
       <div class="kpi-row specs-kpi-row">${specCards}</div>
+    </section>`
+    : `
+    <section class="kpi-section" aria-label="Pricing Summary">
+      <div class="kpi-section-heading">
+        <span>Pricing summary</span>
+        <em>Calculated from approved rows</em>
+      </div>
+      <div class="kpi-row pricing-kpi-row">${pricingCards}</div>
     </section>
   `;
+  els.resultsKpis.innerHTML = specsSection;
 
   initializeConsumptionRamp(pricing);
   renderCostMix(skuCosts, pricing.totals.monthly);
-  renderTopWorkloads(topRows, maxMonthly, cloudBill);
+  renderTopWorkloads(topRows, maxMonthly, cloudBill, convertedBom);
   // Detail table defaults to the document's VM order (not cost-sorted).
-  renderResultsTable(pricing.rows.slice(), pricing.fullServiceBeta, cloudBill);
+  renderResultsTable(pricing.rows.slice(), pricing.fullServiceBeta, cloudBill, convertedBom);
   // Refresh the other-cloud tile if it's currently expanded.
   if (els.otherCloudsPage && !els.otherCloudsPage.classList.contains("is-hidden")) renderCrossCloud();
 }
@@ -3169,20 +3752,21 @@ function renderCostMix(skuCosts, total) {
     .join(", ");
   const fullTotal = formatCurrency(total);
   const displayTotal = formatCompactCurrency(total);
-  els.costDonut.style.background = `conic-gradient(${stops || "#dedbd3 0 100%"})`;
+  els.costDonut.style.background = `conic-gradient(${stops || "var(--cost-donut-empty) 0 100%"})`;
   els.costDonut.title = `${fullTotal}/mo`;
-  els.costDonut.setAttribute("aria-label", `Cost mix chart, ${fullTotal} per month`);
+  els.costDonut.setAttribute("aria-label", `Cost Mix Chart, ${fullTotal} per month`);
   els.costDonut.innerHTML = `<span title="${escapeHtml(`${fullTotal}/mo`)}"><strong>${escapeHtml(displayTotal)}</strong><em>/mo</em></span>`;
   els.costLegend.innerHTML = skuCosts
     .map((item, index) => {
       const color = colors[index % colors.length];
       const monthly = formatCurrency(item.monthly);
+      const skuLabel = item.sku ? `SKU ${item.sku}` : "No SKU";
       return `
-        <div class="legend-row" title="${escapeHtml(`${item.sku} - ${item.description}: ${monthly}`)}">
+        <div class="legend-row" title="${escapeHtml(`${item.description} - ${skuLabel}: ${monthly}`)}">
           <i style="background:${color}"></i>
-          <span>${escapeHtml(item.sku)}</span>
+          <span>${escapeHtml(item.description)}</span>
           <strong>${monthly}</strong>
-          <em>${escapeHtml(item.description)}</em>
+          <em>${escapeHtml(skuLabel)}</em>
         </div>
       `;
     })
@@ -3200,7 +3784,7 @@ function renderCostMix(skuCosts, total) {
     if (many) {
       legend.classList.add("is-collapsed");
       toggle.setAttribute("aria-expanded", "false");
-      toggle.textContent = `Show all ${skuCosts.length} SKUs`;
+      toggle.textContent = `Show All ${skuCosts.length} SKUs`;
     } else {
       legend.classList.remove("is-collapsed");
     }
@@ -3209,7 +3793,7 @@ function renderCostMix(skuCosts, total) {
       toggle.addEventListener("click", () => {
         const collapsed = legend.classList.toggle("is-collapsed");
         toggle.setAttribute("aria-expanded", String(!collapsed));
-        toggle.textContent = collapsed ? `Show all ${toggle.dataset.count} SKUs` : "Show less";
+        toggle.textContent = collapsed ? `Show All ${toggle.dataset.count} SKUs` : "Show Less";
       });
     }
   }
@@ -3237,13 +3821,21 @@ function cloudRowContext(row) {
   return [mapping.sourceProvider, mapping.sourceProduct, mapping.sourceRegion].filter(Boolean).join(" / ") || row.environment || "No source context";
 }
 
-function renderTopWorkloads(rows, maxMonthly, cloudBill = false) {
+function renderTopWorkloads(rows, maxMonthly, cloudBill = false, convertedBom = false) {
   els.topWorkloads.innerHTML = rows
     .slice(0, 8)
     .map((row) => {
       const width = Math.max(4, percent(row.monthly, maxMonthly));
-      const label = cloudBill ? cloudRowLabel(row) : fallbackEntityName(row);
-      const context = cloudBill ? cloudRowContext(row) : row.environment || "No environment";
+      const label = cloudBill
+        ? cloudRowLabel(row)
+        : convertedBom
+          ? row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || fallbackEntityName(row, "Line item")
+          : fallbackEntityName(row);
+      const context = cloudBill
+        ? cloudRowContext(row)
+        : convertedBom
+          ? serviceSourceLabel(row.fullServiceMapping)
+          : row.environment || "No environment";
       return `
         <div class="bar-row">
           <div class="bar-copy" title="${escapeHtml(label)}">
@@ -3267,7 +3859,8 @@ function serviceQuantityLabel(mapping, row) {
   if (mapping?.quantity) {
     return `${formatNumber(mapping.quantity)} ${mapping.unit || ""}`.trim();
   }
-  const storage = Number(row.specs.blockStorageGb || 0) + Number(row.specs.fileStorageGb || 0);
+  const specs = row?.specs || {};
+  const storage = Number(specs.blockStorageGb || 0) + Number(specs.fileStorageGb || 0);
   return storage ? `${formatNumber(storage)} GB` : "-";
 }
 
@@ -3299,7 +3892,7 @@ function compareSortValues(left, right, direction = "asc") {
 }
 
 function activeResultSort(columns) {
-  // "document" (the default) means keep the original upload/order — no column sort.
+  // "document" (the default) means keep the original upload/order - no column sort.
   if (state.resultSort.key === "document") return { column: null, direction: "asc" };
   const requestedColumn = columns.find((column) => column.key === state.resultSort.key);
   if (!requestedColumn) return { column: null, direction: "asc" };
@@ -3330,7 +3923,7 @@ function renderSortableHead(columns) {
         ${columns
           .map((column) => {
             if (column.selector) {
-              return `<th class="select-col"><input type="checkbox" id="selectAllRows" aria-label="Select all rows"/></th>`;
+              return `<th class="select-col"><input type="checkbox" id="selectAllRows" aria-label="Select All Rows"/></th>`;
             }
             const active = activeColumn?.key === column.key;
             const ariaSort = active ? (direction === "asc" ? "ascending" : "descending") : "none";
@@ -3355,7 +3948,7 @@ function renderColumnPicker(allColumnsRaw) {
   const allColumns = allColumnsRaw.filter((c) => !c.selector);
   const hiddenCount = allColumns.filter((c) => isColumnHidden(c.key)).length;
   const heading = hiddenCount
-    ? `<div class="column-picker-head">${hiddenCount} column${hiddenCount === 1 ? "" : "s"} hidden &mdash; check to show</div>`
+    ? `<div class="column-picker-head">${hiddenCount} column${hiddenCount === 1 ? "" : "s"} hidden - check to show</div>`
     : `<div class="column-picker-head">All columns shown</div>`;
   menu.innerHTML =
     heading +
@@ -3527,7 +4120,7 @@ function applyShapeToVm(row, shape) {
   row.shapeUsed = shape;
   row.specs.ocpus = ocpu;
   row.specs.memoryGb = mem;
-  row.ociProduct = `OCI Compute VM — ${lbl} (${ocpu} OCPU / ${mem} GB)`;
+  row.ociProduct = `OCI Compute VM - ${lbl} (${ocpu} OCPU / ${mem} GB)`;
   if (row.fullServiceMapping) row.fullServiceMapping.ociProduct = row.ociProduct;
 }
 
@@ -3643,7 +4236,7 @@ function sizeFlagBadge(row) {
   return badges.join("");
 }
 
-function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
+function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false, convertedBom = false) {
   // Source-service filter + bulk row actions are cloud-bill only.
   if (!cloudBill) {
     if (els.sourceFilterPanel) els.sourceFilterPanel.hidden = true;
@@ -3656,23 +4249,23 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
         label: "",
         selector: true,
         sortValue: () => 0,
-        render: (row) => `<input type="checkbox" class="row-select" data-row-select="${escapeHtml(String(row.rowId))}" ${state.selectedRows[row.rowId] ? "checked" : ""} aria-label="Select row"/>`,
+        render: (row) => `<input type="checkbox" class="row-select" data-row-select="${escapeHtml(String(row.rowId))}" ${state.selectedRows[row.rowId] ? "checked" : ""} aria-label="Select Row"/>`,
       },
       {
         key: "sourceService",
-        label: "Source service",
+        label: "Source Service",
         sortValue: (row) => rowSourceName(row),
         render: (row) => escapeHtml(rowSourceName(row)),
       },
       {
         key: "sourceProduct",
-        label: "Source SKU / meter",
+        label: "Source SKU / Meter",
         sortValue: (row) => row.fullServiceMapping?.sourceProduct || "",
         render: (row) => escapeHtml(row.fullServiceMapping?.sourceProduct || "-"),
       },
       {
         key: "ociTarget",
-        label: "OCI target",
+        label: "OCI Target",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
         render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + computeShapeBadge(row) + mappingFlagBadge(row),
       },
@@ -3690,13 +4283,13 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       },
       {
         key: "monthly",
-        label: "OCI monthly",
+        label: "OCI Monthly",
         sortValue: (row) => Number(row.monthly || 0),
         render: (row) => formatCurrency(row.monthly),
       },
       {
         key: "costAction",
-        label: "Cost action",
+        label: "Cost Action",
         sortValue: (row) => row.costAction || "",
         render: (row) => costActionSelectHtml(row),
       },
@@ -3739,7 +4332,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
     const columns = [
       {
         key: "workload",
-        label: "Workload",
+        label: convertedBom ? "Line Item" : "Workload",
         sortValue: (row) => fallbackEntityName(row),
         render: (row) => escapeHtml(fallbackEntityName(row)),
       },
@@ -3751,7 +4344,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
       },
       {
         key: "ociProduct",
-        label: "OCI product",
+        label: "OCI Product",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
         render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + convertedShapeSelectHtml(row),
       },
@@ -3805,7 +4398,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false) {
     },
     {
       key: "shape",
-      label: "OCI shape",
+      label: "OCI Shape",
       sortValue: (row) => row.shapeUsed?.label || "",
       render: (row) => shapeSelectHtml(row),
     },
@@ -3970,8 +4563,14 @@ els.fileInput.addEventListener("change", () => {
 });
 els.selectedDocClear?.addEventListener("click", () => {
   state.lastUploadFile = null;
+  state.fields = [];
+  state.rows = [];
+  state.pricing = null;
+  state.uploadMetadata = {};
+  resetWorkflowProgress();
   if (els.fileInput) els.fileInput.value = "";
   showSelectedDoc(null);
+  els.uploadStatus.textContent = "";
 });
 els.switchToOnPrem?.addEventListener("click", () => {
   state.intakeMode = "on_prem";
@@ -3998,7 +4597,7 @@ els.switchToOnPrem?.addEventListener("click", () => {
 
 els.dropZone.addEventListener("drop", (event) => {
   const [file] = event.dataTransfer.files;
-  // A dropped .json is a saved workflow, not a bill — route it to the loader.
+  // A dropped .json is a saved workflow, not a bill - route it to the loader.
   if (file && /\.json$/i.test(file.name)) {
     loadWorkflowFromFile(file);
     return;
@@ -4026,26 +4625,22 @@ els.cancelAddColumn?.addEventListener("click", hideAddColumnForm);
 els.missingOnlyToggle?.addEventListener("change", () => {
   state.showMissingOnly = els.missingOnlyToggle.checked;
   renderTable();
-  setTableEditStatus(
-    state.showMissingOnly ? "Showing only rows with blank visible cells." : "Showing all review rows.",
-    state.showMissingOnly ? "warning" : "success",
-  );
 });
-els.applyTableEdit.addEventListener("click", applyTableEdit);
-els.tableEditPrompt.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-    event.preventDefault();
-    applyTableEdit();
-  }
-});
-els.priceButton.addEventListener("click", showShapePage);
+function completeReviewStep() {
+  if (!state.rows.some((row) => row.__approved !== false)) return;
+  unlockWorkflowStep("shape");
+  showShapePage();
+}
+
+els.priceButton.addEventListener("click", completeReviewStep);
 function onPriceShapeClick() {
-  // A converted BOM is already priced — the page-3 shape choice re-prices its compute
+  // A converted BOM is already priced - the page-3 shape choice re-prices its compute
   // VMs on that shape (client-side); no pricing-engine round-trip.
   if (state.pricing && state.pricing.converted) {
     applyBulkVmShape(state.selectedShape);
     renderPricing(state.pricing);
     renderResults(state.pricing);
+    unlockWorkflowStep("networking");
     showNetworkingPage();
     return;
   }
@@ -4110,36 +4705,29 @@ document.querySelector(".ramp-months-switch")?.addEventListener("click", (event)
   if (!opt) return;
   setRampMonths(Number(opt.dataset.rampMonths));
 });
-els.hoursPerMonth?.addEventListener("change", (event) => {
-  const v = Number(event.target.value);
-  state.hoursPerMonth = v > 0 ? v : 730;
-  if (!(v > 0)) event.target.value = 730;
-  // The user edited hours -> treat it as an override that wins over per-row data hours.
-  state.hoursOverride = true;
-  // Per-hour added services (ECPU, OCPU, LB, port) follow the hours setting — re-price them.
-  repriceExtraServices();
-});
 els.oicMessagePacks?.addEventListener("change", (event) => {
   let v = Math.round(Number(event.target.value));
   if (!(v >= 1)) v = 1;
   event.target.value = v;
   state.oicMessagePacks = v;
-  // Message-pack sizing changes the OCI cost server-side (cloud-bill mode) — re-price
+  // Message-pack sizing changes the OCI cost server-side (cloud-bill mode) - re-price
   // so the app view + export reflect the new Oracle Integration Cloud line.
   if (state.pricing) priceRows({ keepView: true });
 });
-els.exportExcel?.addEventListener("click", () => exportToExcel("quick"));
-els.exportFullBom?.addEventListener("click", () => exportToExcel("full"));
+els.exportFullBom?.addEventListener("click", () => exportToExcel(els.exportFullBom));
+els.deliverablesFullBom?.addEventListener(
+  "click",
+  () => exportToExcel(els.deliverablesFullBom),
+);
 
-// Download ONLY the architecture diagram (PNG + editable .drawio, zipped) for this BOM.
+// Download only the architecture diagram. The ZIP always includes editable draw.io and
+// includes PNG when the server runtime has a compatible renderer.
 function setArchitectureExportStatus(message, tone = "") {
-  if (!els.architectureExportStatus) return;
-  els.architectureExportStatus.textContent = message;
-  if (tone) els.architectureExportStatus.dataset.tone = tone;
-  else delete els.architectureExportStatus.dataset.tone;
+  setDeliverableStatus(els.architectureExportStatus, message, tone);
+  setDeliverableStatus(els.deliverablesArchitectureStatus, message, tone);
 }
 
-async function downloadDiagram() {
+async function downloadDiagram(triggerButton = null) {
   if (!state.pricing) {
     els.engineStatus.textContent = "Run \"Reprice estimate\" first, then download the diagram.";
     setArchitectureExportStatus("Choose a shape and prepare the estimate first.", "error");
@@ -4153,42 +4741,52 @@ async function downloadDiagram() {
     );
     return;
   }
-  const btn = els.downloadDiagram;
-  const original = btn ? btn.textContent : "";
-  if (btn) { btn.disabled = true; btn.textContent = "Rendering diagram…"; }
-  els.engineStatus.textContent = "Rendering the OCI architecture diagram…";
-  setArchitectureExportStatus("Rendering the PNG and editable draw.io file...");
+  const btn = triggerButton || els.downloadDiagram || els.deliverablesDiagram;
+  const original = btn ? btn.innerHTML : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Rendering diagram..."; }
+  els.engineStatus.textContent = state.openaiApiConnected
+    ? "OpenAI is planning the architecture before deterministic rendering..."
+    : "Rendering the OCI architecture diagram...";
+  setArchitectureExportStatus(
+    state.openaiApiConnected
+      ? "Planning the topology, then rendering draw.io and PNG..."
+      : "Rendering the editable draw.io file and PNG when available...",
+  );
   try {
+    const diagramPayload = {
+      fields: state.fields,
+      rows: state.rows,
+      shape: state.selectedShape,
+      intakeMode: state.intakeMode,
+      providerHint: state.providerHint,
+      fullServiceBeta: state.fullServiceBeta,
+      hideGpuPricing: state.hideGpuPricing,
+      hideWindowsPricing: state.hideWindowsPricing,
+      hideSqlPricing: state.hideSqlPricing,
+      cpuUnit: state.cpuUnit,
+      shapeOverrides: state.shapeOverrides,
+      costOverrides: state.costOverrides,
+      hoursPerMonth: state.hoursPerMonth,
+      hoursOverride: state.hoursOverride,
+      oicMessagePacks: state.oicMessagePacks,
+      extraServices: state.extraServices || [],
+      diagramOptions: state.diagramOptions || {},
+      bomName: state.bomName || "",
+      convertedPricing: state.pricing?.converted ? state.pricing : null,
+    };
     const res = await fetch("/api/diagram", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fields: state.fields,
-        rows: state.rows,
-        shape: state.selectedShape,
-        intakeMode: state.intakeMode,
-        providerHint: state.providerHint,
-        fullServiceBeta: state.fullServiceBeta,
-        hideGpuPricing: state.hideGpuPricing,
-        hideWindowsPricing: state.hideWindowsPricing,
-        hideSqlPricing: state.hideSqlPricing,
-        cpuUnit: state.cpuUnit,
-        shapeOverrides: state.shapeOverrides,
-        costOverrides: state.costOverrides,
-        hoursPerMonth: state.hoursPerMonth,
-        hoursOverride: state.hoursOverride,
-        oicMessagePacks: state.oicMessagePacks,
-        extraServices: state.extraServices || [],
-        diagramOptions: state.diagramOptions || {},
-        bomName: state.bomName || "",
-        convertedPricing: state.pricing?.converted ? state.pricing : null,
-      }),
+      ...await jsonRequestOptions(diagramPayload),
     });
     if (!res.ok) {
       let msg = "Diagram build failed.";
       try { msg = (await res.json()).error || msg; } catch (e) { /* non-JSON */ }
       throw new Error(msg);
     }
+    const formats = (res.headers.get("X-Architecture-Formats") || "drawio")
+      .split(",")
+      .map((format) => format.trim())
+      .filter(Boolean);
+    const aiStatus = res.headers.get("X-Architecture-AI") || "deterministic_fallback";
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -4199,39 +4797,28 @@ async function downloadDiagram() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    els.engineStatus.textContent = `Diagram downloaded: ${link.download} (PNG + draw.io)`;
-    setArchitectureExportStatus(`Downloaded ${link.download}`, "success");
+    const formatLabel = formats.map((format) => format === "drawio" ? "draw.io" : format.toUpperCase()).join(" + ");
+    const planningLabel = aiStatus === "assisted" ? "OpenAI-planned, validated" : "deterministic fallback";
+    els.engineStatus.textContent = `Diagram downloaded: ${link.download} (${formatLabel}; ${planningLabel})`;
+    setArchitectureExportStatus(
+      `Downloaded ${link.download} (${formatLabel}; ${planningLabel})`,
+      "success",
+    );
   } catch (error) {
-    els.engineStatus.textContent = `Diagram download failed — ${error.message}`;
+    els.engineStatus.textContent = `Diagram download failed - ${error.message}`;
     setArchitectureExportStatus(`Download failed: ${error.message}`, "error");
     console.error("diagram download failed", error);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = original; }
+    if (btn) { btn.disabled = false; btn.innerHTML = original; }
   }
 }
-els.downloadDiagram?.addEventListener("click", downloadDiagram);
-els.exportJson?.addEventListener("click", exportWorkflowJson);
+els.downloadDiagram?.addEventListener("click", () => downloadDiagram(els.downloadDiagram));
+els.deliverablesDiagram?.addEventListener(
+  "click",
+  () => downloadDiagram(els.deliverablesDiagram),
+);
 els.loadWorkflow?.addEventListener("click", () => els.loadWorkflowFile?.click());
 els.loadPrevBom?.addEventListener("click", () => els.loadWorkflowFile?.click());
-
-// Export split-button: Full BOM is the primary action; the caret reveals Quick BOM and
-// workflow JSON. Clicking an item or outside, or pressing Escape, closes the menu.
-(function wireExportMenu() {
-  const menu = document.querySelector("#exportMenu");
-  const toggle = document.querySelector("#exportMenuToggle");
-  const list = document.querySelector("#exportMenuList");
-  if (!menu || !toggle || !list) return;
-  const close = () => { list.hidden = true; toggle.setAttribute("aria-expanded", "false"); };
-  toggle.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const opening = list.hidden;
-    list.hidden = !opening;
-    toggle.setAttribute("aria-expanded", String(opening));
-  });
-  list.addEventListener("click", () => close());
-  document.addEventListener("click", (e) => { if (!menu.contains(e.target)) close(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
-})();
 els.loadWorkflowFile?.addEventListener("change", (event) => {
   const file = event.target.files && event.target.files[0];
   loadWorkflowFromFile(file);
@@ -4250,7 +4837,7 @@ function setConvertStatus(name, message, phase) {
 }
 async function convertBomFromFile(file) {
   if (!file) return;
-  clearIntakeStatuses();   // switching to convert — clear the load banner
+  clearIntakeStatuses();   // switching to convert - clear the load banner
   const nm = file.name || "bom";
   const okExt = /\.(xlsx|xls|csv|tsv)$/i.test(nm);
   setConvertStatus(nm, okExt ? "converting…" : "not an .xlsx / .csv file", okExt ? "loading" : "error");
@@ -4273,7 +4860,10 @@ async function convertBomFromFile(file) {
     if (Array.isArray(payload.rateCards)) state.rateCards = payload.rateCards;
     state.selectedShape = payload.selectedShape?.key || state.selectedShape;
     state.pricing = payload;
-    // Don't seed the BOM name from the uploaded filename — the export name comes from
+    state.uploadReady = state.rows.length > 0;
+    state.workflowMaxUnlockedStep = workflowStepIndex("shape");
+    syncWorkflowAvailability();
+    // Don't seed the BOM name from the uploaded filename - the export name comes from
     // what the user actually types at the top, nothing else.
     // A converted BOM starts on the Shape page (page 3): pick a shape (or keep the
     // detected per-server shapes) and continue to results. Pages 2 & 3 are navigable.
@@ -4283,8 +4873,8 @@ async function convertBomFromFile(file) {
     const rec = payload.recognizedSkus || 0;
     const rev = payload.unrecognizedSkus || 0;
     const status = payload.comparisonSummary
-      ? `imported comparison summary — ${payload.rows.length} service lines. Choose a shape →`
-      : `converted — ${payload.rows.length} line items, ${rec} SKUs recognized${rev ? `, ${rev} for review` : ""}. Choose a shape →`;
+      ? `imported comparison summary - ${payload.rows.length} service lines. Choose a shape →`
+      : `converted - ${payload.rows.length} line items, ${rec} SKUs recognized${rev ? `, ${rev} for review` : ""}. Choose a shape →`;
     setConvertStatus(nm, status, "ok");
   } catch (error) {
     setConvertStatus(nm, error.message || "conversion failed", "error");
@@ -4301,41 +4891,12 @@ els.convertBomFile?.addEventListener("change", (event) => {
 els.bomName?.addEventListener("input", (event) => {
   state.bomName = event.target.value;
 });
-let _discountRenderTimer = null;
-function _applyDiscountRender() {
-  clearTimeout(_discountRenderTimer);
-  _discountRenderTimer = null;
-  if (state.pricing) renderResults(state.pricing);
-}
-els.ociDiscount?.addEventListener("input", (event) => {
-  let v = Number(event.target.value);
-  if (!(v >= 0)) v = 0;
-  if (v > 100) v = 100;
-  state.ociDiscount = v;
-  // Store the value immediately, but DEBOUNCE the heavy results re-render so the view
-  // isn't refreshing on every keystroke (which made the field impossible to type in).
-  // The OCI total + ramp update ~700ms after you stop typing.
-  clearTimeout(_discountRenderTimer);
-  _discountRenderTimer = setTimeout(_applyDiscountRender, 700);
-});
-// Also apply right away when the field loses focus (blur) or Enter is pressed, so the
-// update isn't left waiting on the debounce timer if you move on quickly.
-els.ociDiscount?.addEventListener("change", _applyDiscountRender);
-els.ociDiscount?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") { event.target.blur(); _applyDiscountRender(); }
-});
-
 function renderCrossCloud() {
   const wrap = els.crossCloudResults;
   if (!wrap) return;
   const raw = state.pricing?.crossCloud;
-  // Full OCI total — the SAME figure as the "OCI-equivalent monthly" headline: discounted
-  // compute + storage + mapped services, PLUS add-in services and Windows 3rd-party
-  // licensing. The other clouds' bills include their licensing too, so leaving it out here
-  // understated OCI and made the comparison unfair.
-  const _ccWindows = (state.pricing?.rows || []).reduce(
-    (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
-  const ociMonthly = ociEffectiveMonthly(state.pricing) + extraServicesEffective() + _ccWindows;
+  // The backend total already includes Windows licensing. Add only client-side services.
+  const ociMonthly = Number(state.pricing?.totals?.monthly || 0) + extraServicesMonthly();
   if (!raw) {
     if (state.pricing?.converted) {
       wrap.innerHTML = `
@@ -4364,12 +4925,12 @@ function renderCrossCloud() {
     ? "Best match: your source cloud stays at its ACTUAL billed cost; the other cloud is estimated on the closest equivalent shape."
     : "Best match: price every workload on the closest equivalent shape, using your real source-cloud instance prices where known.";
   const topTip = raw.cloudBillMode
-    ? "Top of the line: a what-if — re-estimate EVERY cloud (including your source bill) on each cloud's newest-generation shape. Non-compute services stay at billed cost."
+    ? "Top of the line: a what-if - re-estimate EVERY cloud (including your source bill) on each cloud's newest-generation shape. Non-compute services stay at billed cost."
     : "Top of the line: price every workload on each cloud's newest-generation shape.";
   const toggle = hasModes
-    ? `<div class="mode-switch cross-cloud-switch" role="group" aria-label="Equivalent shape mode">
-         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "" : "is-active"}" data-cc-tier="best" title="${escapeHtml(bestTip)}">Best match</button>
-         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "is-active" : ""}" data-cc-tier="top" title="${escapeHtml(topTip)}">Top of the line</button>
+    ? `<div class="mode-switch cross-cloud-switch" role="group" aria-label="Equivalent Shape Mode">
+         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "" : "is-active"}" data-cc-tier="best" title="${escapeHtml(bestTip)}">Best Match</button>
+         <button type="button" class="mode-opt ${state.crossCloudTopTier ? "is-active" : ""}" data-cc-tier="top" title="${escapeHtml(topTip)}">Top of the Line</button>
        </div>`
     : "";
   const cards = [];
@@ -4382,7 +4943,7 @@ function renderCrossCloud() {
   `);
   const tier = state.crossCloudTopTier;
   const basisLabel = (v) => {
-    if (v.basis === "actual bill") return sourceCostIsEstimated() ? "App Estimate — from usage (bill had no pricing)" : "your actual billed cost";
+    if (v.basis === "actual bill") return sourceCostIsEstimated() ? "App Estimate - from usage (bill had no pricing)" : "your actual billed cost";
     if (v.basis === "imported comparison total") return "imported comparison total";
     if (v.basis === "what-if: bill re-shaped on newest-gen") return "what-if: your bill re-shaped on newest-gen";
     if (v.basis && v.basis.startsWith("compute + services re-priced")) return v.basis;
@@ -4403,7 +4964,7 @@ function renderCrossCloud() {
       : "";
     // Reversed: other cloud cheaper than OCI (negative) = red; pricier = green.
     const deltaClass = delta >= 0 ? "cross-cloud-down" : "cross-cloud-up";
-    // The source cloud's card is an App Estimate when the bill had no pricing — flag it.
+    // The source cloud's card is an App Estimate when the bill had no pricing - flag it.
     const nameSuffix = (sourceCostIsEstimated() && key === raw.sourceCloud) ? " (App Estimate)" : "";
     cards.push(`
       <div class="cross-cloud-card">
@@ -4430,13 +4991,13 @@ function renderCrossCloud() {
     ? `Imported from the finished ${srcName}-to-OCI comparison workbook. These are the source-cloud and OCI totals recorded in that file; another cloud cannot be estimated without the original raw usage export.`
     : raw.cloudBillMode
     ? (tier
-        ? `Top-of-the-line (what-if): every cloud — including your ${srcName} bill — is re-estimated on that cloud's newest-generation equivalent shape, so you can see what the same workloads would cost re-shaped. Non-compute services (storage, data transfer, managed services) stay at their actual billed cost. For directional comparison only — not a quote.`
-        : `Best match: your ${srcName} total is your actual billed cost — no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services at their billed cost. Switch to Top of the line to re-estimate your bill on newest-generation shapes. For directional comparison only — not a quote.`)
+        ? `Top-of-the-line (what-if): every cloud - including your ${srcName} bill - is re-estimated on that cloud's newest-generation equivalent shape, so you can see what the same workloads would cost re-shaped. Non-compute services (storage, data transfer, managed services) stay at their actual billed cost. For directional comparison only - not a quote.`
+        : `Best match: your ${srcName} total is your actual billed cost - no estimate. The other cloud estimates compute line items against an equivalent shape and carries non-compute services at their billed cost. Switch to Top of the line to re-estimate your bill on newest-generation shapes. For directional comparison only - not a quote.`)
     : tier
-    ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote."
-    : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only — not a quote.";
+    ? "Top-of-the-line mode prices every workload against each cloud's newest-generation equivalent shape (Linux baseline plus Windows licensing where detected). For directional comparison only - not a quote."
+    : "Best-match mode uses your actual source-cloud shape prices where known, otherwise the closest equivalent shape on each cloud (Linux baseline plus Windows licensing where detected). For directional comparison only - not a quote.";
   const estNote = sourceCostIsEstimated()
-    ? ` Your ${srcName} bill contained usage/SKUs but no pricing, so the ${srcName} total shown is an App Estimate reconstructed from usage — not a billed figure.`
+    ? ` Your ${srcName} bill contained usage/SKUs but no pricing, so the ${srcName} total shown is an App Estimate reconstructed from usage - not a billed figure.`
     : "";
   wrap.innerHTML = `
     ${toggle ? `<div class="cross-cloud-toolbar">${toggle}</div>` : ""}
@@ -4452,17 +5013,39 @@ function renderCrossCloud() {
 }
 
 els.backToReview?.addEventListener("click", showIntakePage);
+els.continueToReviewFromUpload?.addEventListener("click", showReviewPage);
 els.backToUploadFromReview?.addEventListener("click", showUploadPage);
 els.backToReviewFromShape.addEventListener("click", showIntakePage);
 els.backToShapeFromNetworking?.addEventListener("click", showShapePage);
-els.continueToPriceFromServices?.addEventListener("click", openPriceStep);
+els.continueToPriceFromServices?.addEventListener("click", () => {
+  if (!state.pricing) return;
+  unlockWorkflowStep("price");
+  openPriceStep();
+});
 els.backToCompareFromArchitecture?.addEventListener("click", showOtherCloudsPage);
+els.continueToDeliverables?.addEventListener("click", () => {
+  if (!state.pricing) return;
+  unlockWorkflowStep("deliverables");
+  openDeliverablesStep();
+});
+els.backToArchitectureFromDeliverables?.addEventListener("click", showArchitecturePage);
 els.backToServicesFromPrice?.addEventListener("click", showNetworkingPage);
-els.continueToOtherClouds?.addEventListener("click", openOtherCloudsStep);
+els.continueToOtherClouds?.addEventListener("click", () => {
+  if (!state.pricing) return;
+  unlockWorkflowStep("other-clouds");
+  openOtherCloudsStep();
+});
 els.backToPriceFromOtherClouds?.addEventListener("click", showResultsPage);
-els.continueToArchitectureFromOtherClouds?.addEventListener("click", showArchitecturePage);
+els.continueToArchitectureFromOtherClouds?.addEventListener("click", () => {
+  if (!state.pricing) return;
+  unlockWorkflowStep("architecture");
+  showArchitecturePage();
+});
 els.steps.forEach((step) => {
-  step.addEventListener("click", () => navigateStep(step.dataset.step));
+  step.addEventListener("click", () => {
+    if (step.disabled || !isWorkflowStepUnlocked(step.dataset.step)) return;
+    navigateStep(step.dataset.step);
+  });
 });
 els.modeOnPrem?.addEventListener("click", () => setIntakeMode("on_prem"));
 els.modeCloudBill?.addEventListener("click", () => setIntakeMode("cloud_bill"));
@@ -4476,6 +5059,8 @@ els.providerHint?.addEventListener("change", () => {
   }
 });
 syncModeUi();
+syncIntakeLayout();
+syncWorkflowAvailability();
 
 if (els.rampChart) {
   els.rampChart.addEventListener("pointerdown", startRampDrag);
@@ -4520,22 +5105,12 @@ window.addEventListener("resize", () => {
 });
 
 // ===========================================================================
-// "Add OCI services" panel — search the OCI catalog, size a service, add it to
+// "Add OCI services" panel - search the OCI catalog, size a service, add it to
 // the BOM. Added services flow into the results total and both exports.
 // ===========================================================================
-// List (undiscounted) monthly of added services — used for the cart display.
+// Monthly list price of added services.
 function extraServicesMonthly() {
   return (state.extraServices || []).reduce((t, s) => t + Number(s.monthly || 0), 0);
-}
-
-// Effective monthly of added services after the OCI discount. Native OCI services are
-// discounted; 3rd-party licensing (Windows, SQL Server) is charged at list.
-function extraServicesEffective() {
-  const d = (state.ociDiscount || 0) / 100;
-  return (state.extraServices || []).reduce((t, s) => {
-    const m = Number(s.monthly || 0);
-    return t + (s.thirdParty ? m : m * (1 - d));
-  }, 0);
 }
 
 async function fetchCatalog() {
@@ -4600,7 +5175,7 @@ function serviceCardHtml(e, i) {
       <div class="service-card-head">
         <div>
           <strong>${escapeHtml(e.name)}</strong>
-          <span class="service-card-meta">${escapeHtml(e.group)} · ${escapeHtml(e.sku)} · ${rateTxt}</span>
+          <span class="service-card-meta" data-service-meta="${i}">${escapeHtml(e.group)} · ${escapeHtml(e.sku)} · ${rateTxt}</span>
         </div>
         <span class="service-card-cost" data-cost="${i}">$0.00/mo</span>
       </div>
@@ -4621,7 +5196,7 @@ function renderServiceResults() {
     return;
   }
   // Group results by category into collapsible sections. Remembering open/closed per group
-  // means browsing stays tidy — expand only the category you care about.
+  // means browsing stays tidy - expand only the category you care about.
   const groupsInOrder = [];
   const byGroup = new Map();
   items.forEach((e, i) => {
@@ -4671,6 +5246,30 @@ function cardValues(idx) {
   return vals;
 }
 
+function fastConnectSelection(entry, values = {}) {
+  const speed = String(values.speed || "10G").toUpperCase();
+  const normalizedSpeed = ["1G", "10G", "100G", "400G"].includes(speed) ? speed : "10G";
+  const fallbackRates = { "1G": 0.2125, "10G": 1.275, "100G": 10.75, "400G": 20 };
+  const fallbackSkus = {
+    "1G": "B88325",
+    "10G": "B88326",
+    "100G": "B93126",
+    "400G": "B107975",
+  };
+  const labels = entry.speedLabels || {
+    "1G": "1 Gbps",
+    "10G": "10 Gbps",
+    "100G": "100 Gbps",
+    "400G": "400 Gbps",
+  };
+  return {
+    speed: normalizedSpeed,
+    label: labels[normalizedSpeed],
+    rate: Number(entry.speedRates?.[normalizedSpeed] ?? fallbackRates[normalizedSpeed]),
+    sku: entry.speedSkus?.[normalizedSpeed] || fallbackSkus[normalizedSpeed],
+  };
+}
+
 // Show/hide conditional fields (data-showwhen-*) based on the current dropdown selection.
 function applyCardFieldVisibility(scope) {
   (scope || els.serviceResults).querySelectorAll("[data-showwhen-field]").forEach((el) => {
@@ -4698,6 +5297,10 @@ function clientLineCost(entry, v) {
     const ecpu = Number(v.p_db_ecpu || 0) + Number(v.s_db_ecpu || 0);
     const oic = Number(v.p_oic || 0) + Number(v.s_oic || 0);
     return Math.round((ocpu * 0.0128 + ecpu * 0.0032 + oic * 0.192) * hours * 100) / 100;
+  }
+  if (cid === "fastconnect") {
+    const selected = fastConnectSelection(entry, v);
+    return Math.round(Number(v.ports || 0) * selected.rate * hours * 100) / 100;
   }
   if (cid === "adb") {
     // Autonomous AI Database: ECPU + storage + backup (mirror of oci_catalog.line_cost).
@@ -4750,6 +5353,17 @@ function clientLineCost(entry, v) {
   if (cid === "object") {
     // Object Storage: GB (first 10 free) + requests per 10k (first 50k free).
     return Math.round((Math.max(0, Number(v.gb || 0) - 10) * 0.0255
+      + Math.max(0, Number(v.requests || 0) - 5) * 0.0034) * 100) / 100;
+  }
+  if (cid === "object_ia") {
+    // Infrequent Access: stored GB + retrieved GB + shared object-request meter.
+    return Math.round((Math.max(0, Number(v.gb || 0) - 10) * 0.01
+      + Math.max(0, Number(v.retrievalGb || 0) - 10) * 0.01
+      + Math.max(0, Number(v.requests || 0) - 5) * 0.0034) * 100) / 100;
+  }
+  if (cid === "archive") {
+    // Archive: stored GB + shared object-request meter.
+    return Math.round((Math.max(0, Number(v.gb || 0) - 10) * 0.0026
       + Math.max(0, Number(v.requests || 0) - 5) * 0.0034) * 100) / 100;
   }
   if (cid === "pg") {
@@ -4807,9 +5421,19 @@ function repriceExtraServices() {
 function updateCardCost(idx) {
   const entry = state.catalog.results[idx];
   if (!entry) return;
-  const cost = clientLineCost(entry, cardValues(idx));
+  const values = cardValues(idx);
+  const cost = clientLineCost(entry, values);
   const el = els.serviceResults.querySelector(`[data-cost="${idx}"]`);
   if (el) el.textContent = `${formatCurrency(cost)}/mo`;
+  if (entry.id === "fastconnect") {
+    const selected = fastConnectSelection(entry, values);
+    const meta = els.serviceResults.querySelector(`[data-service-meta="${idx}"]`);
+    if (meta) {
+      meta.textContent = `${entry.group} · ${selected.sku} · $${selected.rate.toLocaleString(undefined, {
+        maximumFractionDigits: 4,
+      })} / port hour`;
+    }
+  }
 }
 
 function renderServiceCart() {
@@ -4817,8 +5441,9 @@ function renderServiceCart() {
   const items = state.extraServices || [];
   els.serviceCartCount.textContent = String(items.length);
   els.serviceCartTotal.textContent = formatCurrency(extraServicesMonthly());
+  els.serviceCartReview?.classList.toggle("is-empty", items.length === 0);
   if (!items.length) {
-    els.serviceCartList.innerHTML = `<p class="service-empty">Nothing added yet.</p>`;
+    els.serviceCartList.innerHTML = `<p class="service-empty">No services added yet. Use the catalog above to build this part of the BOM.</p>`;
     return;
   }
   els.serviceCartList.innerHTML = items
@@ -4844,16 +5469,20 @@ function addServiceFromCard(idx) {
   if (!entry) return;
   const values = cardValues(idx);
   const monthly = clientLineCost(entry, values);
+  const fastConnect = entry.id === "fastconnect" ? fastConnectSelection(entry, values) : null;
   state.extraServices.push({
     catalogId: entry.id,
-    name: entry.name,
+    name: fastConnect ? `FastConnect port (${fastConnect.label})` : entry.name,
     group: entry.group,
-    sku: entry.sku,
+    sku: fastConnect?.sku || entry.sku,
     unit: entry.unit,
     basis: entry.basis,
-    rate: entry.rate,
+    rate: fastConnect?.rate ?? entry.rate,
     free: entry.free || {},
     fields: entry.fields,
+    speedRates: entry.speedRates,
+    speedSkus: entry.speedSkus,
+    speedLabels: entry.speedLabels,
     thirdParty: !!entry.thirdParty || entry.group === "Licensing",
     values,
     monthly,

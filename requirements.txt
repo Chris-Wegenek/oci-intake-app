@@ -9,7 +9,6 @@ legacy-cgi; python_version >= "3.13"
 # on every sheet, so it fails long before the architecture diagram. Also used to render
 # the diagram PNG itself.
 pillow
-# pycairo renders the optional architecture-diagram PNG locally, but it needs
-# native cairo headers that Vercel's Python build image does not provide. The
-# app already skips PNG rendering when cairo is unavailable; .drawio export
-# still builds.
+# pycairo is the preferred architecture PNG renderer, but it needs native Cairo
+# headers that Vercel's Python image does not provide. The app falls back to
+# Pillow there and still includes the editable .drawio file.
