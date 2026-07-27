@@ -1335,11 +1335,26 @@ def inventory_data_check(fields, rows):
     """
     total = len(rows or [])
     found = []
+    _sizing_marker = {"cpu": "cpuSourceLabel", "memory": "memorySourceLabel",
+                      "storage": "storageSourceLabel"}
     for key, label, needle_sets in _DATA_CHECK_SIGNALS:
         col_key = col_label = ""
         populated = 0
         blocked = _DATA_CHECK_EXCLUDE.get(key, ())
-        for needles in needle_sets:
+        # Prefer the column the parser actually uses for sizing (tagged with a *SourceLabel
+        # marker) so the Data Check names the real CPU/memory/storage column rather than a
+        # same-keyword neighbor (e.g. a "vCPU:Core ratio" column that sorts first).
+        marker = _sizing_marker.get(key)
+        if marker:
+            for f in fields or []:
+                if isinstance(f, dict) and f.get(marker):
+                    k = f.get("key")
+                    n = sum(1 for r in (rows or []) if clean_text(r.get(k)))
+                    if n > populated:
+                        col_key = k
+                        col_label = clean_text(f.get(marker) or f.get("sourceHeader") or f.get("label"))
+                        populated = n
+        for needles in (() if populated else needle_sets):
             for f in fields or []:
                 if not isinstance(f, dict):
                     continue
