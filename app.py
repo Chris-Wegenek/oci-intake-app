@@ -9898,6 +9898,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
+                    "build": APP_BUILD_TAG,
                     "openaiApiEnabled": openai_api_enabled(),
                     "openaiApiConfigured": openai_api_configured(),
                     "openaiApiConnected": openai_api_enabled() and openai_api_configured(),
@@ -10514,9 +10515,13 @@ class IntakeHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {fmt % args}")
 
 
+APP_BUILD_TAG = "onprem-rulebased-preferred-2026-07-27"
+
+
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", PORT), IntakeHandler)
     print(f"OCI Intake app running at http://127.0.0.1:{PORT}")
+    print(f">>> BUILD {APP_BUILD_TAG} <<<  (rule-based parser preferred for on-prem sizing)")
     server.serve_forever()
 
 
