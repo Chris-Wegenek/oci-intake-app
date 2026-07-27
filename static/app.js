@@ -1500,6 +1500,10 @@ function resolvedCpuUnit() {
   const src = String(f?.cpuSourceLabel || "").toLowerCase();
   if (src.includes("ocpu")) return "ocpu";
   if (src.includes("vcpu") || src.includes("virtual cpu")) return "vcpu";
+  // A "rationalized cores" column is an already-right-sized physical-core count
+  // (1 core = 1 OCPU), so it must be treated as OCPUs, NOT halved like vCPUs.
+  // Mirror the server's detect_cpu_unit so display and pricing agree.
+  if (src.includes("rationalized") && src.includes("core")) return "ocpu";
   return "vcpu";
 }
 function cpuDisplayMult() {

@@ -6962,20 +6962,15 @@ def validate_ai_inventory_scrub(candidate, baseline=None):
     return candidate
 
 
-def _reconcile_onprem_sizing(result, baseline):
-    """For on-prem: when the deterministic rule-based parser confidently read the core sizing
-    columns — CPU (incl. a 'Rationalized Cores' column, treated as OCPU 1:1), memory, AND storage,
-    each with actual data — prefer its whole result over the AI plan. The rule-based parser is
-    deterministic and picks the intended columns; the AI plan sometimes maps a raw-vCPU or
-    vCPU:Core-ratio column for CPU or misses storage. If the baseline could NOT read those columns
-    (a genuinely messy inventory), keep the AI result — that's where the AI earns its keep."""
+def _baseline_sizing_complete(baseline):
+    """True when the rule-based parser confidently read the core sizing columns — CPU (marked
+    with cpuSourceLabel), memory, AND storage — each with actual data in the rows. Used to decide
+    whether the deterministic parse is reliable enough to prefer over the AI plan for on-prem."""
     try:
-        if not baseline or result is baseline:
-            return result
         rows = baseline.get("rows") or []
         fields = baseline.get("fields") or []
         if not rows:
-            return result
+            return False
 
         def marker_has_data(marker):
             for f in fields:
@@ -6985,8 +6980,19 @@ def _reconcile_onprem_sizing(result, baseline):
                         return True
             return False
 
-        if (marker_has_data("cpuSourceLabel") and marker_has_data("memorySourceLabel")
-                and marker_has_data("storageSourceLabel")):
+        return (marker_has_data("cpuSourceLabel") and marker_has_data("memorySourceLabel")
+                and marker_has_data("storageSourceLabel"))
+    except Exception:
+        return False
+
+
+def _reconcile_onprem_sizing(result, baseline):
+    """Safety net (in addition to the early return in parse_workbook): if the AI result is used
+    but the deterministic parser had complete CPU/memory/storage sizing, prefer the baseline."""
+    try:
+        if not baseline or result is baseline:
+            return result
+        if _baseline_sizing_complete(baseline):
             baseline.setdefault("metadata", {})["preferredOverAI"] = True
             baseline["llmWarning"] = (
                 "Used the validated rule-based parser for CPU / memory / storage sizing "
@@ -7028,6 +7034,17 @@ def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PRE
         baseline["metadata"]["aiAssisted"] = False
     except Exception as exc:
         baseline_error = exc
+    # If the deterministic rule-based parser confidently read the core sizing columns — CPU
+    # (incl. a rationalized-cores column, treated as OCPU 1:1), memory, AND storage, each with
+    # data — use it and skip the AI plan entirely. It's reliable for well-formed inventories,
+    # and the AI plan sometimes maps a raw-vCPU / vCPU:Core-ratio column for CPU or misses storage.
+    if baseline is not None and _baseline_sizing_complete(baseline):
+        baseline.setdefault("metadata", {})["ruleBasedSizingComplete"] = True
+        baseline["llmWarning"] = (
+            "Used the validated rule-based parser — it read CPU, memory, and storage "
+            "(including any rationalized-cores column)."
+        )
+        return baseline
     if not openai_api_enabled():
         if baseline is None:
             raise baseline_error
