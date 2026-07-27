@@ -1102,10 +1102,18 @@ def clean_cell(value):
 
 
 def spreadsheet_cpu_label(label):
+    raw = str(label or "").lower()
     text = normalize(label)
     if not text:
         return False
-    if any(term in text for term in ["chipset", "processor family", "cpu type", "architecture", "model", "vendor", "speed", "ghz", "clock", "utiliz", "percent"]):
+    # A "rationalized cores / rationalized vCPU" column (from a migration assessment) is a
+    # deliberate CPU-sizing column — recognize it FIRST (note "ratio" is a substring of
+    # "rationalized", so this must come before the ratio exclusion below).
+    if "rationalized" in text and any(t in text for t in ["core", "cpu", "vcpu"]):
+        return True
+    # Ratios / rates / perf / architecture columns are NOT a CPU count (e.g. "vCPU:Core Ratio",
+    # "Current vCPU:Core", "Uplift", "Target Perf") — exclude them so they aren't sized on.
+    if ":" in raw or any(term in text for term in ["chipset", "processor family", "cpu type", "architecture", "model", "vendor", "speed", "ghz", "clock", "utiliz", "percent", "ratio", "per core", "per socket", "uplift", "perf"]):
         return False
     if text in {"cpu", "cpus", "cores", "core", "vcpu", "vcpus"}:
         return True
@@ -1928,11 +1936,28 @@ def parse_workbook_rule_based(path, full_service_beta=False):
     memory_field_keys = set()
     storage_field_keys = set()
     unit_factor = {}  # field key -> GB scale implied by the source header (MB/TB/KB)
+    # When several CPU columns exist (e.g. raw vCPUs AND a "Rationalized Cores" column), size
+    # on ONE primary: a rationalized-cores column (the customer's already-right-sized core
+    # count) wins over raw vCPUs. Only the primary becomes the OCPU sizing column; the others
+    # stay as plain info columns so the app doesn't double-count or grab the wrong one.
+    _cpu_cands = [f for f in fields if spreadsheet_cpu_label(f["label"])]
+
+    def _cpu_rank(f):
+        t = normalize(f["label"])
+        if "rationalized" in t:
+            return 3
+        if "core" in t and "vcpu" not in t:      # physical cores
+            return 2
+        return 1                                 # vcpu / cpu
+    _primary_cpu_key = max(_cpu_cands, key=_cpu_rank)["key"] if _cpu_cands else None
+
     for field in fields:
         if spreadsheet_cpu_label(field["label"]):
+            if field["key"] != _primary_cpu_key:
+                continue   # secondary CPU column -> keep as an info column, don't size on it
             cpu_field_keys.add(field["key"])
             # Preserve the original CPU header so auto-detection can tell whether the
-            # column was labeled vCPU vs OCPU (the label is renamed to "OCPUs" below).
+            # column was labeled vCPU vs OCPU vs rationalized cores (label renamed below).
             field["cpuSourceLabel"] = field["label"]
             field["label"] = ocpu_review_label(field["label"])
         elif spreadsheet_memory_label(field["label"]):
@@ -7222,6 +7247,10 @@ def detect_cpu_unit(fields):
             return "ocpu"
         if "vcpu" in src or "v cpu" in src or "virtual cpu" in src:
             return "vcpu"
+        # A "rationalized cores" column is an already-right-sized PHYSICAL-core count
+        # (1 core = 1 OCPU), so it must be treated as OCPUs, NOT halved like vCPUs.
+        if "rationalized" in src and "core" in src:
+            return "ocpu"
     return "vcpu"
 
 
