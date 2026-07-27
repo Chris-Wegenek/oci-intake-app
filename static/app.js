@@ -1264,10 +1264,27 @@ async function fetchJson(url, options = {}, timeoutMs = 60000) {
   }
 }
 
+const SIZING_MARKER_BY_LABEL = {
+  "OCPUs": "cpuSourceLabel",
+  "RAM (GB)": "memorySourceLabel",
+  "Storage (GB)": "storageSourceLabel",
+};
+
 function findField(rule) {
   if (rule.key) {
     const keyedMatch = state.fields.find((field) => field?.key === rule.key);
     if (keyedMatch) return { ...keyedMatch, label: rule.label };
+  }
+  // Prefer the column the server tagged as the actual sizing source, so the review table
+  // shows the same CPU / memory / storage column the parser sized and priced on (e.g. a
+  // "Rationalized Cores" column, or "Disk in GB" storage) rather than a raw-vCPU / ratio
+  // column that merely shares a keyword, or an empty fallback when the header wording differs.
+  const marker = SIZING_MARKER_BY_LABEL[rule.label];
+  if (marker) {
+    const tagged = state.fields.find(
+      (field) => field && field[marker] && state.rows.some((row) => hasCellContent(row[field.key]))
+    );
+    if (tagged) return { ...tagged, label: rule.label };
   }
   const matchGroups = (rule.containsAny || [rule.contains || []]).map((group) => group.map(normalizeText));
   const section = normalizeText(rule.section);
