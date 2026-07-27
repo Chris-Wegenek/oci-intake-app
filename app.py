@@ -6962,6 +6962,42 @@ def validate_ai_inventory_scrub(candidate, baseline=None):
     return candidate
 
 
+def _reconcile_onprem_sizing(result, baseline):
+    """For on-prem: when the deterministic rule-based parser confidently read the core sizing
+    columns — CPU (incl. a 'Rationalized Cores' column, treated as OCPU 1:1), memory, AND storage,
+    each with actual data — prefer its whole result over the AI plan. The rule-based parser is
+    deterministic and picks the intended columns; the AI plan sometimes maps a raw-vCPU or
+    vCPU:Core-ratio column for CPU or misses storage. If the baseline could NOT read those columns
+    (a genuinely messy inventory), keep the AI result — that's where the AI earns its keep."""
+    try:
+        if not baseline or result is baseline:
+            return result
+        rows = baseline.get("rows") or []
+        fields = baseline.get("fields") or []
+        if not rows:
+            return result
+
+        def marker_has_data(marker):
+            for f in fields:
+                if isinstance(f, dict) and f.get(marker):
+                    k = f.get("key")
+                    if k and any(clean_text(r.get(k)) for r in rows):
+                        return True
+            return False
+
+        if (marker_has_data("cpuSourceLabel") and marker_has_data("memorySourceLabel")
+                and marker_has_data("storageSourceLabel")):
+            baseline.setdefault("metadata", {})["preferredOverAI"] = True
+            baseline["llmWarning"] = (
+                "Used the validated rule-based parser for CPU / memory / storage sizing "
+                "(it detected the intended columns, including any rationalized-cores column)."
+            )
+            return baseline
+    except Exception:
+        return result
+    return result
+
+
 def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, provider_hint=PROVIDER_AUTO):
     if intake_mode == INTAKE_MODE_CLOUD_BILL:
         parsed = parse_cloud_bill(path, provider_hint)
@@ -7013,7 +7049,12 @@ def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PRE
             candidate = parse_workbook_from_plan(
                 path, plan, full_service_beta, intake_mode
             )
-            return validate_ai_inventory_scrub(candidate, baseline)
+            result = validate_ai_inventory_scrub(candidate, baseline)
+            # The AI plan sometimes maps the wrong CPU column (e.g. a raw-vCPU or vCPU:Core-ratio
+            # column instead of a "Rationalized Cores" column) or misses storage. The rule-based
+            # parser is deterministic and gets these right, so overlay its CPU/memory/storage
+            # sizing columns onto the AI result — keeping the AI's row cleanup for everything else.
+            return _reconcile_onprem_sizing(result, baseline)
         if baseline is None:
             raise ValueError(
                 llm_warning or "Neither AI nor deterministic parsing found a usable inventory table."
