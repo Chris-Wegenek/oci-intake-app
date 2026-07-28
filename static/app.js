@@ -1635,17 +1635,78 @@ function removeReviewRow(row) {
   syncWorkflowAvailability();
 }
 
-function renderTable() {
-  const fields = previewFields();
-  const rowEntries = reviewRowEntries(fields);
-  const thead = document.createElement("thead");
-  const headRow = document.createElement("tr");
-  headRow.append(headerCell("Approve"));
-  fields.forEach((field) => headRow.append(headerCell(field.label)));
-  thead.append(headRow);
+// Review-table virtualization. A large inventory (or a cloud bill with thousands of line
+// items) builds one <input> plus a fill handle per cell - 7,500 rows x 12 columns is ~270k
+// DOM nodes, which makes scrolling crawl. Above this many rows we render only the visible
+// window plus a small overscan, and pad the scroll height with spacer rows so the scrollbar
+// still represents the whole table.
+const VIRTUAL_ROW_THRESHOLD = 200;
+const VIRTUAL_OVERSCAN = 10;
+const VIRTUAL_DEFAULT_ROW_H = 44;
+let reviewVirtual = null;
 
-  const tbody = document.createElement("tbody");
-  rowEntries.forEach(({ row, rowIndex }) => {
+function teardownReviewVirtual() {
+  if (reviewVirtual?.wrap && reviewVirtual.onScroll) {
+    reviewVirtual.wrap.removeEventListener("scroll", reviewVirtual.onScroll);
+  }
+  reviewVirtual = null;
+}
+
+function spacerRow(colCount) {
+  const tr = document.createElement("tr");
+  tr.className = "vrow-spacer";
+  tr.setAttribute("aria-hidden", "true");
+  const td = document.createElement("td");
+  td.colSpan = colCount;
+  td.style.padding = "0";
+  td.style.border = "0";
+  td.style.height = "0px";
+  tr.append(td);
+  return tr;
+}
+
+function renderVirtualWindow() {
+  const v = reviewVirtual;
+  if (!v) return;
+  const total = v.rowEntries.length;
+  const scrollTop = v.wrap ? v.wrap.scrollTop : 0;
+  const viewH = v.wrap ? v.wrap.clientHeight : 800;
+  let start = Math.max(0, Math.floor(scrollTop / v.rowH) - VIRTUAL_OVERSCAN);
+  let end = Math.min(total, Math.ceil((scrollTop + viewH) / v.rowH) + VIRTUAL_OVERSCAN);
+  if (end <= start) end = Math.min(total, start + 1);
+  if (v.start === start && v.end === end) return;
+  v.start = start;
+  v.end = end;
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < end; i += 1) {
+    const { row, rowIndex } = v.rowEntries[i];
+    frag.append(buildReviewRowEl(row, rowIndex, v.fields));
+  }
+  v.topSpacer.firstChild.style.height = `${start * v.rowH}px`;
+  v.botSpacer.firstChild.style.height = `${Math.max(0, total - end) * v.rowH}px`;
+  // Replace just the rendered window, keeping the two spacers in place.
+  while (v.topSpacer.nextSibling && v.topSpacer.nextSibling !== v.botSpacer) {
+    v.topSpacer.nextSibling.remove();
+  }
+  v.tbody.insertBefore(frag, v.botSpacer);
+  // Measure a real row once so the spacers match the true row height.
+  if (!v.measured) {
+    const sample = v.topSpacer.nextSibling;
+    const h = sample && sample !== v.botSpacer ? sample.offsetHeight : 0;
+    if (h && Math.abs(h - v.rowH) > 1) {
+      v.rowH = h;
+      v.measured = true;
+      v.start = -1;
+      v.end = -1;
+      renderVirtualWindow();
+      return;
+    }
+    v.measured = true;
+  }
+}
+
+function buildReviewRowEl(row, rowIndex, fields) {
+  {
     const tr = document.createElement("tr");
     tr.dataset.rowIndex = String(rowIndex);
     const approveCell = document.createElement("td");
@@ -1725,22 +1786,64 @@ function renderTable() {
       td.append(cellEditor);
       tr.append(td);
     });
-    tbody.append(tr);
-  });
+    return tr;
+  }
+}
 
-  if (!rowEntries.length) {
-    const emptyRow = document.createElement("tr");
-    emptyRow.className = "table-empty-row";
-    const emptyCell = document.createElement("td");
-    emptyCell.colSpan = fields.length + 1;
-    emptyCell.textContent = fields.length
-      ? "No rows are missing data in the visible fields."
-      : "No visible fields to check for missing data.";
-    emptyRow.append(emptyCell);
-    tbody.append(emptyRow);
+function renderTable() {
+  const fields = previewFields();
+  const rowEntries = reviewRowEntries(fields);
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headRow.append(headerCell("Approve"));
+  fields.forEach((field) => headRow.append(headerCell(field.label)));
+  thead.append(headRow);
+
+  const tbody = document.createElement("tbody");
+  teardownReviewVirtual();
+
+  if (rowEntries.length > VIRTUAL_ROW_THRESHOLD) {
+    // Windowed rendering: only the visible slice lives in the DOM.
+    const colCount = fields.length + 1;
+    const topSpacer = spacerRow(colCount);
+    const botSpacer = spacerRow(colCount);
+    tbody.append(topSpacer, botSpacer);
+    els.reviewTable.replaceChildren(thead, tbody);
+    const wrap = els.reviewTable.closest(".table-wrap");
+    reviewVirtual = {
+      fields, rowEntries, tbody, topSpacer, botSpacer, wrap,
+      rowH: VIRTUAL_DEFAULT_ROW_H, start: -1, end: -1, measured: false, ticking: false,
+    };
+    if (wrap) {
+      reviewVirtual.onScroll = () => {
+        if (reviewVirtual?.ticking) return;
+        if (reviewVirtual) reviewVirtual.ticking = true;
+        window.requestAnimationFrame(() => {
+          if (reviewVirtual) reviewVirtual.ticking = false;
+          renderVirtualWindow();
+        });
+      };
+      wrap.addEventListener("scroll", reviewVirtual.onScroll, { passive: true });
+    }
+    renderVirtualWindow();
+  } else {
+    rowEntries.forEach(({ row, rowIndex }) => {
+      tbody.append(buildReviewRowEl(row, rowIndex, fields));
+    });
+    if (!rowEntries.length) {
+      const emptyRow = document.createElement("tr");
+      emptyRow.className = "table-empty-row";
+      const emptyCell = document.createElement("td");
+      emptyCell.colSpan = fields.length + 1;
+      emptyCell.textContent = fields.length
+        ? "No rows are missing data in the visible fields."
+        : "No visible fields to check for missing data.";
+      emptyRow.append(emptyCell);
+      tbody.append(emptyRow);
+    }
+    els.reviewTable.replaceChildren(thead, tbody);
   }
 
-  els.reviewTable.replaceChildren(thead, tbody);
   renderStats();
   // CPU-unit override only applies to on-prem inventory (cloud bills carry OCPU/vCPU
   // in the usage rows), so hide the control in cloud-bill mode.
