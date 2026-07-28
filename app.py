@@ -3760,54 +3760,70 @@ def _apply_bare_metal_packing(priced_rows, totals, shape_key, hours):
 
     Rounding each row up to its own full server (the previous behaviour) multiplied the estimate
     enormously - a single t3a.large bill line became a whole 192-OCPU server at ~$88k/mo."""
-    bm = _selected_bare_metal(shape_key)
-    if not bm:
-        return None
-    bm_ocpu, bm_mem = bm
-    shape = SHAPE_LOOKUP.get(shape_key) or {}
     try:
-        used_ocpu = float(totals.get("ocpus") or 0)
-        used_mem = float(totals.get("memoryGb") or 0)
-        if used_ocpu <= 0 and used_mem <= 0:
-            return None
-        need = max(used_ocpu / bm_ocpu if bm_ocpu else 0,
-                   used_mem / bm_mem if bm_mem else 0)
-        servers = max(1, int(math.ceil(round(need, 6))))
-        spare_ocpu = max(0.0, servers * bm_ocpu - used_ocpu)
-        spare_mem = max(0.0, servers * bm_mem - used_mem)
         h = float(hours or HOURS_PER_MONTH) or HOURS_PER_MONTH
-        extra = money(spare_ocpu * float(shape.get("computeRate") or 0) * h
-                      + spare_mem * float(shape.get("memoryRate") or 0) * h)
-        info = {
-            "shape": shape.get("label") or shape_key,
-            "servers": servers,
-            "serverOcpu": bm_ocpu,
-            "serverMemoryGb": bm_mem,
-            "usedOcpu": round(used_ocpu, 4),
-            "usedMemoryGb": round(used_mem, 4),
-            "spareOcpu": round(spare_ocpu, 4),
-            "spareMemoryGb": round(spare_mem, 4),
-            "unusedMonthly": extra,
-        }
-        if extra > 0 and priced_rows:
-            host = max(priced_rows, key=lambda r: float(r.get("monthly") or 0))
-            host.setdefault("lineItems", []).append({
-                "sku": shape.get("computeSku"),
-                "description": f"Bare metal unused capacity ({shape.get('label') or shape_key})",
-                "quantity": round(spare_ocpu, 4),
-                "unit": "OCPU-hour",
-                "rate": float(shape.get("computeRate") or 0),
-                "monthly": extra,
-                "mapping": (f"{servers} x {shape.get('label') or shape_key} "
-                            f"({bm_ocpu:g} OCPU / {bm_mem:g} GB each) are needed for "
-                            f"{used_ocpu:,.0f} OCPU / {used_mem:,.0f} GB of demand. Bare metal is "
-                            f"an indivisible box, so the unused remainder is still billed."),
+        # Group by the shape each row ACTUALLY uses, so a per-workload override to bare metal is
+        # packed just like a globally selected bare-metal shape - and two different BM shapes are
+        # packed into their own pools rather than pretending they share a box.
+        pools = {}
+        for r in priced_rows:
+            key = ((r.get("shapeUsed") or {}).get("key")) or shape_key
+            if not _selected_bare_metal(key):
+                continue
+            specs = r.get("specs") or {}
+            p = pools.setdefault(key, {"ocpu": 0.0, "mem": 0.0, "rows": []})
+            p["ocpu"] += float(specs.get("ocpus") or 0)
+            p["mem"] += float(specs.get("memoryGb") or 0)
+            p["rows"].append(r)
+        if not pools:
+            return None
+        out = []
+        for key, p in pools.items():
+            bm = _selected_bare_metal(key)
+            if not bm:
+                continue
+            bm_ocpu, bm_mem = bm
+            shape = SHAPE_LOOKUP.get(key) or {}
+            used_ocpu, used_mem = p["ocpu"], p["mem"]
+            if used_ocpu <= 0 and used_mem <= 0:
+                continue
+            need = max(used_ocpu / bm_ocpu if bm_ocpu else 0,
+                       used_mem / bm_mem if bm_mem else 0)
+            servers = max(1, int(math.ceil(round(need, 6))))
+            spare_ocpu = max(0.0, servers * bm_ocpu - used_ocpu)
+            spare_mem = max(0.0, servers * bm_mem - used_mem)
+            extra = money(spare_ocpu * float(shape.get("computeRate") or 0) * h
+                          + spare_mem * float(shape.get("memoryRate") or 0) * h)
+            label = shape.get("label") or key
+            out.append({
+                "shape": label, "shapeKey": key, "servers": servers,
+                "serverOcpu": bm_ocpu, "serverMemoryGb": bm_mem,
+                "usedOcpu": round(used_ocpu, 4), "usedMemoryGb": round(used_mem, 4),
+                "spareOcpu": round(spare_ocpu, 4), "spareMemoryGb": round(spare_mem, 4),
+                "workloads": len(p["rows"]), "unusedMonthly": extra,
             })
-            host["monthly"] = money(float(host.get("monthly") or 0) + extra)
-            host["annual"] = money(float(host["monthly"]) * 12)
-            totals["monthly"] = money(float(totals.get("monthly") or 0) + extra)
-            totals["annual"] = money(float(totals.get("annual") or 0) + extra * 12)
-        return info
+            if extra > 0 and p["rows"]:
+                host = max(p["rows"], key=lambda r: float(r.get("monthly") or 0))
+                host.setdefault("lineItems", []).append({
+                    "sku": shape.get("computeSku"),
+                    "description": f"Bare metal unused capacity ({label})",
+                    "quantity": round(spare_ocpu, 4),
+                    "unit": "OCPU-hour",
+                    "rate": float(shape.get("computeRate") or 0),
+                    "monthly": extra,
+                    "mapping": (f"{servers} x {label} ({bm_ocpu:g} OCPU / {bm_mem:g} GB each) host "
+                                f"the {len(p['rows'])} workload(s) mapped to this shape "
+                                f"({used_ocpu:,.0f} OCPU / {used_mem:,.0f} GB). Bare metal is an "
+                                f"indivisible box, so the unused remainder is still billed. Change "
+                                f"a workload's OCI Shape to move it off bare metal."),
+                })
+                host["monthly"] = money(float(host.get("monthly") or 0) + extra)
+                host["annual"] = money(float(host["monthly"]) * 12)
+                totals["monthly"] = money(float(totals.get("monthly") or 0) + extra)
+                totals["annual"] = money(float(totals.get("annual") or 0) + extra * 12)
+        if not out:
+            return None
+        return out[0] if len(out) == 1 else {"pools": out}
     except Exception:
         return None
 
