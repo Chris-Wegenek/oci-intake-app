@@ -3274,6 +3274,17 @@ function aggregateSkuCosts(pricing) {
       bySku.set(key, current);
     });
   });
+  // Services added on the Services step aren't part of pricing.rows, so fold them in here -
+  // otherwise they're counted in the headline total but missing from the Cost Mix chart.
+  (state.extraServices || []).forEach((s) => {
+    const monthly = Number(s.monthly || 0);
+    if (!monthly) return;
+    const label = String(s.name || "").trim() || "Added service";
+    const key = s.sku || label;
+    const current = bySku.get(key) || { sku: s.sku || "", description: label, monthly: 0 };
+    current.monthly += monthly;
+    bySku.set(key, current);
+  });
   return [...bySku.values()].sort((a, b) => b.monthly - a.monthly);
 }
 
@@ -3904,7 +3915,9 @@ function renderResults(pricing) {
   els.resultsKpis.innerHTML = specsSection;
 
   initializeConsumptionRamp(pricing);
-  renderCostMix(skuCosts, pricing.totals.monthly);
+  // Match the headline KPI: added services are part of the effective OCI monthly, so the
+  // donut's centre total (and therefore its segment shares) must include them.
+  renderCostMix(skuCosts, Number(pricing.totals.monthly || 0) + extraServicesMonthly());
   renderTopWorkloads(topRows, maxMonthly, cloudBill, convertedBom);
   // Detail table defaults to the document's VM order (not cost-sorted).
   renderResultsTable(pricing.rows.slice(), pricing.fullServiceBeta, cloudBill, convertedBom);
