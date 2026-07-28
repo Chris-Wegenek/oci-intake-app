@@ -1445,7 +1445,11 @@ function renderShapeChoices() {
           style="--shape-accent:${escapeHtml(shape.accent || "#c74634")}"
         >
           <span class="shape-tab-name">${escapeHtml(shape.shortLabel || shape.label)}</span>
-          <span class="shape-tab-meta">${escapeHtml(shape.family || "OCI shape")}</span>
+          <span class="shape-tab-meta">${escapeHtml(
+            shape.bareMetal && shape.bmOcpu
+              ? `Bare metal · ${formatNumber(shape.bmOcpu)} OCPU · ${formatNumber(shape.bmMemoryGb)} GB`
+              : (shape.family || "OCI shape"),
+          )}</span>
         </button>
       `;
     })
@@ -1461,6 +1465,11 @@ function renderBareMetalShapes() {
   const section = document.getElementById("bareMetalSection");
   const grid = document.getElementById("bareMetalGrid");
   if (!section || !grid) return;
+  // Bare-metal shapes are now selectable cards in the main shape grid (they carry real SKUs
+  // and rates), so this reference panel would just duplicate them.
+  section.hidden = true;
+  return;
+  // eslint-disable-next-line no-unreachable
   const list = (state.bareMetalShapes && state.bareMetalShapes[state.selectedVendor]) || [];
   if (!list.length) {
     section.hidden = true;

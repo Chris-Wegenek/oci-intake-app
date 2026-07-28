@@ -763,6 +763,91 @@ SHAPE_DEFINITIONS = [
         "summary": "Compute - Standard - A1; Ampere Altra (Arm), 1 OCPU = 1 core. OCPU B93297, Memory B93298.",
         "accent": "#2f5d52",
     },
+    # ---- Bare metal -------------------------------------------------------------------
+    # Whole physical servers: fixed OCPU/RAM, metered on the SAME per-OCPU-hour and
+    # per-GB-hour SKUs as the matching flex shape (confirmed against an Oracle estimator
+    # export). Selecting one prices each workload as whole servers - bare metal is sold as a
+    # complete box, so a workload that needs part of one still pays for all of it.
+    {
+        "key": "bm-e6-ax-192",
+        "label": "BM.Standard.E6.Ax.192",
+        "shortLabel": "BM E6 Ax",
+        "family": "AMD bare metal",
+        "processorVendor": "amd",
+        "computeSku": "B112530",
+        "memorySku": "B112531",
+        "computeRate": 0.0138,
+        "memoryRate": 0.0108,
+        "bareMetal": True,
+        "bmOcpu": 192,
+        "bmMemoryGb": 1536,
+        "summary": "Bare metal E6 Acceleron: 192 OCPU / 1,536 GB. OCPU B112530, Memory B112531.",
+        "accent": "#7a3126",
+    },
+    {
+        "key": "bm-e6-256",
+        "label": "BM.Standard.E6.256",
+        "shortLabel": "BM E6",
+        "family": "AMD bare metal",
+        "processorVendor": "amd",
+        "computeSku": "B111129",
+        "memorySku": "B111130",
+        "computeRate": 0.0300,
+        "memoryRate": 0.0020,
+        "bareMetal": True,
+        "bmOcpu": 256,
+        "bmMemoryGb": 3072,
+        "summary": "Bare metal E6 Standard: 256 OCPU / 3,072 GB. OCPU B111129, Memory B111130.",
+        "accent": "#8c3a2a",
+    },
+    {
+        "key": "bm-x12-ax-120",
+        "label": "BM.Standard4.Ax.120",
+        "shortLabel": "BM X12 Ax",
+        "family": "Intel bare metal",
+        "processorVendor": "intel",
+        "computeSku": "B112141",
+        "memorySku": "B112142",
+        "computeRate": 0.0119,
+        "memoryRate": 0.0114,
+        "bareMetal": True,
+        "bmOcpu": 120,
+        "bmMemoryGb": 1152,
+        "summary": "Bare metal X12 Acceleron (Intel): 120 OCPU / 1,152 GB. OCPU B112141, Memory B112142.",
+        "accent": "#1f4e79",
+    },
+    {
+        "key": "bm-a4-ax-48",
+        "label": "BM.Standard.A4.Ax.48",
+        "shortLabel": "BM A4 Ax",
+        "family": "Ampere bare metal",
+        "processorVendor": "arm",
+        "computeSku": "B112532",
+        "memorySku": "B112533",
+        "computeRate": 0.0190,
+        "memoryRate": 0.0084,
+        "bareMetal": True,
+        "bmOcpu": 48,
+        "bmMemoryGb": 768,
+        "summary": "Bare metal A4 Acceleron (Arm): 48 OCPU / 768 GB. OCPU B112532, Memory B112533.",
+        "accent": "#2f5d52",
+    },
+    {
+        "key": "bm-a4-48",
+        "label": "BM.Standard.A4.48",
+        "shortLabel": "BM A4",
+        "family": "Ampere bare metal",
+        "processorVendor": "arm",
+        "computeSku": "B112145",
+        "memorySku": "B112146",
+        "computeRate": 0.0138,
+        "memoryRate": 0.0027,
+        "bareMetal": True,
+        "bmOcpu": 48,
+        "bmMemoryGb": 768,
+        "summary": "Bare metal A4 Standard (Arm): 48 OCPU / 768 GB. OCPU B112145, Memory B112146.",
+        "accent": "#356055",
+    },
 ]
 
 SHAPE_LOOKUP = {shape["key"]: shape for shape in SHAPE_DEFINITIONS}
@@ -1834,6 +1919,11 @@ def shape_payload(shape_key=None, full_service_beta=False):
         "memorySku": shape.get("memorySku", "B97385"),
         "computeRate": shape["computeRate"],
         "memoryRate": shape["memoryRate"],
+        # Bare-metal shapes carry a fixed server size; the UI labels them and pricing bills
+        # whole servers. Absent/False for flex shapes.
+        "bareMetal": bool(shape.get("bareMetal")),
+        "bmOcpu": shape.get("bmOcpu"),
+        "bmMemoryGb": shape.get("bmMemoryGb"),
         "hoursPerMonth": HOURS_PER_MONTH,
         "rateCard": build_rate_card(shape["key"], full_service_beta),
     }
@@ -3939,6 +4029,11 @@ def oci_size_check(shape_key, ocpus, memory_gb):
     'baremetal' means it overflows the selected flex shape but fits an OCI bare-metal shape;
     'impossible' means it exceeds every OCI shape for that CPU vendor.
     """
+    # A bare-metal shape was selected for the estimate: the workload is placed on whole
+    # physical servers (as many as it needs), so there's nothing to overflow.
+    _bm_sel = SHAPE_LOOKUP.get(shape_key) or {}
+    if _bm_sel.get("bareMetal"):
+        return {"status": "ok", "shape": _bm_sel.get("label")}
     info = SHAPE_KEY_TO_OCI.get(shape_key)
     if not info:
         # Derive limits from the vendor's flex tier so shapes without an explicit
@@ -4009,12 +4104,32 @@ def oci_size_check(shape_key, ocpus, memory_gb):
     }
 
 
+def _selected_bare_metal(shape_key):
+    """The selected shape's bare-metal capacity, or None when a flex shape is selected."""
+    s = SHAPE_LOOKUP.get(shape_key) or {}
+    if s.get("bareMetal") and s.get("bmOcpu"):
+        return float(s["bmOcpu"]), float(s.get("bmMemoryGb") or 0)
+    return None
+
+
 def _billed_bm_size(shape_key, vm_ocpu, vm_mem):
     """Pricing size for ONE VM. A VM that fits a flex shape bills its own OCPU/RAM. A VM that can
     ONLY run on bare metal (it overflows every flex shape) bills the FULL bare-metal server -
     bare metal is sold as a whole physical box, so you pay for all its cores/RAM even if the
     workload needs fewer. A VM that overflows the selected flex but fits a LARGER flex shape is
     NOT inflated (it can just use the bigger flex). Returns (billed_ocpu, billed_mem)."""
+    # A bare-metal shape was chosen for the whole estimate: bare metal is sold as a complete
+    # physical box, so round the workload UP to whole servers and bill every one in full.
+    bm = _selected_bare_metal(shape_key)
+    if bm:
+        bm_ocpu, bm_mem = bm
+        o = float(vm_ocpu or 0)
+        m = float(vm_mem or 0)
+        if o <= 0 and m <= 0:
+            return vm_ocpu, vm_mem
+        need = max(o / bm_ocpu if bm_ocpu else 0, m / bm_mem if bm_mem else 0)
+        servers = max(1, int(math.ceil(round(need, 6))))
+        return servers * bm_ocpu, servers * bm_mem
     try:
         chk = oci_size_check(shape_key, float(vm_ocpu or 0), float(vm_mem or 0))
         if chk.get("status") == "baremetal" and not chk.get("flexAlt") and chk.get("bmMaxOcpu"):
