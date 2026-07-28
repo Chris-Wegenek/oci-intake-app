@@ -3463,10 +3463,24 @@ function rampMonthlyValues() {
   return values;
 }
 
+function windowsLicensingMonthly(pricing) {
+  return (pricing?.rows || []).reduce((t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
+}
+
+// Windows licensing is a LINE ITEM inside totals.monthly for on-prem inventory, but in
+// cloud-bill mode the backend deliberately keeps it OUT of totals.monthly and reports it only
+// per row (windowsLicenseMonthly). Treating it as always-included understated the cloud-bill
+// headline by the full Windows amount while the exported BOM included it - so the app and the
+// workbook disagreed (e.g. $126,162.85 on screen vs $146,043.08 in the export).
+function windowsInTotals(pricing) {
+  return !(pricing?.intakeMode === "cloud_bill" || pricing?.cloudBillMode);
+}
+
 function ociMonthlyTotal(pricing) {
-  // The backend monthly total already includes Windows licensing line items.
-  // Added services are client-side selections, so include only those here.
-  return Math.max(0, Number(pricing?.totals?.monthly || 0) + extraServicesMonthly());
+  // Added services are client-side selections, so they're added here in both modes.
+  const base = Number(pricing?.totals?.monthly || 0);
+  const win = windowsInTotals(pricing) ? 0 : windowsLicensingMonthly(pricing);
+  return Math.max(0, base + win + extraServicesMonthly());
 }
 
 function initializeConsumptionRamp(pricing) {
@@ -3803,9 +3817,8 @@ function renderResults(pricing) {
   const extras = extraServicesMonthly();
   // Windows licensing is already included in pricing.totals.monthly. Keep its amount
   // visible in the supporting text without adding it to the headline a second time.
-  const windowsLicensing = (pricing.rows || []).reduce(
-    (t, r) => t + Number(r.windowsLicenseMonthly || 0), 0);
-  const ociEff = Number(pricing.totals.monthly || 0) + extras;
+  const windowsLicensing = windowsLicensingMonthly(pricing);
+  const ociEff = ociMonthlyTotal(pricing);
   const ociEffAnnual = ociEff * 12;
   const extrasMeta = (extras ? ` · incl. ${formatCompactCurrency(extras)} added services` : "")
     + (windowsLicensing ? ` · incl. ${formatCompactCurrency(windowsLicensing)} Windows licensing` : "");
@@ -3926,7 +3939,7 @@ function renderResults(pricing) {
   initializeConsumptionRamp(pricing);
   // Match the headline KPI: added services are part of the effective OCI monthly, so the
   // donut's centre total (and therefore its segment shares) must include them.
-  renderCostMix(skuCosts, Number(pricing.totals.monthly || 0) + extraServicesMonthly());
+  renderCostMix(skuCosts, ociMonthlyTotal(pricing));
   renderTopWorkloads(topRows, maxMonthly, cloudBill, convertedBom);
   // Detail table defaults to the document's VM order (not cost-sorted).
   renderResultsTable(pricing.rows.slice(), pricing.fullServiceBeta, cloudBill, convertedBom);
@@ -5115,8 +5128,9 @@ function renderCrossCloud() {
   const wrap = els.crossCloudResults;
   if (!wrap) return;
   const raw = state.pricing?.crossCloud;
-  // The backend total already includes Windows licensing. Add only client-side services.
-  const ociMonthly = Number(state.pricing?.totals?.monthly || 0) + extraServicesMonthly();
+  // Same effective OCI monthly the headline and the export use (adds Windows in cloud-bill
+  // mode, where the backend keeps it out of totals.monthly, plus client-side added services).
+  const ociMonthly = ociMonthlyTotal(state.pricing);
   if (!raw) {
     if (state.pricing?.converted) {
       wrap.innerHTML = `
