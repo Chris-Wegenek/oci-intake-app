@@ -3486,11 +3486,29 @@ function windowsInTotals(pricing) {
   return !(pricing?.intakeMode === "cloud_bill" || pricing?.cloudBillMode);
 }
 
+function sqlLicensingMonthly(pricing) {
+  return (pricing?.rows || []).reduce((t, r) => t + Number(r.sqlLicenseMonthly || 0), 0);
+}
+
 function ociMonthlyTotal(pricing) {
   // Added services are client-side selections, so they're added here in both modes.
   const base = Number(pricing?.totals?.monthly || 0);
-  const win = windowsInTotals(pricing) ? 0 : windowsLicensingMonthly(pricing);
-  return Math.max(0, base + win + extraServicesMonthly());
+  const win = windowsLicensingMonthly(pricing);
+  const sql = sqlLicensingMonthly(pricing);
+  // Windows sits inside totals.monthly for on-prem but outside it for a cloud bill; SQL is a
+  // line item inside totals.monthly in both.
+  const winInside = windowsInTotals(pricing);
+  const total = base + (winInside ? 0 : win) + extraServicesMonthly();
+  const d = Math.min(0.99, Math.max(0, Number(state.ociDiscount || 0) / 100));
+  if (!d) return Math.max(0, total);
+  // The discount applies to OCI services only - third-party licensing (Windows, SQL Server) is
+  // never discounted, which is exactly how the exported workbook computes it. Added services
+  // flagged thirdParty (the Licensing group) are excluded too.
+  const extrasThirdParty = (state.extraServices || [])
+    .reduce((t, s) => t + (s.thirdParty ? Number(s.monthly || 0) : 0), 0);
+  const licensing = win + sql + extrasThirdParty;
+  const discountable = Math.max(0, total - licensing);
+  return Math.max(0, discountable * (1 - d) + licensing);
 }
 
 function initializeConsumptionRamp(pricing) {
@@ -4887,6 +4905,42 @@ function onPriceShapeClick() {
 }
 els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing?.addEventListener("click", priceRows);
+// The discount re-prices the whole estimate, so debounce it: typing "27" must not fire a request
+// for "2" then "27". Wait until typing stops, then show a brief loading state while it refreshes.
+let _discountTimer = null;
+function onDiscountInput(raw) {
+  let pct = Number(raw);
+  if (!Number.isFinite(pct) || pct < 0) pct = 0;
+  if (pct > 99) pct = 99;
+  state.ociDiscount = pct;
+  clearTimeout(_discountTimer);
+  _discountTimer = setTimeout(() => {
+    if (!state.pricing) return;
+    // The discount is a presentation/export factor, not a re-price: no server round-trip is
+    // needed, so show a brief loading flash and re-render the KPIs, Cost Mix and ramp.
+    const overlay = document.querySelector("#exportOverlay");
+    const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
+    if (overlayText) overlayText.textContent = `Applying ${pct}% OCI discount…`;
+    if (overlay) overlay.hidden = false;
+    window.requestAnimationFrame(() => {
+      try {
+        refreshResultsTotals();
+      } finally {
+        setTimeout(() => { if (overlay) overlay.hidden = true; }, 180);
+      }
+    });
+  }, 650);
+}
+if (els.ociDiscount) {
+  els.ociDiscount.addEventListener("input", (e) => onDiscountInput(e.target.value));
+  // Enter / leaving the field applies immediately instead of waiting out the debounce.
+  els.ociDiscount.addEventListener("change", (e) => {
+    clearTimeout(_discountTimer);
+    _discountTimer = null;
+    onDiscountInput(e.target.value);
+  });
+}
+
 function repriceIfEstimated() {
   // A licensing / GPU toggle changes the money, so the existing estimate is immediately stale.
   // Drop it and re-lock the downstream steps so Price, Compare, Architecture and Deliverables

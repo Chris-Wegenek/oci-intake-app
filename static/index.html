@@ -595,13 +595,6 @@
       <section class="bom-name-bar">
         <label for="bomName" class="bom-name-label">BOM Name</label>
         <input id="bomName" type="text" class="bom-name-input" placeholder="Untitled BOM" autocomplete="off" />
-        <label for="ociDiscount" class="bom-name-label discount-label">OCI Discount</label>
-        <div class="discount-field">
-          <input id="ociDiscount" type="number" class="bom-name-input discount-input" min="0" max="99" step="0.5"
-                 value="0" autocomplete="off"
-                 title="Universal Credits / negotiated discount applied to the OCI estimate. Third-party licensing (Windows, SQL Server) is never discounted." />
-          <span class="discount-suffix">%</span>
-        </div>
       </section>
 
       <section class="results-hero">
@@ -662,6 +655,16 @@
                   <input id="rampPeakMonthly" type="number" min="0" step="100" value="0" inputmode="decimal" aria-label="Selected Point Monthly Spend in Dollars" />
                 </div>
                 <small>Cannot exceed the BOM maximum</small>
+              </label>
+              <label class="ramp-control">
+                <span>OCI Discount</span>
+                <div class="currency-input discount-input-wrap">
+                  <input id="ociDiscount" type="number" min="0" max="99" step="0.5" value="0"
+                         inputmode="decimal" aria-label="OCI discount percent"
+                         title="Universal Credits / negotiated discount applied to the OCI estimate. Third-party licensing (Windows, SQL Server) is never discounted." />
+                  <b class="discount-suffix" aria-hidden="true">%</b>
+                </div>
+                <small>Applied to the OCI estimate; licensing is not discounted</small>
               </label>
             </div>
             <div class="ramp-years" aria-label="Annual Ramp Totals">

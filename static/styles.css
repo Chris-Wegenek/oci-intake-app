@@ -1746,21 +1746,7 @@ td input[type="checkbox"] {
   letter-spacing: 0;
 }
 
-.discount-label {
-  margin-left: 18px;
-}
-.discount-field {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.discount-input {
-  width: 104px;
-  padding-right: 26px;
-}
-.discount-suffix {
-  position: absolute;
-  right: 10px;
+.discount-input-wrap .discount-suffix {
   color: var(--muted);
   font-weight: 700;
   pointer-events: none;
