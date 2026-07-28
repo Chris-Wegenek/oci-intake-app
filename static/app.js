@@ -3861,11 +3861,15 @@ function renderResults(pricing) {
             fill: mappedShare || 8,
           })}
           ${resultKpiCard({
+            // Report the source spend that produces NO OCI cost and still needs attention.
+            // The old figure counted only rows with no mapping at all, so it read ~$384 on a
+            // bill where $62,884 landed at $0 - and hid that $28,805 of it was a real gap.
             label: "Needs review",
-            value: formatNumber(reviewRows),
-            meta: `${formatCurrency(pricing.totals.unmappedSourceMonthlyCost)} source spend not in OCI total`,
-            accent: reviewRows ? "#d97706" : "#067647",
+            value: formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0)),
+            meta: `${formatNumber(pricing.totals.unpricedRows || 0)} lines priced at $0 on OCI · ${formatCompactCurrency(Number(pricing.totals.freeOnOciSourceMonthly || 0))} more is genuinely free on OCI`,
+            accent: Number(pricing.totals.unpricedSourceMonthly || 0) > 0 ? "#d97706" : "#067647",
             fill: reviewRows ? reviewShare : 100,
+            title: `${formatCurrency(Number(pricing.totals.zeroOciSourceMonthly || 0))} of source spend produces no OCI cost: ${formatCurrency(Number(pricing.totals.freeOnOciSourceMonthly || 0))} genuinely free on OCI (Savings Plans, support, VCN, Audit, included egress) and ${formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0))} mapped to a chargeable OCI product but not priced - that portion understates the OCI estimate.`,
           })}`
       : pricing.fullServiceBeta
         ? `${resultKpiCard({

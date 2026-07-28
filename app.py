@@ -3993,6 +3993,48 @@ def cross_cloud_estimate(priced_rows, hide_windows=False, cloud_bill_mode=False,
     }
 
 
+# Source services that are BILLING CONSTRUCTS or support, not workloads: a Savings Plan /
+# Reserved-Instance charge is a payment mechanism for compute that is already priced separately,
+# so it correctly contributes no OCI cost of its own.
+_BILLING_CONSTRUCT_SERVICES = {
+    "computesavingsplans", "savingsplans", "ec2savingsplans", "machinelearningsavingsplans",
+    "awssupportbusiness", "awssupportdeveloper", "awsdevelopersupport", "awssupportenterprise",
+    "awssystemsmanager", "awsmarketplace", "refund", "credit", "tax",
+}
+# OCI services that carry NO charge, so mapping them to $0 is correct and is a genuine OCI
+# advantage - not a pricing gap. Matched as substrings of the normalized product name
+# (normalize() strips punctuation, so "OCI Virtual Cloud Network (VCN)" -> "...network vcn").
+# Deliberately excludes OCI services that DO bill (Object Storage, File Storage, Base Database,
+# Load Balancer, WAF, Vault, DNS, FastConnect, OIC, Secure Desktops): a zero there is a gap.
+_FREE_ON_OCI_PRODUCTS = (
+    "virtual cloud network",          # VCN itself is free
+    "dynamic routing gateway",        # DRG (AWS Transit Gateway equivalent) is free
+    "internet gateway",
+    "service gateway",
+    "oci audit",                      # Audit is free
+    "identity and access management",
+    "cloud guard",                    # Cloud Guard / Security Zones are free
+    "security zones",
+    "outbound data transfer",         # first 10 TB/mo egress is free
+)
+
+
+def _is_free_on_oci(row, priced):
+    """True when a zero OCI cost is CORRECT - a billing construct, or an OCI service that is
+    genuinely free - rather than a mapping/pricing gap that understates the estimate."""
+    svc = normalize(str(row.get("source_service") or "")).replace(" ", "")
+    if svc in _BILLING_CONSTRUCT_SERVICES:
+        return True
+    prod = normalize(str(priced.get("ociProduct") or ""))
+    if not prod:
+        return False
+    if any(term in prod for term in _FREE_ON_OCI_PRODUCTS):
+        return True
+    if "free on oci" in prod or "included" in prod or "no charge" in prod:
+        return True
+    return False
+
+
 _BANDWIDTH_ATTR_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:m|g|k)bps\b", re.I)
 
 
@@ -8163,6 +8205,18 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "sourceMonthlyCost": 0.0,
         "mappedSourceMonthlyCost": 0.0,
         "unmappedSourceMonthlyCost": 0.0,
+        # Source spend that produces NO OCI cost. unmappedSourceMonthlyCost only counts rows with
+        # no mapping at all, which badly understated the gap (it reported $384 on a bill where
+        # $62,883 of spend landed at $0). Split so the UI can separate a real OCI advantage from
+        # something that still needs attention:
+        #   freeOnOciSourceMonthly  - billing constructs (Savings Plans, support) and services
+        #                             OCI genuinely doesn't charge for (VCN, Audit, free egress)
+        #   unpricedSourceMonthly   - mapped to a CHARGEABLE OCI product but priced at zero, or
+        #                             not mapped at all: these understate the OCI estimate
+        "zeroOciSourceMonthly": 0.0,
+        "freeOnOciSourceMonthly": 0.0,
+        "unpricedSourceMonthly": 0.0,
+        "unpricedRows": 0,
         "monthly": 0.0,
         "annual": 0.0,
     }
@@ -9147,10 +9201,20 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         totals["monthly"] += monthly
         totals["annual"] += annual
 
+        # Track source spend that produced no OCI cost, split into "OCI genuinely doesn't charge
+        # for this" vs "this should have cost something" so the estimate's gaps are visible.
+        if cloud_bill_mode and monthly == 0 and _src_cost > 0:
+            totals["zeroOciSourceMonthly"] += _src_cost
+            if _is_free_on_oci(row, priced):
+                totals["freeOnOciSourceMonthly"] += _src_cost
+            else:
+                totals["unpricedSourceMonthly"] += _src_cost
+                totals["unpricedRows"] += 1
+
     for key in totals:
-        if key in {"monthly", "annual", "fullServiceMonthly", "sourceMonthlyCost", "mappedSourceMonthlyCost", "unmappedSourceMonthlyCost"}:
+        if key in {"monthly", "annual", "fullServiceMonthly", "sourceMonthlyCost", "mappedSourceMonthlyCost", "unmappedSourceMonthlyCost", "zeroOciSourceMonthly", "freeOnOciSourceMonthly", "unpricedSourceMonthly"}:
             totals[key] = money(totals[key])
-        elif key in {"mappedServiceRows", "unpricedServiceRows", "oversizeRows", "impossibleRows"}:
+        elif key in {"mappedServiceRows", "unpricedServiceRows", "oversizeRows", "impossibleRows", "unpricedRows"}:
             totals[key] = int(totals[key])
         else:
             totals[key] = round(totals[key], 4)
