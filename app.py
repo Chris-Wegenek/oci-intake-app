@@ -3752,6 +3752,66 @@ def _estimate_source_cost(row, cloud, hide_windows=False):
     return money(base + windows)
 
 
+def _apply_bare_metal_packing(priced_rows, totals, shape_key, hours):
+    """Bare metal is sold as an indivisible physical box, but one box is SHARED by many
+    workloads - you pack them onto it. So the right unit of rounding is the whole estate, not
+    the individual row: size the total OCPU/RAM demand, work out how many servers that needs,
+    and charge for the unused remainder of the last box.
+
+    Rounding each row up to its own full server (the previous behaviour) multiplied the estimate
+    enormously - a single t3a.large bill line became a whole 192-OCPU server at ~$88k/mo."""
+    bm = _selected_bare_metal(shape_key)
+    if not bm:
+        return None
+    bm_ocpu, bm_mem = bm
+    shape = SHAPE_LOOKUP.get(shape_key) or {}
+    try:
+        used_ocpu = float(totals.get("ocpus") or 0)
+        used_mem = float(totals.get("memoryGb") or 0)
+        if used_ocpu <= 0 and used_mem <= 0:
+            return None
+        need = max(used_ocpu / bm_ocpu if bm_ocpu else 0,
+                   used_mem / bm_mem if bm_mem else 0)
+        servers = max(1, int(math.ceil(round(need, 6))))
+        spare_ocpu = max(0.0, servers * bm_ocpu - used_ocpu)
+        spare_mem = max(0.0, servers * bm_mem - used_mem)
+        h = float(hours or HOURS_PER_MONTH) or HOURS_PER_MONTH
+        extra = money(spare_ocpu * float(shape.get("computeRate") or 0) * h
+                      + spare_mem * float(shape.get("memoryRate") or 0) * h)
+        info = {
+            "shape": shape.get("label") or shape_key,
+            "servers": servers,
+            "serverOcpu": bm_ocpu,
+            "serverMemoryGb": bm_mem,
+            "usedOcpu": round(used_ocpu, 4),
+            "usedMemoryGb": round(used_mem, 4),
+            "spareOcpu": round(spare_ocpu, 4),
+            "spareMemoryGb": round(spare_mem, 4),
+            "unusedMonthly": extra,
+        }
+        if extra > 0 and priced_rows:
+            host = max(priced_rows, key=lambda r: float(r.get("monthly") or 0))
+            host.setdefault("lineItems", []).append({
+                "sku": shape.get("computeSku"),
+                "description": f"Bare metal unused capacity ({shape.get('label') or shape_key})",
+                "quantity": round(spare_ocpu, 4),
+                "unit": "OCPU-hour",
+                "rate": float(shape.get("computeRate") or 0),
+                "monthly": extra,
+                "mapping": (f"{servers} x {shape.get('label') or shape_key} "
+                            f"({bm_ocpu:g} OCPU / {bm_mem:g} GB each) are needed for "
+                            f"{used_ocpu:,.0f} OCPU / {used_mem:,.0f} GB of demand. Bare metal is "
+                            f"an indivisible box, so the unused remainder is still billed."),
+            })
+            host["monthly"] = money(float(host.get("monthly") or 0) + extra)
+            host["annual"] = money(float(host["monthly"]) * 12)
+            totals["monthly"] = money(float(totals.get("monthly") or 0) + extra)
+            totals["annual"] = money(float(totals.get("annual") or 0) + extra * 12)
+        return info
+    except Exception:
+        return None
+
+
 ZFS_HA_IMAGE_SKU = "B95410"
 ZFS_HA_IMAGE_RATE = 1.85          # $/instance-hour, Oracle ZFS Storage HA marketplace image
 
@@ -8419,8 +8479,10 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             # OCPU can never exceed RAM: RAM (GB) is floored at the OCPU count.
             app_vm_mem = max(app_vm_mem, app_vm_ocpu)
             db_ocpus = 0.0
-            # Bill the full bare-metal server when the VM can only run on bare metal.
-            ocpus, memory_gb = _billed_bm_size(row_shape_key, app_vm_ocpu, app_vm_mem)
+            # Rows always carry their REAL demand. Bare metal's indivisible-box rounding is
+            # applied once across the whole estate (see _apply_bare_metal_packing), because one
+            # physical server is shared by many workloads rather than dedicated to each row.
+            ocpus, memory_gb = app_vm_ocpu, app_vm_mem
         else:
             # OCPU: 2 vCPU = 1 OCPU, rounded per-VM; RAM floored like the BOM script.
             # Rightsize (gen-gap) reduction is then applied per VM before aggregating.
@@ -8439,9 +8501,6 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             db_ocpus = db_servers * db_vm_ocpu if db_servers else 0.0
             ocpus = app_ocpus + db_ocpus
             memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
-            # If the row's total can only run on bare metal (no flex shape fits), bill the full
-            # bare-metal server so the OCPUs/RAM shown match the bare-metal shape in the flag.
-            ocpus, memory_gb = _billed_bm_size(row_shape_key, ocpus, memory_gb)
 
         # Per-server running hours: use an "hours running"/"hours per month" column if present,
         # otherwise the global hours setting (default 730).
@@ -9300,6 +9359,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         source_cost_estimated = _apply_source_cost_estimate(
             priced_rows, totals, source_cloud_key, hide_windows_pricing)
         _apply_zfs_appliance(priced_rows, totals, eff_hours)
+    # Bare metal is an indivisible box shared across workloads: round the ESTATE (not each row)
+    # up to whole servers and bill the unused remainder.
+    bare_metal_packing = _apply_bare_metal_packing(priced_rows, totals, shape_key, eff_hours)
 
     return {
         "engine": "local-rule-engine",
@@ -9324,6 +9386,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # True when the bill had no pricing and the source cost is an App Estimate (usage-based);
         # sourceCloud names the cloud so the UI/BOM can label "<Cloud> Cost (App Estimate)".
         "sourceCostEstimated": source_cost_estimated,
+        "bareMetalPacking": bare_metal_packing,
         "sourceCloud": source_cloud_key,
         "priceCatalog": price_catalog_payload() if service_catalog_enabled else [],
     }

@@ -595,6 +595,13 @@
       <section class="bom-name-bar">
         <label for="bomName" class="bom-name-label">BOM Name</label>
         <input id="bomName" type="text" class="bom-name-input" placeholder="Untitled BOM" autocomplete="off" />
+        <label for="ociDiscount" class="bom-name-label discount-label">OCI Discount</label>
+        <div class="discount-field">
+          <input id="ociDiscount" type="number" class="bom-name-input discount-input" min="0" max="99" step="0.5"
+                 value="0" autocomplete="off"
+                 title="Universal Credits / negotiated discount applied to the OCI estimate. Third-party licensing (Windows, SQL Server) is never discounted." />
+          <span class="discount-suffix">%</span>
+        </div>
       </section>
 
       <section class="results-hero">

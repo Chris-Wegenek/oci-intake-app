@@ -24,6 +24,7 @@ const state = {
   hoursPerMonth: 730,
   hoursOverride: false,
   bomName: "",
+  ociDiscount: 0,
   oicMessagePacks: 1,
   // Services the user added from the "Add OCI services" panel. Each: {id, catalogId, name,
   // group, sku, unit, basis, values, monthly}. Included in totals and both BOM exports.
@@ -236,6 +237,7 @@ const els = {
   convertBomFile: document.querySelector("#convertBomFile"),
   convertBomStatus: document.querySelector("#convertBomStatus"),
   bomName: document.querySelector("#bomName"),
+  ociDiscount: document.querySelector("#ociDiscount"),
   oicMessagePacks: document.querySelector("#oicMessagePacks"),
   oicMessagePacksControl: document.querySelector("#oicMessagePacksControl"),
   serviceSearch: document.querySelector("#serviceSearch"),
@@ -2489,7 +2491,9 @@ async function exportToExcel(triggerButton = null) {
       hoursPerMonth: state.hoursPerMonth,
       hoursOverride: state.hoursOverride,
       bomName: state.bomName || "",
-      ociDiscount: 0,
+      // Universal Credits / negotiated discount. Sent as a fraction; the server also accepts a
+      // percent. Third-party licensing (Windows, SQL) is excluded from the discount downstream.
+      ociDiscount: Number(state.ociDiscount || 0) / 100,
       oicMessagePacks: state.oicMessagePacks,
       ramp,
       existingInfraCost: state.existingInfraCost || 0,
@@ -2605,6 +2609,7 @@ function collectWorkflowState() {
     hoursPerMonth: state.hoursPerMonth,
     hoursOverride: state.hoursOverride,
     bomName: state.bomName,
+    ociDiscount: state.ociDiscount,
     oicMessagePacks: state.oicMessagePacks,
     selectedShape: state.selectedShape,
     selectedVendor: state.selectedVendor,
@@ -2657,6 +2662,7 @@ async function applyWorkflowState(wf) {
     hoursPerMonth: 730,
     hoursOverride: false,
     bomName: "",
+    ociDiscount: 0,
     oicMessagePacks: 1,
     selectedShape: "e6-standard-ax",
     selectedVendor: "amd",
@@ -2683,7 +2689,7 @@ async function applyWorkflowState(wf) {
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
     "hideWindowsPricing", "hideSqlPricing",
     "cpuUnit",
-    "bomName", "oicMessagePacks", "selectedShape", "existingInfraCost",
+    "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
     "selectedVendor", "lastShapeByVendor", "crossCloudTopTier", "uploadMetadata",
     "workflowMaxUnlockedStep",
     "showMissingOnly", "extraServices", "fields", "rows",
@@ -2761,6 +2767,7 @@ async function applyWorkflowState(wf) {
   }
   // Reflect restored simple inputs back into their controls if present.
   if (els.bomName) els.bomName.value = state.bomName || "";
+  if (els.ociDiscount) els.ociDiscount.value = String(Number(state.ociDiscount || 0));
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
   syncModeUi();
   setCpuUnit(state.cpuUnit);
@@ -4881,9 +4888,22 @@ function onPriceShapeClick() {
 els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing?.addEventListener("click", priceRows);
 function repriceIfEstimated() {
-  // If an estimate already exists, re-run pricing in place so the toggle takes effect
-  // immediately instead of requiring a manual re-price.
-  if (typeof priceRows === "function" && state.pricing) priceRows({ keepView: true });
+  // A licensing / GPU toggle changes the money, so the existing estimate is immediately stale.
+  // Drop it and re-lock the downstream steps so Price, Compare, Architecture and Deliverables
+  // can't be opened on numbers that no longer reflect the toggles, then re-price to refresh.
+  if (!state.pricing) return;
+  state.pricing = null;
+  syncWorkflowAvailability();
+  if (els.pricePageStatus) {
+    els.pricePageStatus.hidden = false;
+    els.pricePageStatus.textContent = "Licensing changed - re-pricing this estimate…";
+  }
+  if (typeof priceRows === "function") {
+    Promise.resolve(priceRows({ keepView: true })).finally(() => {
+      if (els.pricePageStatus) els.pricePageStatus.hidden = true;
+      syncWorkflowAvailability();
+    });
+  }
 }
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
