@@ -511,16 +511,19 @@ def _populate_compute(ws, servers, hours, rate_refs=None, shape_label=""):
     block_ref = rate_refs.get("block")
     vpu_ref = rate_refs.get("vpu")
     vpus_ref = rate_refs.get("vpus")
-    protos["O"] = (f"=ROUND(K{R}*N{R}*'Rate Card'!$C${ram_ref},2)" if ram_ref else 0)
+    # IMPORTANT: only OVERRIDE a proto when we have the matching Rate Card row. Setting it to 0
+    # made `if proto:` below skip the write, which left every row past the template's last
+    # shipped row (COMPUTE_LAST_TEMPLATE_ROW) with NO cost formula at all - silently understating
+    # any inventory with more servers than the template ships rows for. Keeping the template's own
+    # row-14 formula as the fallback guarantees every data row gets priced.
+    protos["O"] = (f"=ROUND(K{R}*N{R}*'Rate Card'!$C${ram_ref},2)" if ram_ref else protos.get("O"))
     # Compute optimization adjusts the OCPU/RAM QUANTITIES (columns J and K) - it must NOT
     # also discount the price here, or it would double-count. Price flows straight from the
     # optimized sizing.
-    protos["P"] = (f"=ROUND(J{R}*N{R}*'Rate Card'!$C${ocpu_ref},2)" if ocpu_ref else 0)
+    protos["P"] = (f"=ROUND(J{R}*N{R}*'Rate Card'!$C${ocpu_ref},2)" if ocpu_ref else protos.get("P"))
     if block_ref and vpu_ref:
         protos["Q"] = (f"=IF($L{R}=\"\",0,ROUND($L{R}*'Rate Card'!$C${block_ref},2)"
                        f"+ROUND($L{R}*'Rate Card'!$C${vpu_ref}*IF($M{R}=\"\",0,$M{R}),2))")
-    else:
-        protos["Q"] = 0
     # Block-VPU seed (column M) references the Rate Card default-VPUs cell.
     protos["M"] = (f"=IF($A{R}<>\"\",'Rate Card'!$C${vpus_ref},\"\")" if vpus_ref else '=""')
 
@@ -894,6 +897,17 @@ def _write_rate_card(ws, entries):
             ws.cell(r, 3).number_format = "#,##0" if float(cval).is_integer() else "0.0000"
         if e.get("key"):
             refs[e["key"]] = r
+        else:
+            # The OCPU / memory rates usually arrive through the mapped-service path (from the
+            # priced line items) rather than the keyed compute path, so they carry no key. Bind
+            # them by unit so the Compute formulas can point at the row this build actually put
+            # them on, instead of relying on them happening to sort into the template's
+            # hard-coded $C$8 / $C$9.
+            _u = _norm(e.get("unit"))
+            if _u in {"ocpu-hour", "per ocpu-hour"} and "ocpu" not in refs:
+                refs["ocpu"] = r
+            elif _u in {"gb-hour", "per gb-hour"} and "ram" not in refs:
+                refs["ram"] = r
     # Hide the Value column from the deliverable. It stays in the workbook because every
     # pricing formula (Compute/Storage/etc.) references 'Rate Card'!$C$<row>; deleting it
     # would break the math, so it's hidden rather than removed.
@@ -2367,7 +2381,6 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             k = keys.get(role)
             return _clean(raw.get(k)) if k else ""
 
-        vcpu = specs.get("vcpus") or (float(specs.get("ocpus") or 0) * 2)
         virt = rv("virt")
         # Normalize to the template's Virtual/Physical vocabulary (drives the OCPU formula).
         vl = _norm(virt)
@@ -2375,6 +2388,19 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
             virt = "Physical"
         elif vl:
             virt = "Virtual"
+
+        # Column I is "vCPU / Cores" and the sheet's OCPU formula is
+        #   =IF(UPPER(TRIM(virt))="PHYSICAL", I, I/2)
+        # i.e. a PHYSICAL row's cores are OCPUs 1:1 and only a VIRTUAL row's vCPUs are halved.
+        # So write the figure that reproduces the app's OCPU under that formula: physical rows
+        # carry their core count (= OCPU), virtual rows carry vCPUs (= OCPU x 2). Writing
+        # ocpus*2 unconditionally made the sheet double every physical server's OCPU (and its
+        # compute cost) relative to the app.
+        _ocpu_val = float(specs.get("ocpus") or 0)
+        if virt == "Physical":
+            vcpu = _ocpu_val
+        else:
+            vcpu = specs.get("vcpus") or (_ocpu_val * 2)
 
         # Only use a REAL application column. If the inventory has none, leave Master
         # Application blank (and the Applications sheet empty) rather than duplicating
