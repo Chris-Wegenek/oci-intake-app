@@ -3993,6 +3993,25 @@ def cross_cloud_estimate(priced_rows, hide_windows=False, cloud_bill_mode=False,
     }
 
 
+_BANDWIDTH_ATTR_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:m|g|k)bps\b", re.I)
+
+
+def _is_bandwidth_attribute_line(row, fields):
+    """True for a bill line that only describes an instance's NETWORK ENTITLEMENT rather than
+    billing the instance itself - e.g. AWS's "$0.00 for 800 Mbps per g4ad.2xlarge". These name
+    an instance type (so shape lookups match them) but bill nothing, and must not be priced as
+    compute/GPU on OCI."""
+    try:
+        text = " ".join(str(row.get(f.get("key")) or "") for f in (fields or [])
+                        if isinstance(f, dict))[:4000]
+    except Exception:
+        return False
+    if not _BANDWIDTH_ATTR_RE.search(text):
+        return False
+    # Only treat it as an attribute line when it genuinely bills nothing.
+    return to_number(row.get("source_monthly_cost"), 0) == 0
+
+
 def gpu_pricing_for_context(context):
     """If a cloud-bill row maps to a GPU instance, return its OCI GPU shape pricing, else None."""
     rec = lookup_cloud_shape(context)
@@ -8243,6 +8262,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     _gen = _instance_generation(_prov, (src_rec or {}).get("instance"))
                     _key = equivalent_gen_shape_key(_prov, _v, _gen)
                     row_shape = SHAPE_LOOKUP.get(_key, SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]])
+            # Bare metal is never an automatic mapping target - a whole physical server is a
+            # deliberate choice, not a default. It's still SUGGESTED on the row when the sizing
+            # overflows every flex shape (see oci_size_check), and remains selectable by hand.
+            if row_shape.get("bareMetal"):
+                row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR.get(_v) or DEFAULT_SHAPE_KEY]
         # A per-row override (set from the editable results table) wins over everything.
         _override = (shape_overrides or {}).get(str(row.get("__id")))
         if _override and _override in SHAPE_LOOKUP:
@@ -8851,6 +8875,12 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 totals["unmappedSourceMonthlyCost"] += source_cost_value
 
         gpu_info = gpu_pricing_for_context(row_context(row, fields)) if cloud_bill_mode else None
+        # A bill carries non-instance ATTRIBUTE lines that merely name the instance type - e.g.
+        # "$0.00 for 800 Mbps per g4ad.2xlarge" is a network-bandwidth entitlement, not GPU
+        # instance-hours. Those matched the GPU shape by name and each booked a whole month of
+        # OCI GPU, inventing cost against a $0 source line. Only price GPU on real instance lines.
+        if gpu_info and _is_bandwidth_attribute_line(row, fields):
+            gpu_info = None
         if gpu_info:
             # OCI GPU bare-metal pricing replaces flex OCPU/memory (the host is bundled in the GPU price).
             line_items = [li for li in line_items if li.get("unit") not in {"OCPU-hour", "GB-hour"}]
@@ -8861,7 +8891,12 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             row["oci_service_category"] = "AI & Machine Learning"
             row["oci_product"] = gpu_desc
             if price and count and not hide_gpu_pricing:
-                qty = count * GPU_HOURS_PER_MONTH
+                # Bill on the line's ACTUAL metered hours, not a flat 730. A bill lists a GPU VM
+                # as many partial-period lines, so a fixed month each multiplied the cost.
+                _gpu_hours = cloud_usage_hours(row, fields) or 0
+                if _gpu_hours <= 0:
+                    _gpu_hours = GPU_HOURS_PER_MONTH
+                qty = count * _gpu_hours
                 line_items.append({
                     "sku": gpu_info["shape"],
                     "description": gpu_desc,
