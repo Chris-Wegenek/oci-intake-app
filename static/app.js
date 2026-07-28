@@ -2423,7 +2423,10 @@ function setDeliverableStatus(element, message, tone = "") {
 }
 
 async function exportToExcel(triggerButton = null) {
-  const template = "quick";
+  // The Full BOM is the deliverable: the multi-sheet workbook (Pricing Overview, Compute,
+  // Storage, Rate Card, Consumption Ramp...) that ties out to the app. "quick" is the compact
+  // comparison workbook, so it must not be the default.
+  const template = "full";
   const button = triggerButton || els.exportFullBom || els.deliverablesFullBom;
   const isDeliverablesBom = button === els.deliverablesFullBom;
   const exportLabel = "BOM";
