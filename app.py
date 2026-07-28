@@ -4129,6 +4129,11 @@ def gpu_pricing_for_context(context):
         "gpuModel": cat.get("gpuModel"),
         "gpuCount": cat.get("gpuCount"),
         "pricePerGpuHour": cat.get("pricePerGpuHour"),
+        # The GPU shape's own OCPU count. Windows licensing is per OCPU of the instance you
+        # actually run, so a Windows GPU workload is licensed on the OCI GPU shape (e.g.
+        # VM.GPU.A10.1 = 15 OCPU), NOT on the smaller source instance it came from.
+        "ocpu": cat.get("ocpu"),
+        "cpuMemGb": cat.get("cpuMemGb"),
         "mappable": rec.get("mappable", True),
         "flag": rec.get("mapFlag", ""),
     }
@@ -9158,7 +9163,13 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         if cloud_bill_mode:
             _uh = cloud_usage_hours(row, fields)
             _win_hours = _uh if _uh and _uh > 0 else HOURS_PER_MONTH
-        windows_addon = money(ocpus * WINDOWS_LICENSE_RATE * _win_hours) if (is_windows_row and not hide_windows_pricing and ocpus) else 0.0
+        # Windows is licensed per OCPU of the instance you actually RUN. A GPU workload lands on
+        # an OCI GPU shape whose OCPU count is fixed by the shape (VM.GPU.A10.1 = 15 OCPU), not on
+        # the smaller source instance, so license it on the GPU shape or Windows is undercounted.
+        _win_ocpus = ocpus
+        if gpu_info and gpu_info.get("ocpu"):
+            _win_ocpus = float(gpu_info["ocpu"])
+        windows_addon = money(_win_ocpus * WINDOWS_LICENSE_RATE * _win_hours) if (is_windows_row and not hide_windows_pricing and _win_ocpus) else 0.0
         source_cloud_estimate = None
         # Once the bill's provider is known (from filename/toggle), trust it for the
         # whole file instead of re-deciding per server.
