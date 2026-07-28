@@ -24,7 +24,7 @@
     {"keywords": ["simple storage", "amazons3", "amazon s3", "s3"], "category": "Storage", "ociProduct": "OCI Object Storage"},
     {"keywords": ["elastic block", "ebs"], "category": "Storage", "ociProduct": "OCI Block Volumes"},
     {"keywords": ["workspaces", "workspace"], "category": "End User Computing", "ociProduct": "OCI Secure Desktops", "note": "AWS WorkSpaces has no exact OCI equivalent; mapped to OCI Secure Desktops as the closest match."},
-    {"keywords": ["fsx"], "category": "Storage", "ociProduct": "OCI File Storage", "note": "AWS FSx has no exact OCI equivalent; mapped to OCI File Storage as the closest match."},
+    {"keywords": ["fsx"], "category": "Storage", "ociProduct": "OCI ZFS Storage (HA)", "note": "AWS FSx maps to the Oracle ZFS Storage HA appliance: marketplace image fee (B95410, $1.85/instance-hour) plus OCI block volume for the provisioned capacity, per Oracle ZFS HA documentation. Priced this way rather than File Storage, whose $0.30/GB-mo rate is ~23x the FSx HDD rate."},
     {"keywords": ["elastic file", "efs"], "category": "Storage", "ociProduct": "OCI File Storage"},
     {"keywords": ["aws backup", "amazon backup", "backup storage"], "category": "Storage", "ociProduct": "OCI Backup Storage"},
     {"keywords": ["snowball"], "category": "Storage", "ociProduct": "OCI Data Transfer"},

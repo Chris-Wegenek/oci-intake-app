@@ -1074,8 +1074,12 @@ FULL_SERVICE_CATALOG_ITEMS = [
         "unit": "GB-month",
         "rate": 0.0255,
         "category": "Storage",
-        "notes": "Maps AWS EBS, Azure Managed Disk, GCP Persistent Disk, VMware disks, SAN, and generic block volumes.",
-        "keywords": ["ebs", "managed disk", "persistent disk", "block", "volume", "san", "disk", "rds storage", "database storage"],
+        "notes": "Maps AWS EBS, Azure Managed Disk, GCP Persistent Disk, VMware disks, SAN, generic block volumes, and the capacity behind an FSx -> ZFS appliance mapping.",
+        # "fsx"/"windows file server" capacity is served from BLOCK volume behind a ZFS HA
+        # appliance. Pricing it as OCI File Storage charged $0.30/GB-mo against FSx HDD at
+        # $0.013/GB-mo - a 23x markup that made the whole estimate look uncompetitive.
+        "keywords": ["ebs", "managed disk", "persistent disk", "block", "volume", "san", "disk",
+                     "rds storage", "database storage", "fsx", "windows file server"],
     },
     {
         "key": "file_storage",
@@ -1086,6 +1090,20 @@ FULL_SERVICE_CATALOG_ITEMS = [
         "category": "Storage",
         "notes": "Maps AWS EFS, Azure Files, GCP Filestore, NFS, SMB, NAS, and shared file systems.",
         "keywords": ["efs", "azure files", "filestore", "file share", "nfs", "smb", "nas", "file storage"],
+    },
+    {
+        # Oracle ZFS Storage HA appliance. Per Oracle's ZFS HA documentation the cost is a
+        # marketplace SOFTWARE IMAGE fee per compute instance-hour, PLUS the compute shape it
+        # runs on, PLUS standard block volume for the capacity you provision. This SKU is only
+        # the image fee; capacity is priced as block volume on the FSx/NAS rows themselves.
+        "key": "zfs_ha_image",
+        "sku": "B95410",
+        "description": "ZFS Storage HA - marketplace image (instance-hour)",
+        "unit": "instance-hour",
+        "rate": 1.85,
+        "category": "Storage",
+        "notes": "Oracle ZFS Storage High Availability marketplace image; the OCI target for AWS FSx / large Windows-and-NFS file estates.",
+        "keywords": ["zfs", "zfs storage", "fsx"],
     },
     *FULL_SERVICE_RATE_ITEMS,
 ]
@@ -3732,6 +3750,49 @@ def _estimate_source_cost(row, cloud, hide_windows=False):
     inst = equivalent_instance(cloud, (row.get("shapeUsed") or {}).get("vendor"), vcpus, mem, False)
     base = inst["hourly"] * hours if inst else 0.0
     return money(base + windows)
+
+
+ZFS_HA_IMAGE_SKU = "B95410"
+ZFS_HA_IMAGE_RATE = 1.85          # $/instance-hour, Oracle ZFS Storage HA marketplace image
+
+
+def _apply_zfs_appliance(priced_rows, totals, hours):
+    """AWS FSx maps to the Oracle ZFS Storage HA appliance. Per Oracle's ZFS HA documentation the
+    cost is three parts: the marketplace IMAGE fee (per compute instance-hour), the COMPUTE shape
+    it runs on, and standard BLOCK VOLUME for the capacity provisioned. The capacity is already
+    priced on the FSx rows themselves (block-volume rates), so add the image fee here - once for
+    the estate, not per bill line, since one appliance serves the whole file estate.
+
+    The compute shape the appliance runs on is a deployment choice, so it is called out as an
+    assumption rather than guessed at."""
+    try:
+        fsx_rows = [r for r in priced_rows
+                    if "fsx" in normalize(str(r.get("sourceService") or ""))]
+        if not fsx_rows:
+            return
+        # Only bill the appliance when there is real capacity behind it.
+        if not any(float(r.get("monthly") or 0) > 0 for r in fsx_rows):
+            return
+        h = float(hours or HOURS_PER_MONTH) or HOURS_PER_MONTH
+        monthly = money(ZFS_HA_IMAGE_RATE * h)
+        host = fsx_rows[0]
+        host.setdefault("lineItems", []).append({
+            "sku": ZFS_HA_IMAGE_SKU,
+            "description": "ZFS Storage HA - marketplace image (instance-hour)",
+            "quantity": round(h, 4),
+            "unit": "instance-hour",
+            "rate": ZFS_HA_IMAGE_RATE,
+            "monthly": monthly,
+            "mapping": ("Oracle ZFS Storage HA marketplace image, one appliance for the file "
+                        "estate. Capacity is priced as block volume on the FSx rows. The compute "
+                        "shape the appliance runs on is additional and depends on the deployment."),
+        })
+        host["monthly"] = money(float(host.get("monthly") or 0) + monthly)
+        host["annual"] = money(float(host["monthly"]) * 12)
+        totals["monthly"] = money(float(totals.get("monthly") or 0) + monthly)
+        totals["annual"] = money(float(totals.get("annual") or 0) + monthly * 12)
+    except Exception:
+        return
 
 
 def _apply_source_cost_estimate(priced_rows, totals, source_cloud, hide_windows=False):
@@ -9227,6 +9288,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     if cloud_bill_mode:
         source_cost_estimated = _apply_source_cost_estimate(
             priced_rows, totals, source_cloud_key, hide_windows_pricing)
+        _apply_zfs_appliance(priced_rows, totals, eff_hours)
 
     return {
         "engine": "local-rule-engine",
