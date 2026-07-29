@@ -4245,6 +4245,17 @@ _FREE_ON_OCI_PRODUCTS = (
     "cloud guard",                    # Cloud Guard / Security Zones are free
     "security zones",
     "outbound data transfer",         # first 10 TB/mo egress is free
+    # Confirmed against the reference AWS->OCI mapping another team produced for this same bill
+    # ("Data Transfer (10TB egress FREE)", "Key Management Service (First 20 Keys FREE)",
+    # "Secrets Management with OCI Vault - FREE"). Oracle does not charge for the Site-to-Site
+    # VPN service itself either - only the data that crosses it, which is metered separately as
+    # outbound data transfer. These were previously counted as unpriced gaps.
+    "vpn connect",                    # OCI Site-to-Site VPN: no charge for the service
+    "site-to-site vpn",
+    "networking data transfer",       # metered as outbound data transfer, 10 TB/mo free
+    "oci monitoring",                 # free tier covers standard metric ingestion
+    "oci vault",                      # software keys / secrets management
+    "key management",
 )
 
 
@@ -4254,6 +4265,28 @@ def _is_free_on_oci(row, priced):
     svc = normalize(str(row.get("source_service") or "")).replace(" ", "")
     if svc in _BILLING_CONSTRUCT_SERVICES:
         return True
+    meter = normalize(" ".join(str(priced.get(k) or "") for k in
+                               ("sourceUsageType", "sourceProduct")))
+    prod = normalize(str(priced.get("ociProduct") or ""))
+    # Per-REQUEST API charges. S3 bills Tier1/Tier2 requests; OCI Object Storage does not meter
+    # requests separately, so these correctly contribute nothing. (Cross-checked: our S3 total
+    # lands within $13 of an independent mapping of the same bill, which also carries no
+    # request charge.) Pricing the request COUNT as GB would be a massive over-charge, which is
+    # why the capacity pricer already refuses these rows.
+    if "request" in meter and ("object storage" in prod or "storage" in prod):
+        return True
+    # Storage I/O: AWS meters database and EBS I/O separately; OCI includes I/O in the storage
+    # price, so a zero here is the OCI model, not a missed rate.
+    if ("storage io" in meter or "storage i o" in meter or "iops" in meter
+            or "requests" in meter) and ("database" in prod or "block volume" in prod):
+        return True
+    # A mapped SKU whose OCI rate is genuinely $0 (BYOL / bundled software). The line item is
+    # present and visible - the customer simply brings the licence - so it is not a pricing gap.
+    items = priced.get("lineItems") or []
+    if items and all(float(x.get("rate") or 0) == 0 for x in items):
+        blob = normalize(" ".join(str(x.get("description") or "") for x in items))
+        if "byol" in blob or "bundled" in blob or "license" in blob or "included" in blob:
+            return True
     prod = normalize(str(priced.get("ociProduct") or ""))
     if not prod:
         return False
@@ -9081,6 +9114,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 is_capacity = (
                     any(k in ut2 for k in ["timedstorage", "bytehrs", "volumeusage", "snapshotusage", "storage"])
                     or normalize(row.get("usage_unit")) in ("gb", "gib", "gbmonth", "gbmo", "gigabyte", "gigabytemonth")
+                    # Backup capacity meters (e.g. FSx "BackupUsage", billed per GB-month) name
+                    # neither "storage" nor a unit, so 72,838 GB of Windows File Server backup
+                    # went unpriced. Require the meter to be GB-based so per-request or
+                    # per-operation backup meters aren't priced as capacity.
+                    or ("backup" in ut2 and "gb" in storage_meter_text)
                     or not ut2
                 ) and not ia_retrieval
                 if ia_retrieval:
