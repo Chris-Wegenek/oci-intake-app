@@ -1483,13 +1483,47 @@ def capacity_unit_factor(text):
     return None
 
 
+# A capacity cell is often an expression, not a number: "2 x 500 GB" for a pair of disks,
+# "500 GB + 1 TB" for a boot volume plus data. Reading only the first number turned the first
+# into 2 GB and the second into 500 GB, silently dropping most of the estate.
+#
+# normalize() can't be used here: it replaces every non-alphanumeric with a space, which
+# destroys the decimal point in "12.125 TB" and the "+" that separates the terms.
+_TERM_RE = re.compile(
+    r"(?P<a>\d+(?:\.\d+)?)"                                   # a number
+    r"(?:\s*(?:disks?|drives?|volumes?|vols?|luns?)?\s*"       # optional "disks"/"drives"
+    r"[x×*]\s*(?P<b>\d+(?:\.\d+)?))?"                        # ...times a second number
+    r"\s*(?P<unit>[a-z]+)?",                                    # optional unit word
+    re.I,
+)
+_TERM_SPLIT_RE = re.compile(r"\s*(?:\+|&|\band\b|\bplus\b)\s*", re.I)
+
+
 def to_gb(value, default=0.0):
-    number = to_number(value, default)
-    text = normalize(value)
+    """A capacity cell -> GB, honouring units, "N x size" multipliers and "a + b" sums."""
+    text = clean_text(value).lower().strip()
     if not text:
         return default
-    factor = capacity_unit_factor(text)
-    return number * factor if factor is not None else number
+    # Strip thousands separators only. A comma is never treated as a term separator, because
+    # "1,024 GB" is a single value and guessing wrong there is worse than not splitting.
+    text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
+
+    terms = []
+    for chunk in _TERM_SPLIT_RE.split(text):
+        m = _TERM_RE.search(chunk)
+        if not m:
+            continue
+        size = float(m.group("a"))
+        if m.group("b"):
+            size *= float(m.group("b"))
+        terms.append((size, capacity_unit_factor(m.group("unit") or "")))
+    if not terms:
+        return to_number(value, default)
+
+    # "500 + 1024 GB" states the unit once; a term without one inherits it.
+    shared = next((f for _size, f in terms if f is not None), None)
+    return sum(size * (factor if factor is not None else (shared if shared is not None else 1.0))
+               for size, factor in terms)
 
 
 _NON_STORAGE_HEADER_TERMS = (
