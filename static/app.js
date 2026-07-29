@@ -5313,6 +5313,20 @@ function renderCrossCloud() {
        </div>`
     : "";
   const cards = [];
+  // Services added on the Services step are OCI-side additions that the OCI headline already
+  // includes. An ESTIMATED cloud must carry the same scope or the comparison stops being
+  // like-for-like and OCI reads worse the more you add. A cloud shown at its ACTUAL BILLED
+  // COST is the customer's real invoice with its own architecture and agreed price - that
+  // figure is left exactly as it is.
+  const extrasMonthly = extraServicesMonthly();
+  const isActualBilled = (v) =>
+    v.basis === "actual bill" || v.basis === "imported comparison total";
+  const cloudMonthly = (v) =>
+    Number(v.monthlyTotal || 0) + (isActualBilled(v) ? 0 : extrasMonthly);
+  // Short display names: "AWS" and "Azure" read better than the vendors' full product names.
+  const shortCloud = (key, label) =>
+    key === "azure" ? "Azure" : key === "aws" ? "AWS" : (label || key.toUpperCase());
+
   // How OCI compares with each priced cloud, as a share of THAT cloud's cost: green when OCI
   // is cheaper, red when it isn't. Only rendered for clouds that are actually priced (GCP is
   // sizing-only), and skipped when the other side is 0 so we never divide by zero.
@@ -5320,13 +5334,13 @@ function renderCrossCloud() {
     .map((key) => {
       const v = cc[key];
       if (!v || !v.priced) return "";
-      const other = Number(v.monthlyTotal || 0);
+      const other = cloudMonthly(v);
       if (!(other > 0)) return "";
       const pct = ((other - ociMonthly) / other) * 100;
       const cheaper = pct > 0;
-      const label = v.label || key.toUpperCase();
       return `<span class="cross-cloud-delta ${cheaper ? "is-cheaper" : "is-pricier"}">${
-        Math.abs(pct).toFixed(0)}% ${cheaper ? "less" : "more"} than ${escapeHtml(label)}</span>`;
+        Math.abs(pct).toFixed(0)}% ${cheaper ? "less" : "more"} than ${
+        escapeHtml(shortCloud(key, v.label))}</span>`;
     })
     .join("");
   cards.push(`
@@ -5353,7 +5367,8 @@ function renderCrossCloud() {
   ["aws", "azure"].forEach((key) => {
     const v = cc[key];
     if (!v || !v.priced) return;
-    const monthly = Number(v.monthlyTotal || 0);
+    const monthly = cloudMonthly(v);
+    const addedHere = monthly - Number(v.monthlyTotal || 0);
     const delta = monthly - ociMonthly;
     const deltaLabel = ociMonthly > 0
       ? `${delta >= 0 ? "+" : "−"}${formatCurrency(Math.abs(delta))}/mo vs OCI`
@@ -5366,9 +5381,10 @@ function renderCrossCloud() {
       <div class="cross-cloud-card">
         <span class="cross-cloud-card-name">${escapeHtml((v.label || key.toUpperCase()) + nameSuffix)}</span>
         <span class="cross-cloud-card-monthly">${formatCurrency(monthly)}<small>/mo</small></span>
-        <span class="cross-cloud-card-annual">${formatCurrency(Number(v.annualTotal || monthly * 12))}/yr</span>
+        <span class="cross-cloud-card-annual">${formatCurrency(monthly * 12)}/yr</span>
         ${deltaLabel ? `<span class="cross-cloud-delta ${deltaClass}">${deltaLabel}</span>` : ""}
-        <span class="cross-cloud-basis">${escapeHtml(basisLabel(v))}</span>
+        <span class="cross-cloud-basis">${escapeHtml(basisLabel(v))}${
+          addedHere > 0 ? ` · incl. ${formatCompactCurrency(addedHere)} added services` : ""}</span>
       </div>
     `);
   });
