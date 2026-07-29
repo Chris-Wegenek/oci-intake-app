@@ -5313,11 +5313,28 @@ function renderCrossCloud() {
        </div>`
     : "";
   const cards = [];
+  // How OCI compares with each priced cloud, as a share of THAT cloud's cost: green when OCI
+  // is cheaper, red when it isn't. Only rendered for clouds that are actually priced (GCP is
+  // sizing-only), and skipped when the other side is 0 so we never divide by zero.
+  const ociDeltas = ["aws", "azure"]
+    .map((key) => {
+      const v = cc[key];
+      if (!v || !v.priced) return "";
+      const other = Number(v.monthlyTotal || 0);
+      if (!(other > 0)) return "";
+      const pct = ((other - ociMonthly) / other) * 100;
+      const cheaper = pct > 0;
+      const label = v.label || key.toUpperCase();
+      return `<span class="cross-cloud-delta ${cheaper ? "is-cheaper" : "is-pricier"}">${
+        Math.abs(pct).toFixed(0)}% ${cheaper ? "less" : "more"} than ${escapeHtml(label)}</span>`;
+    })
+    .join("");
   cards.push(`
     <div class="cross-cloud-card cross-cloud-oci">
       <span class="cross-cloud-card-name">Oracle Cloud (this estimate)</span>
       <span class="cross-cloud-card-monthly">${formatCurrency(ociMonthly)}<small>/mo</small></span>
       <span class="cross-cloud-card-annual">${formatCurrency(ociMonthly * 12)}/yr</span>
+      ${ociDeltas ? `<div class="cross-cloud-deltas">${ociDeltas}</div>` : ""}
     </div>
   `);
   const tier = state.crossCloudTopTier;
