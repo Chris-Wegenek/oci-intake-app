@@ -1943,11 +1943,64 @@ td input[type="checkbox"] {
   border-color: #3399ff;
 }
 
+/* Render the licensing / GPU options as switches rather than bare checkboxes: the checkbox is
+   hidden and the ::before pill + ::after knob are drawn in its place, so the chip reads as an
+   on/off control and clearly shows which removals are active. */
 .pricing-options .opt-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
   margin: 0;
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+  pointer-events: none;
+}
+
+.pricing-options .opt-chip::before {
+  content: "";
+  width: 34px;
+  height: 19px;
+  border-radius: 999px;
+  background: #cfd6e0;
+  transition: background 0.16s ease;
+  flex: 0 0 auto;
+}
+
+.pricing-options .opt-chip::after {
+  content: "";
+  position: absolute;
+  left: 15px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.28);
+  transition: transform 0.16s ease;
+}
+
+.pricing-options .opt-chip {
+  position: relative;
+}
+
+.pricing-options .opt-chip.is-on,
+.pricing-options .opt-chip:has(input:checked) {
+  border-color: var(--redwood, #c74634);
+  background: rgba(199, 70, 52, 0.07);
+  color: var(--redwood, #c74634);
+}
+
+.pricing-options .opt-chip.is-on::before,
+.pricing-options .opt-chip:has(input:checked)::before {
+  background: var(--redwood, #c74634);
+}
+
+.pricing-options .opt-chip.is-on::after,
+.pricing-options .opt-chip:has(input:checked)::after {
+  transform: translateX(15px);
+}
+
+.pricing-options .opt-chip:has(input:focus-visible) {
+  outline: 2px solid #d4b483;
+  outline-offset: 2px;
 }
 
 .shape-action-buttons {
@@ -4939,6 +4992,16 @@ td input[type="checkbox"] {
   border-color: var(--line);
   background: #172021;
   color: var(--ink);
+}
+
+:root[data-theme="dark"] .pricing-options .opt-chip::before {
+  background: #3a4750;
+}
+
+:root[data-theme="dark"] .pricing-options .opt-chip.is-on,
+:root[data-theme="dark"] .pricing-options .opt-chip:has(input:checked) {
+  background: rgba(199, 70, 52, 0.18);
+  color: #f0b8ad;
 }
 
 :root[data-theme="dark"] .processor-section {

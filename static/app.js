@@ -2776,6 +2776,7 @@ async function applyWorkflowState(wf) {
   if (els.bomName) els.bomName.value = state.bomName || "";
   if (els.ociDiscount) els.ociDiscount.value = String(Number(state.ociDiscount || 0));
   if (typeof syncSizingModeUi === "function") syncSizingModeUi();
+  if (typeof syncOptChips === "function") syncOptChips();
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
   syncModeUi();
   setCpuUnit(state.cpuUnit);
@@ -4926,16 +4927,19 @@ function onDiscountInput(raw) {
   if (els.ociDiscount && String(pct) !== String(els.ociDiscount.value)) {
     els.ociDiscount.value = String(pct);
   }
+  if (!state.pricing) return;
+  // Show the overlay SYNCHRONOUSLY on commit so it appears the instant Enter is pressed,
+  // rather than a tick later once the timer runs. The discount is a presentation/export factor,
+  // not a re-price, so the work itself is just a re-render of the KPIs, Cost Mix and ramp.
+  const overlay = document.querySelector("#exportOverlay");
+  const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
+  if (overlayText) overlayText.textContent = `Applying ${pct}% OCI discount…`;
+  if (overlay) overlay.hidden = false;
+  const shownAt = Date.now();
   clearTimeout(_discountTimer);
-  _discountTimer = setTimeout(() => {
-    if (!state.pricing) return;
-    // The discount is a presentation/export factor, not a re-price: no server round-trip is
-    // needed, so show a brief loading flash and re-render the KPIs, Cost Mix and ramp.
-    const overlay = document.querySelector("#exportOverlay");
-    const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
-    if (overlayText) overlayText.textContent = `Applying ${pct}% OCI discount…`;
-    if (overlay) overlay.hidden = false;
-    const shownAt = Date.now();
+  // Two frames: the first lets the browser actually paint the overlay before the (synchronous)
+  // re-render blocks the main thread, so it can't be skipped entirely.
+  window.requestAnimationFrame(() => {
     window.requestAnimationFrame(() => {
       try {
         refreshResultsTotals();
@@ -4943,10 +4947,10 @@ function onDiscountInput(raw) {
         // Re-rendering is near-instant, so without a floor the overlay just flickers. Hold it
         // for a minimum visible moment so the change reads as "applied" rather than a glitch.
         const wait = Math.max(0, OVERLAY_MIN_MS - (Date.now() - shownAt));
-        setTimeout(() => { if (overlay) overlay.hidden = true; }, wait);
+        _discountTimer = setTimeout(() => { if (overlay) overlay.hidden = true; }, wait);
       }
     });
-  }, 0);
+  });
 }
 if (els.ociDiscount) {
   // Apply only when the field is committed - blur or Enter. Re-pricing while the user is still
@@ -4986,6 +4990,14 @@ if (els.sizingSwitch) {
   });
 }
 
+function syncOptChips() {
+  // Mirror each option checkbox onto its chip so the switch styling works without :has().
+  [els.hideGpuToggle, els.hideWindowsToggle, els.hideSqlToggle].forEach((cb) => {
+    const chip = cb && cb.closest(".opt-chip");
+    if (chip) chip.classList.toggle("is-on", !!cb.checked);
+  });
+}
+
 function repriceIfEstimated() {
   // A licensing / GPU toggle changes the money, so the existing estimate is immediately stale.
   // Drop it and re-lock the downstream steps so Price, Compare, Architecture and Deliverables
@@ -5010,14 +5022,17 @@ function repriceIfEstimated() {
 }
 els.hideGpuToggle?.addEventListener("change", (event) => {
   state.hideGpuPricing = event.target.checked;
+  syncOptChips();
   repriceIfEstimated();
 });
 els.hideSqlToggle?.addEventListener("change", (event) => {
   state.hideSqlPricing = event.target.checked;
+  syncOptChips();
   repriceIfEstimated();
 });
 els.hideWindowsToggle?.addEventListener("change", (event) => {
   state.hideWindowsPricing = event.target.checked;
+  syncOptChips();
   repriceIfEstimated();
 });
 function setCpuUnit(value) {
