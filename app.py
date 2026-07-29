@@ -4300,6 +4300,24 @@ def _is_free_on_oci(row, priced):
 _BANDWIDTH_ATTR_RE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:m|g|k)bps\b", re.I)
 
 
+_THROUGHPUT_METER_RE = re.compile(
+    r"(mb|mib|gb|gib)[ -]?per[ -]?second|mbps[ -]?month|throughput[ -]?capacity|provisioned[ -]?throughput",
+    re.I)
+
+
+def _is_provisioned_throughput_line(row):
+    """True for a meter that bills PROVISIONED THROUGHPUT rather than capacity - e.g. FSx's
+    "$2.53 per MB-per-second-Month of provisioned Windows File Server throughput".
+
+    OCI has no equivalent meter: on the ZFS Storage appliance, throughput is a property of the
+    compute shape the appliance runs on, which is already priced (marketplace image + shape +
+    block volume). Carrying AWS's throughput charge on top would double-count something OCI
+    delivers as part of the appliance."""
+    txt = " ".join(str(row.get(k) or "") for k in
+                   ("source_product", "__usageType", "__meterName", "usage_unit"))
+    return bool(_THROUGHPUT_METER_RE.search(txt))
+
+
 def _is_bandwidth_attribute_line(row, fields):
     """True for a bill line that only describes an instance's NETWORK ENTITLEMENT rather than
     billing the instance itself - e.g. AWS's "$0.00 for 800 Mbps per g4ad.2xlarge". These name
@@ -8524,6 +8542,13 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "freeOnOciSourceMonthly": 0.0,
         "unpricedSourceMonthly": 0.0,
         "unpricedRows": 0,
+        # Cost CARRIED OVER from the source bill because the line couldn't be priced on an OCI
+        # rate (an unmappable unit, e.g. FSx provisioned MB/s throughput). It is the source
+        # figure copied across, NOT an OCI calculation, so those lines can never show a saving
+        # and they pull the OCI total toward the source total. Tracked and surfaced so the
+        # estimate can't quietly look more precise than it is.
+        "carriedSourceMonthly": 0.0,
+        "carriedRows": 0,
         "monthly": 0.0,
         "annual": 0.0,
     }
@@ -9279,6 +9304,15 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     "mapping": "GPU pricing hidden by toggle.", "isGpu": True, "gpuHidden": True,
                 })
 
+        # Carried lines keep the source cost (conservative), but they are the SOURCE figure,
+        # not an OCI-rate calculation - they can never show a saving and they pull the OCI total
+        # toward the source total. Tag the amount so the estimate can disclose how much of
+        # itself is carried rather than priced.
+        for _li in (line_items or []):
+            if (_li.get("carriedOver") or "carried over" in normalize(str(_li.get("description") or ""))) \
+                    and not _li.get("carriedSourceMonthly"):
+                _li["carriedSourceMonthly"] = float(_li.get("monthly") or 0)
+
         monthly = money(sum(item["monthly"] for item in line_items))
         annual = money(monthly * 12)
         _src_cost = to_number(row.get("source_monthly_cost"), 0)
@@ -9297,15 +9331,47 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         _priced_on_oci_service = bool(storage_handled) or any(
             li.get("ociServiceUsage") for li in line_items)
         _auto_carried = False
-        if (cloud_bill_mode and not row_free_on_oci and not _user_action
+        # Provisioned-throughput meters have no OCI counterpart: throughput comes from the
+        # shape the storage appliance runs on, which is already priced. Record $0 with the
+        # reason instead of carrying the source charge on top of hardware we've already costed.
+        if (cloud_bill_mode and monthly == 0 and _src_cost > 0
+                and _is_provisioned_throughput_line(row)):
+            line_items = [{
+                "sku": "", "description": "Provisioned throughput (included in the OCI shape)",
+                "quantity": 0, "unit": "", "rate": 0, "monthly": 0.0,
+                "mapping": ("AWS bills provisioned throughput separately (${:,.2f}/mo). OCI has "
+                            "no such meter - throughput comes from the compute shape the storage "
+                            "appliance runs on, already priced here - so this is $0, not carried."
+                            .format(_src_cost)),
+                "ociServiceUsage": True,
+            }]
+            annual = 0.0
+        elif (cloud_bill_mode and not row_free_on_oci and not _user_action
                 and not clean_text(row.get("_sqlMappingFlag"))
                 and not _priced_on_oci_service
                 and monthly == 0 and _src_cost > 0):
+            # Do NOT copy the source cost into the OCI column automatically. Asserting "OCI
+            # costs whatever AWS charged" is not a price: such a line can never show a saving,
+            # it drags the OCI total toward the source total, and it hides the fact that the
+            # service was never actually mapped. Record it at $0 with the source amount kept
+            # for context so it surfaces in the needs-review total and gets a real decision -
+            # an OCI price, or an explicit "free"/"not migrating". A user can still choose to
+            # carry a specific row by hand (cost_action == "carry" below).
+            # No OCI price exists for this service, so the source cost is carried to keep the
+            # estimate conservative (better than a $0 that understates the migration). This is
+            # NOT an OCI calculation though: such a line can never show a saving and it pulls
+            # the OCI total toward the source total. It is tagged and totalled into
+            # carriedSourceMonthly so the estimate always discloses how much of itself is
+            # carried rather than priced.
             line_items = [{
                 "sku": "", "description": "Carried over from source AWS cost",
                 "quantity": 0, "unit": "", "rate": 0, "monthly": money(_src_cost),
-                "mapping": "No exact OCI price for this service; carried at the source AWS cost.",
+                "mapping": ("No OCI price for this service, so the source cost is carried "
+                            "unchanged. This is the source figure, not an OCI-rate calculation - "
+                            "it shows no saving and needs a real OCI price or a free / "
+                            "not-migrating decision."),
                 "carriedOver": True,
+                "carriedSourceMonthly": money(_src_cost),
             }]
             monthly = money(_src_cost)
             annual = money(monthly * 12)
@@ -9517,6 +9583,13 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             totals[key] += priced["specs"][key]
         totals["monthly"] += monthly
         totals["annual"] += annual
+
+        # Carried-over source cost is not an OCI price. Count it so the estimate can disclose
+        # how much of itself is calculated vs copied from the source bill.
+        for _li in (line_items or []):
+            if _li.get("carriedSourceMonthly"):
+                totals["carriedSourceMonthly"] += float(_li.get("carriedSourceMonthly") or 0)
+                totals["carriedRows"] += 1
 
         # Track source spend that produced no OCI cost, split into "OCI genuinely doesn't charge
         # for this" vs "this should have cost something" so the estimate's gaps are visible.
