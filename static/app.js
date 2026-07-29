@@ -3942,17 +3942,21 @@ function renderResults(pricing) {
             fill: mappedShare || 8,
           })}
           ${resultKpiCard({
-            // Dollars on top, and beneath it the line count those dollars came from - the two
-            // halves of one fact, so the figure is scoped the moment you read it. Both come
-            // from the same branch of the totals, so the count always matches the amount.
-            // "no OCI price" rather than "unmapped": these lines DID map to a chargeable OCI
-            // product, they just never got a rate, which is exactly why they need a look.
+            // Dollars on top, and beneath it the count of lines that produced them. Lines that
+            // mapped AND got a rate are already excluded - they have a cost, so they never
+            // reach this bucket. What's left is spend the estimate can't account for.
+            //
+            // These are counted by "no OCI price", not "no OCI mapping": on real bills almost
+            // every reviewable line does carry a mapping (OCI Block Volumes, OCI Object
+            // Storage) and simply never resolved to a rate, so counting only the mapping-less
+            // ones would report 0 lines beside a non-zero amount. unmappedRows tracks that
+            // narrower set for the tooltip.
             label: "Needs review",
             value: formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0)),
-            meta: `across ${formatNumber(pricing.totals.unpricedRows || 0)} ${Number(pricing.totals.unpricedRows || 0) === 1 ? "line" : "lines"} with no OCI price`,
+            meta: `${formatNumber(pricing.totals.unpricedRows || 0)} ${Number(pricing.totals.unpricedRows || 0) === 1 ? "line" : "lines"} with no OCI price`,
             accent: Number(pricing.totals.unpricedSourceMonthly || 0) > 0 ? "#d97706" : "#067647",
             fill: reviewRows ? reviewShare : 100,
-            title: `${formatCurrency(Number(pricing.totals.zeroOciSourceMonthly || 0))} of source spend produces no OCI cost: ${formatCurrency(Number(pricing.totals.freeOnOciSourceMonthly || 0))} genuinely free on OCI (Savings Plans, support, VCN, Audit, included egress) and ${formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0))} mapped to a chargeable OCI product but not priced - that portion understates the OCI estimate.`,
+            title: `${formatCurrency(Number(pricing.totals.zeroOciSourceMonthly || 0))} of source spend produces no OCI cost: ${formatCurrency(Number(pricing.totals.freeOnOciSourceMonthly || 0))} genuinely free on OCI (Savings Plans, support, VCN, Audit, included egress) and ${formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0))} that should have cost something - that portion understates the OCI estimate. Of it, ${formatCurrency(Number(pricing.totals.unmappedZeroSourceMonthly || 0))} across ${formatNumber(pricing.totals.unmappedRows || 0)} lines has no OCI mapping at all; the rest mapped to a chargeable OCI product but never got a rate.`,
           })}`
       : pricing.fullServiceBeta
         ? `${resultKpiCard({

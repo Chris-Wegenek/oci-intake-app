@@ -8551,6 +8551,12 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "freeOnOciSourceMonthly": 0.0,
         "unpricedSourceMonthly": 0.0,
         "unpricedRows": 0,
+        # Of the unpriced spend, the part with NO OCI mapping at all - nothing was chosen for
+        # this line, so nobody can even say what it should have cost. Kept separate from lines
+        # that DID map to a chargeable product and merely never got a rate, because only the
+        # unmapped ones need a human to decide what they map to.
+        "unmappedZeroSourceMonthly": 0.0,
+        "unmappedRows": 0,
         # Cost CARRIED OVER from the source bill because the line couldn't be priced on an OCI
         # rate (an unmappable unit, e.g. FSx provisioned MB/s throughput). It is the source
         # figure copied across, NOT an OCI calculation, so those lines can never show a saving
@@ -9609,11 +9615,14 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             else:
                 totals["unpricedSourceMonthly"] += _src_cost
                 totals["unpricedRows"] += 1
+                if not clean_text(priced.get("ociProduct")):
+                    totals["unmappedZeroSourceMonthly"] += _src_cost
+                    totals["unmappedRows"] += 1
 
     for key in totals:
-        if key in {"monthly", "annual", "fullServiceMonthly", "sourceMonthlyCost", "mappedSourceMonthlyCost", "unmappedSourceMonthlyCost", "zeroOciSourceMonthly", "freeOnOciSourceMonthly", "unpricedSourceMonthly"}:
+        if key in {"monthly", "annual", "fullServiceMonthly", "sourceMonthlyCost", "mappedSourceMonthlyCost", "unmappedSourceMonthlyCost", "zeroOciSourceMonthly", "freeOnOciSourceMonthly", "unpricedSourceMonthly", "unmappedZeroSourceMonthly"}:
             totals[key] = money(totals[key])
-        elif key in {"mappedServiceRows", "unpricedServiceRows", "oversizeRows", "impossibleRows", "unpricedRows"}:
+        elif key in {"mappedServiceRows", "unpricedServiceRows", "oversizeRows", "impossibleRows", "unpricedRows", "unmappedRows"}:
             totals[key] = int(totals[key])
         else:
             totals[key] = round(totals[key], 4)
