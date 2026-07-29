@@ -5318,31 +5318,29 @@ td input[type="checkbox"] {
 :root[data-theme="dark"] .cross-cloud-delta.is-cheaper { color: #5dcaa5; }
 :root[data-theme="dark"] .cross-cloud-delta.is-pricier { color: #f0997b; }
 
-/* "Adding…" spinner on the Add-to-BOM buttons.
-   Swap look by changing THIS rule only:
-     ring    (current) - border with one coloured edge, steady spin
-     segment           - add `border-bottom-color: transparent;` for a snappier arc
-     pulse             - replace the border/animation with:
-                         background: currentColor; animation: btn-pulse 1s ease-in-out infinite; */
-.btn-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-top-color: transparent;
-  border-radius: 50%;
-  display: inline-block;
-  vertical-align: -2px;
-  margin-right: 8px;
-  /* ONE slow, deliberate rotation - not an endless spin. The button is held for the same
-     duration (ADDING_MIN_MS) so the loop completes exactly once and then resolves. */
-  animation: btn-spin 0.9s cubic-bezier(0.45, 0.05, 0.35, 1) 1 both;
+/* "Adding…" progress track on the Add-to-BOM buttons. The bar fills left to right ONCE and
+   reaches 100% to signal completion, rather than looping - the button is held for the same
+   duration so the fill always finishes. Sits along the bottom edge of the pill. */
+.svc-add { position: relative; overflow: hidden; }
+.btn-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(26, 127, 75, 0.20);
+  overflow: hidden;
 }
-@keyframes btn-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-@keyframes btn-pulse {
-  0%, 100% { transform: scale(0.75); opacity: 0.5; }
-  50%      { transform: scale(1);    opacity: 1; }
+.btn-track i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #1a7f4b;
+  animation: btn-fill 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1 forwards;
 }
+@keyframes btn-fill { from { width: 0; } to { width: 100%; } }
 .svc-add[disabled] { opacity: 1; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
-  .btn-spinner { animation: none; opacity: 0.6; }
+  .btn-track i { animation-duration: 0.01ms; width: 100%; }
 }
+

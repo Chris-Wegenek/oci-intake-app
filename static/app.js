@@ -5904,8 +5904,8 @@ function renderServiceCart() {
 
 // "Adding…" feedback on an Add-to-BOM button. The work itself is instant, so without a floor
 // the spinner would flash for a frame and read as a glitch rather than a confirmation. The
-// spinner makes ONE slow rotation and this hold matches its duration, so the loop completes
-// exactly once and then the button resolves. Swap the look via .btn-spinner in styles.css.
+// progress track fills left-to-right exactly ONCE and this hold matches its duration, so the bar
+// reaches 100% - signalling done - before the button resolves. Look lives in .btn-track.
 const ADDING_MIN_MS = 900;
 function showAddingState(btn, work) {
   if (!btn || btn.dataset.adding === "1") return;   // ignore double-clicks mid-add
@@ -5914,7 +5914,7 @@ function showAddingState(btn, work) {
   btn.dataset.adding = "1";
   btn.disabled = true;
   btn.style.minWidth = `${width}px`;
-  btn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>Adding…';
+  btn.innerHTML = 'Adding…<span class="btn-track" aria-hidden="true"><i></i></span>';
   const startedAt = Date.now();
   const finish = () => {
     const wait = Math.max(0, ADDING_MIN_MS - (Date.now() - startedAt));
