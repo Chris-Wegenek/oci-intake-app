@@ -91,6 +91,98 @@ def openai_api_configured():
     return bool(clean_text(os.environ.get("OPENAI_API_KEY")))
 
 
+# ---------------------------------------------------------------------------------------------
+# AGENT AUTHORITY POLICY
+#
+# This app's deterministic engine owns the numbers. An AI agent - the one already wired in here,
+# or a future one added by another team - is ADVISORY everywhere except the architecture diagram.
+#
+#   advisory : the agent may propose, annotate, or fill a gap the deterministic engine left
+#              empty, but it can never replace a deterministic result. If both produce an
+#              answer, the deterministic one wins and the agent's is kept only as a note.
+#   override : the agent may replace the generated result outright.
+#
+# Only "architecture" is override: the diagram is a drawing, so an agent rearranging or
+# restyling it cannot change a price, a mapping, or a BOM figure. Everything that feeds a
+# customer-facing number stays advisory, because an estimate has to be reproducible and
+# defensible - the same upload must price the same way every time, whether or not an agent ran,
+# and whether or not it was having a good day.
+#
+# Enforce with agent_may_override(domain) / resolve_agent_result(...) at every AI boundary
+# rather than trusting call sites to remember the rule.
+# ---------------------------------------------------------------------------------------------
+AGENT_AUTHORITY = {
+    "inventory_scrub": "advisory",     # parsing an uploaded inventory
+    "cloud_bill_mapping": "advisory",  # AWS/Azure/GCP bill line -> OCI service
+    "pricing": "advisory",             # rates, sizing, OCPU/RAM/storage math
+    "shape_selection": "advisory",     # which OCI shape a workload lands on
+    "bom_export": "advisory",          # workbook contents and totals
+    "table_edit": "advisory",          # natural-language edits to the review table
+    "architecture": "override",        # the diagram - agents may change this freely
+}
+
+
+def agent_may_override(domain):
+    """True only for domains where an agent is allowed to replace the deterministic result."""
+    return AGENT_AUTHORITY.get(domain) == "override"
+
+
+# An agent can't overrule the engine, but it must be able to say "this looks badly wrong".
+# These are the signals it can raise; anything here escalates the result for human review
+# WITHOUT silently changing a number.
+AGENT_MAJOR_ERROR_LEVELS = {"major", "critical", "blocker", "severe", "high"}
+
+
+def agent_flags_major_error(agent):
+    """True when an agent explicitly claims the deterministic result is badly wrong.
+
+    Accepts either an explicit boolean (majorError / blocking) or a severity string, so a
+    future agent doesn't have to match one exact schema to be heard."""
+    if not isinstance(agent, dict):
+        return False
+    if agent.get("majorError") or agent.get("blocking") or agent.get("isMajorError"):
+        return True
+    for key in ("severity", "errorSeverity", "level", "confidenceFlag"):
+        if normalize(str(agent.get(key) or "")) in AGENT_MAJOR_ERROR_LEVELS:
+            return True
+    return False
+
+
+def resolve_agent_result(domain, deterministic, agent, is_empty=None):
+    """Decide between the deterministic result and an agent's, per AGENT_AUTHORITY.
+
+    Returns {result, source, note, review}:
+      - override domain      -> the agent wins outright.
+      - advisory + a real deterministic result -> the deterministic result stands. If the agent
+        raised a MAJOR ERROR the result is unchanged but review=True, so the estimate is flagged
+        for a human instead of the objection being swallowed.
+      - advisory + nothing deterministic -> the agent fills the gap (it beats a blank).
+    """
+    empty = is_empty or (lambda v: v is None or v == [] or v == {} or v == "")
+    if agent is None or empty(agent):
+        return {"result": deterministic, "source": "deterministic", "note": "", "review": False}
+    if agent_may_override(domain):
+        return {"result": agent, "source": "agent", "review": False,
+                "note": "Agent output applied (%s allows override)." % domain}
+    major = agent_flags_major_error(agent)
+    if not empty(deterministic):
+        if major:
+            return {
+                "result": deterministic, "source": "deterministic", "review": True,
+                "note": ("Agent flagged a MAJOR ERROR in %s. The deterministic result is kept "
+                         "(it stays primary), and this estimate is flagged for review." % domain),
+            }
+        return {
+            "result": deterministic, "source": "deterministic", "review": False,
+            "note": ("Agent suggestion recorded but not applied: %s is advisory, so the "
+                     "deterministic result stands." % domain),
+        }
+    return {
+        "result": agent, "source": "agent", "review": major,
+        "note": "Agent output used to fill a gap the deterministic engine left empty (%s)." % domain,
+    }
+
+
 LLM_WORKFLOW_CONTRACT = [
     "Upload step: inspect the spreadsheet, PDF, or bill export and identify each workload's core count, RAM, storage, application/workload name, and environment when present.",
     "CPU/core values from uploaded inventory are source vCPU/core counts; normalize them to OCI OCPUs for review using 2 vCPUs = 1 OCPU.",
@@ -7558,7 +7650,18 @@ def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PRE
             # column instead of a "Rationalized Cores" column) or misses storage. The rule-based
             # parser is deterministic and gets these right, so overlay its CPU/memory/storage
             # sizing columns onto the AI result — keeping the AI's row cleanup for everything else.
-            return _reconcile_onprem_sizing(result, baseline)
+            result = _reconcile_onprem_sizing(result, baseline)
+            # AGENT_AUTHORITY: inventory parsing is advisory. If the agent raised a major error
+            # the deterministic parse still stands, but the upload is flagged for review rather
+            # than the objection being dropped.
+            decision = resolve_agent_result("inventory_scrub", baseline, plan)
+            if decision.get("review"):
+                meta = result.setdefault("metadata", {}) if isinstance(result, dict) else {}
+                meta["agentReview"] = True
+                meta["agentNote"] = decision.get("note", "")
+                if isinstance(result, dict):
+                    result["llmWarning"] = decision.get("note", "")
+            return result
         if baseline is None:
             raise ValueError(
                 llm_warning or "Neither AI nor deterministic parsing found a usable inventory table."
@@ -10110,10 +10213,18 @@ def architecture_options_with_ai(
             if not openai_api_enabled()
             else "OPENAI_API_KEY is not set."
         )
-    if plan:
+    # The architecture diagram is the one domain where an agent MAY override what we generated
+    # (see AGENT_AUTHORITY). It is a drawing, so changing it cannot move a price or a mapping.
+    if plan and agent_may_override("architecture"):
         options["aiPlan"] = plan
+        options["agentAuthority"] = "override"
+    elif plan:
+        # Policy flipped to advisory: keep the plan visible but don't let it drive the diagram.
+        options["aiPlanAdvisory"] = plan
+        options["agentAuthority"] = "advisory"
     return options, {
         "status": "assisted" if plan else "deterministic_fallback",
+        "authority": AGENT_AUTHORITY.get("architecture", "advisory"),
         "model": (
             os.environ.get("OPENAI_ARCHITECTURE_MODEL")
             or os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
