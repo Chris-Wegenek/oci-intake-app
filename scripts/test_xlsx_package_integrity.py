@@ -88,6 +88,23 @@ def package_faults(blob):
         if override not in names:
             faults.append(f"content type points at a missing part: {override}")
 
+    # Content-level faults Excel rejects even when the package graph is sound. A conditional
+    # formatting rule whose type implies a payload must carry it; openpyxl will happily write
+    # <cfRule type="dataBar"/> if the caller never built the DataBar, and Excel then refuses
+    # the whole sheet. LibreOffice and openpyxl both read such a file without complaint.
+    needs_child = {"dataBar": "dataBar", "colorScale": "colorScale",
+                   "iconSet": "iconSet", "cellIs": "formula", "expression": "formula"}
+    for name in sorted(names):
+        if not name.startswith("xl/worksheets/"):
+            continue
+        sheet = z.read(name).decode("utf-8", "replace")
+        for rule in re.finditer(r"<cfRule\b[^>]*?/>|<cfRule\b[^>]*?>.*?</cfRule>", sheet, re.S):
+            body = rule.group(0)
+            kind = re.search(r'type="([^"]+)"', body)
+            child = needs_child.get(kind.group(1) if kind else "")
+            if child and f"<{child}" not in body:
+                faults.append(f"conditional rule missing its {child}: {name} {body[:60]}")
+
     reachable, queue = set(), [""]
     while queue:
         part = queue.pop()

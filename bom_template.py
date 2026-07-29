@@ -37,7 +37,7 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import (AnchorMarker, OneCellAnchor,
                                                   TwoCellAnchor)
 from openpyxl.drawing.xdr import XDRPositiveSize2D
-from openpyxl.formatting.rule import ColorScale, FormatObject, Rule
+from openpyxl.formatting.rule import ColorScale, DataBar, FormatObject, Rule
 from openpyxl.formula.translate import Translator
 from openpyxl.styles import Alignment, Border, Color, Font, PatternFill, Side
 from openpyxl.styles.differential import DifferentialStyle
@@ -306,6 +306,24 @@ def build_workbook(spec):
                 kw["colorScale"] = ColorScale(
                     cfvo=[FormatObject(type=o["type"], val=o["val"]) for o in cs["cfvo"]],
                     color=[_color(c) for c in cs["colors"]])
+            if "dataBar" in r:
+                db = r["dataBar"]
+                kw["dataBar"] = DataBar(
+                    cfvo=[FormatObject(type=db.get("minType", "min"), val=db.get("minVal")),
+                          FormatObject(type=db.get("maxType", "max"), val=db.get("maxVal"))],
+                    color=_color(db.get("color")),
+                    showValue=db.get("showValue", True),
+                    minLength=db.get("minLength"),
+                    maxLength=db.get("maxLength"))
+            # A rule whose type needs a payload we didn't build would serialise as a bare
+            # <cfRule type="dataBar"/>, which Excel rejects outright - it opens the file with
+            # "we found a problem with some content" and strips the sheet. openpyxl and
+            # LibreOffice both ignore the empty rule, so it only ever showed up in Excel.
+            # Better to drop a rule we can't express than to ship an unopenable workbook.
+            _payload = {"dataBar": "dataBar", "colorScale": "colorScale", "iconSet": "iconSet"}
+            _needs = _payload.get(r["type"])
+            if _needs and _needs not in kw:
+                continue
             ws.conditional_formatting.add(r["range"], Rule(**kw))
 
         for d in sd.get("data_validations", []):
