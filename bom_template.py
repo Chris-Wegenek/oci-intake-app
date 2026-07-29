@@ -2307,6 +2307,85 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+def _strip_orphan_drawings(path):
+    """Remove drawing/media parts that no worksheet references any more.
+
+    The template ships images on sheets the Full BOM deletes, and rewriting it drops the
+    sheet->drawing relationships while leaving the drawing, its rels, its images and its
+    [Content_Types].xml overrides behind. Excel treats parts it can't reach from the workbook
+    as unreadable and opens the file with "repairing or removing the unreadable content";
+    openpyxl and LibreOffice both tolerate them, which is why this survived every earlier check.
+    """
+    import os as _os, zipfile, re as _re, posixpath, shutil, tempfile as _tf
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = z.namelist()
+            drawings = [n for n in names if _re.match(r"xl/drawings/drawing\d+\.xml$", n)]
+            if not drawings:
+                return
+            referenced = set()
+            for n in names:
+                if _re.match(r"xl/worksheets/_rels/sheet\d+\.xml\.rels$", n):
+                    x = z.read(n).decode("utf-8", "replace")
+                    for t in _re.findall(r'Target="\.\./drawings/(drawing\d+\.xml)"', x):
+                        referenced.add("xl/drawings/" + t)
+            orphans = [d for d in drawings if d not in referenced]
+            if not orphans:
+                return
+            drop = set()
+            keep_media = set()
+            # Media still used by a drawing we're keeping must survive.
+            for d in drawings:
+                rels = "xl/drawings/_rels/%s.rels" % posixpath.basename(d)
+                if rels not in names:
+                    continue
+                x = z.read(rels).decode("utf-8", "replace")
+                targets = {posixpath.normpath(posixpath.join("xl/drawings", t))
+                           for t in _re.findall(r'Target="([^"]+)"', x)
+                           if not t.startswith(("http", "mailto"))}
+                if d in orphans:
+                    drop |= targets
+                    drop.add(rels)
+                else:
+                    keep_media |= targets
+            drop |= set(orphans)
+            drop -= keep_media
+            drop = {n for n in drop if n in names}
+            if not drop:
+                return
+            payload = {n: z.read(n) for n in names if n not in drop}
+            # Second pass: any image left that nothing points at is also unreachable. Target
+            # spellings vary (../media/x.png, /xl/media/x.png), so rather than parse them,
+            # just check whether the filename appears anywhere in the remaining parts.
+            for _ in range(3):
+                blob = b"".join(v for k, v in payload.items()
+                                if k.endswith((".xml", ".rels")))
+                gone = set()
+                for k in list(payload):
+                    if not k.startswith("xl/media/"):
+                        continue
+                    if posixpath.basename(k).encode() not in blob:
+                        gone.add(k)
+                if not gone:
+                    break
+                for k in gone:
+                    payload.pop(k, None)
+                drop |= gone
+        ct = payload.get("[Content_Types].xml", b"").decode("utf-8", "replace")
+        for n in drop:
+            ct = _re.sub(r'<Override[^>]*PartName="/%s"[^>]*/>' % _re.escape(n), "", ct)
+        payload["[Content_Types].xml"] = ct.encode("utf-8")
+        fd, tmp = _tf.mkstemp(suffix=".xlsx")
+        _os.close(fd)
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
+            for n, blob in payload.items():
+                out.writestr(n, blob)
+        shutil.move(tmp, path)
+    except Exception:
+        # Never let cleanup break a working export.
+        return
+
+
 def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name="",
                          shape=None, hours=None, block_rate=None, vpu_rate=None,
                          default_vpus=None, file_rate=None, windows_rate=None,
@@ -2674,6 +2753,7 @@ def build_full_bom_bytes(pricing, rows=None, fields=None, ramp=None, bom_name=""
         tmp_path = tf.name
     wb.save(tmp_path)
     _postprocess(tmp_path, spec)
+    _strip_orphan_drawings(tmp_path)
     data = Path(tmp_path).read_bytes()
     Path(tmp_path).unlink(missing_ok=True)
     return data
