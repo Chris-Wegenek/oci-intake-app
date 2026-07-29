@@ -4050,6 +4050,15 @@ def _cross_cloud_one_mode(priced_rows, hide_windows, top_of_line, cloud_bill_mod
                     total += src_cost
                     actual_rows += 1
                     continue
+                # Top-of-the-line re-prices the SOURCE cloud's compute at list. A Savings Plan /
+                # Reserved-Instance charge is how that same compute was paid for, so carrying it
+                # as well double-counts: the AWS card came out at $210,488 against a $138,833
+                # bill, 52% ABOVE the real invoice, purely because $23,486 of commitment charges
+                # sat alongside compute that had just been re-priced from ~$0 to list.
+                if (source_is_this and top_of_line
+                        and normalize(str(row.get("sourceService") or "")).replace(" ", "")
+                        in _BILLING_CONSTRUCT_SERVICES):
+                    continue
                 # Non-compute services: on the TARGET cloud re-price the mapped OCI services from
                 # the same usage at that cloud's list rates instead of carrying the source bill.
                 # Works both ways (AWS-sourced -> Azure estimate, Azure-sourced -> AWS estimate).
