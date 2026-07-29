@@ -405,6 +405,18 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
     # for older callers/tests that don't pass the option). When on, only the resource
     # types the user chose are replicated into the secondary region.
     dr_enabled = bool(_opts.get("enableDr")) if ("enableDr" in _opts) else include_dr
+    # The DR region has its own AD split, gated on the DR region's real AD count - a
+    # single-AD secondary can't spread standbys. Older callers that never sent the DR flag
+    # keep the previous behaviour of mirroring the primary's split.
+    _dr_region_key = _clean(_opts.get("drRegion"))
+    dr_region_ads = _region_ad_count(_dr_region_key) if _dr_region_key else int(_opts.get("drAds") or 1)
+    if "drSplitADs" in _opts:
+        dr_ad_split = bool(_opts.get("drSplitADs")) and dr_region_ads > 1
+    else:
+        dr_ad_split = ad_split
+    _dradres = _opts.get("drAdSplitResources") or {}
+    dr_split_vms = dr_ad_split and bool(_dradres.get("vms", True))
+    dr_split_dbs = dr_ad_split and bool(_dradres.get("dbs", True))
     _rep = _opts.get("drReplicate") or {}
     rep_vms = bool(_rep.get("vms", True))
     rep_dbs = bool(_rep.get("dbs", True))
@@ -822,6 +834,8 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
         _rep_txt = ", ".join(_rep_bits) if _rep_bits else "region shell only"
         _dr_head = f"Secondary OCI Region for DR{(' - ' + dr_region) if dr_region else ''}"
         _dr_sub = (f"Replicating: {_rep_txt}"
+                   + (f"  ·  spread across {dr_region_ads} availability domains"
+                      if (dr_split_vms or dr_split_dbs) and dr_region_ads > 1 else "")
                    + ("  ·  Full Stack DR priced in this BOM"
                       if dr_priced else
                       "  ·  target pattern (add Full Stack DR to cost it)"))
@@ -873,16 +887,63 @@ def build_spec(pricing, segments, bom_name="", shape_label="", segment_source=""
             # region. Compute standbys, managed-DB replicas, and object/block backups are
             # each independently gated by the app's "Replicate to DR" selection.
             db_slots = db_types if (rep_dbs and db_types) else []
-            if ad_split and (rep_vms or db_slots):
-                # ---- DR standby objects live inside an Availability Domain too (one big AD).
-                #      Regional object/block backups stay OUTSIDE the AD (they aren't AD-bound). ----
+            if dr_ad_split and (rep_vms or db_slots):
+                # ---- DR standby objects live inside an Availability Domain too. When the DR
+                #      region is multi-AD AND the user chose to spread standbys, draw one AD
+                #      lane per AD; otherwise one big AD. Regional object/block backups stay
+                #      OUTSIDE the AD (they aren't AD-bound). ----
+                dr_multi = (dr_split_vms or dr_split_dbs) and dr_region_ads > 1
+                dr_n_ad = dr_region_ads if dr_multi else 1
                 ad_x, ad_y, ad_w, ad_h = ax, DR_Y + 150, aw, 360
-                box(f"{sid}drad", "Availability Domain 1\nDR standby · fault-isolated",
-                    ad_x, ad_y, ad_w, ad_h, "ad")
+                if dr_multi:
+                    # Spread the replicated DBs across the lanes, same rule as the primary:
+                    # DB-only splits keep AD 1 free for the compute standbys.
+                    dr_ad_dbs = [[] for _ in range(dr_n_ad)]
+                    if db_slots:
+                        if dr_split_dbs and not dr_split_vms:
+                            _lanes = list(range(1, dr_n_ad))
+                        else:
+                            _lanes = list(range(dr_n_ad))
+                        for _i, _d in enumerate(db_slots):
+                            dr_ad_dbs[_lanes[_i % len(_lanes)]].append(_d)
+                    lane_w = aw // dr_n_ad
+                    for j in range(dr_n_ad):
+                        adx = ax + j * lane_w
+                        box(f"{sid}drad{j}",
+                            f"Availability Domain {j+1}\nDR standby · fault-isolated",
+                            adx + 3, ad_y, lane_w - 6, ad_h, "ad")
+                        yy = ad_y + 56
+                        if rep_vms and (dr_split_vms or j == 0):
+                            _n = _even_share(seg["vms"], dr_n_ad, j) if dr_split_vms else seg["vms"]
+                            icon(f"{sid}drvm{j}", "Compute - Virtual Machine VM",
+                                 f"{_n:,} {seg['name']}\nstandby VMs{compute_sku_line}",
+                                 adx + lane_w // 2 - 30, yy, 60,
+                                 serviceName="Compute", skus=list(seg.get("compute_skus") or ()))
+                            yy += 104
+                        for k, database in enumerate(dr_ad_dbs[j]):
+                            icon(
+                                f"{sid}drad{j}db{k}",
+                                database["shape"],
+                                f"(Opt.) {database['label']}\n"
+                                f"{_sku_caption(database['skus'])}\n"
+                                f"{_db_dr_mechanism(database['label'])}",
+                                adx + lane_w // 2 - 28,
+                                yy,
+                                56,
+                                serviceName=database["label"],
+                                skus=list(database["skus"]),
+                            )
+                            yy += 96
+                    db_slots = []          # already drawn in the lanes above
+                    rep_vms_drawn = True
+                else:
+                    box(f"{sid}drad", "Availability Domain 1\nDR standby · fault-isolated",
+                        ad_x, ad_y, ad_w, ad_h, "ad")
+                    rep_vms_drawn = False
                 yy = ad_y + 60
                 _dbx0 = ad_x + 20
                 _dbcols = 3
-                if rep_vms:
+                if rep_vms and not rep_vms_drawn:
                     icon(f"{sid}drvm", "Compute - Virtual Machine VM",
                          f"{seg['vms']:,} {seg['name']}\nstandby VMs{compute_sku_line}",
                          ad_x + 40, yy, 88,

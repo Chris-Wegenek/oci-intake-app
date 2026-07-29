@@ -35,6 +35,7 @@ const state = {
     primaryRegion: "", drRegion: "", splitADs: false, primaryAds: 1,
     adSplitResources: { vms: true, dbs: true },
     enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
+  drSplitADs: false, drAds: 1, drAdSplitResources: { vms: true, dbs: true },
   },
   catalog: { groups: [], results: [], group: "", query: "", groupsOpen: {} },
   shapeOverrides: {},
@@ -383,6 +384,7 @@ const state_diagramOptions_default = {
   primaryRegion: "", drRegion: "", splitADs: false, primaryAds: 1,
   adSplitResources: { vms: true, dbs: true },
   enableDr: false, drReplicate: { vms: true, dbs: true, object: true },
+  drSplitADs: false, drAds: 1, drAdSplitResources: { vms: true, dbs: true },
 };
 function _syncAdSplitResources() {
   // Show the "which resources to split" chips only when AD split is on.
@@ -417,9 +419,44 @@ function _syncAdSplitResourceState() {
 }
 ["#adSplitVms", "#adSplitDbs"].forEach((s) =>
   document.querySelector(s)?.addEventListener("change", _syncAdSplitResourceState));
-document.querySelector("#drRegion")?.addEventListener("change", (e) => {
-  state.diagramOptions.drRegion = e.target.value;
+// The DR region gets the same AD-split control as the primary, gated the same way: a region
+// has to actually have multiple availability domains before you can spread standbys across
+// them. Single-AD DR regions leave the toggle off and disabled.
+function _syncDrAdSplitResources() {
+  const chk = document.querySelector("#drSplitAcrossADs");
+  const sub = document.querySelector("#drAdSplitResources");
+  if (sub) sub.hidden = !(chk && chk.checked && !chk.disabled);
+}
+function _syncDrAdSplitControl() {
+  const sel = document.querySelector("#drRegion");
+  const chk = document.querySelector("#drSplitAcrossADs");
+  const hint = document.querySelector("#drAdSplitHint");
+  if (!sel || !chk) return;
+  const ads = Number(sel.selectedOptions[0]?.dataset.ads || 1);
+  state.diagramOptions.drRegion = sel.value;
+  state.diagramOptions.drAds = ads;
+  chk.disabled = ads < 2;
+  if (ads < 2) { chk.checked = false; state.diagramOptions.drSplitADs = false; }
+  if (hint) {
+    hint.textContent = ads >= 2
+      ? `${ads} availability domains available`
+      : "Pick a multi-AD DR region to enable";
+  }
+  _syncDrAdSplitResources();
+}
+document.querySelector("#drRegion")?.addEventListener("change", _syncDrAdSplitControl);
+document.querySelector("#drSplitAcrossADs")?.addEventListener("change", (e) => {
+  state.diagramOptions.drSplitADs = !!e.target.checked;
+  _syncDrAdSplitResources();
 });
+function _syncDrAdSplitResourceState() {
+  state.diagramOptions.drAdSplitResources = {
+    vms: !!document.querySelector("#drAdSplitVms")?.checked,
+    dbs: !!document.querySelector("#drAdSplitDbs")?.checked,
+  };
+}
+["#drAdSplitVms", "#drAdSplitDbs"].forEach((s) =>
+  document.querySelector(s)?.addEventListener("change", _syncDrAdSplitResourceState));
 // Enable-DR toggle reveals the DR sub-options (region + which resources to replicate).
 document.querySelector("#enableDr")?.addEventListener("change", (e) => {
   const on = !!e.target.checked;
@@ -574,6 +611,7 @@ function enhanceSearchableSelect(select) {
 }
 document.querySelectorAll('select[data-searchable="region"]').forEach(enhanceSearchableSelect);
 _syncAdSplitControl();
+_syncDrAdSplitControl();
 
 function rowSourceName(row) {
   return row.fullServiceMapping?.sourceService || row.sourceService || fallbackEntityName(row, "Source line");
@@ -2656,6 +2694,7 @@ async function applyWorkflowState(wf) {
     ...state_diagramOptions_default,
     adSplitResources: { ...state_diagramOptions_default.adSplitResources },
     drReplicate: { ...state_diagramOptions_default.drReplicate },
+    drAdSplitResources: { ...state_diagramOptions_default.drAdSplitResources },
   };
   Object.assign(state, {
     intakeMode: "on_prem",
@@ -2712,6 +2751,10 @@ async function applyWorkflowState(wf) {
     adSplitResources: {
       ...defaultDiagramOptions.adSplitResources,
       ...(savedDiagramOptions.adSplitResources || {}),
+    },
+    drAdSplitResources: {
+      ...defaultDiagramOptions.drAdSplitResources,
+      ...(savedDiagramOptions.drAdSplitResources || {}),
     },
     drReplicate: {
       ...defaultDiagramOptions.drReplicate,
@@ -2806,10 +2849,14 @@ async function applyWorkflowState(wf) {
     chk("#adSplitVms", d.adSplitResources ? d.adSplitResources.vms : true);
     chk("#adSplitDbs", d.adSplitResources ? d.adSplitResources.dbs : true);
     chk("#enableDr", d.enableDr);
+    chk("#drSplitAcrossADs", !!d.drSplitADs);
+    chk("#drAdSplitVms", d.drAdSplitResources ? d.drAdSplitResources.vms : true);
+    chk("#drAdSplitDbs", d.drAdSplitResources ? d.drAdSplitResources.dbs : true);
     chk("#drRepVms", d.drReplicate ? d.drReplicate.vms : true);
     chk("#drRepDbs", d.drReplicate ? d.drReplicate.dbs : true);
     chk("#drRepObj", d.drReplicate ? d.drReplicate.object : true);
     if (typeof _syncAdSplitControl === "function") _syncAdSplitControl();
+    if (typeof _syncDrAdSplitControl === "function") _syncDrAdSplitControl();
     const drSub = document.querySelector("#drSubOptions"); if (drSub) drSub.hidden = !d.enableDr;
   }
   if (typeof renderTable === "function") renderTable();

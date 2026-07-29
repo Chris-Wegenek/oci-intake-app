@@ -523,6 +523,29 @@
                     <option value="us-sanjose-1">US West (San Jose)</option>
                   </select>
                 </label>
+                <label class="diagram-switch" id="drSplitAcrossADsRow">
+                  <input type="checkbox" id="drSplitAcrossADs" />
+                  <span class="diagram-switch-track" aria-hidden="true"><span class="diagram-switch-thumb"></span></span>
+                  <span class="diagram-switch-text">
+                    <strong>Split Across Availability Domains</strong>
+                    <small id="drAdSplitHint">Pick a multi-AD DR region to enable</small>
+                  </span>
+                </label>
+                <div id="drAdSplitResources" class="diagram-sub" hidden>
+                  <div class="diagram-field">
+                    <span class="diagram-field-label">Split These DR Resources Across ADs</span>
+                    <div class="diagram-chips" id="drAdSplitChips">
+                      <label class="diagram-chip">
+                        <input type="checkbox" id="drAdSplitVms" value="vms" checked />
+                        <span>Compute VMs</span>
+                      </label>
+                      <label class="diagram-chip">
+                        <input type="checkbox" id="drAdSplitDbs" value="dbs" checked />
+                        <span>Databases</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
                 <div class="diagram-field">
                   <span class="diagram-field-label">Replicate to DR</span>
                   <div class="diagram-chips" id="drReplicateChips">
