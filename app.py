@@ -11007,6 +11007,25 @@ class IntakeHandler(BaseHTTPRequestHandler):
         saved_path = UPLOAD_DIR / f"{int(time.time())}_{safe_name}"
         saved_path.write_bytes(uploaded_bytes)
 
+        # One of OUR exports dropped onto the inventory/bill uploader. Every Full BOM carries
+        # the complete saved workflow in a hidden _workflow sheet, so the right answer is to
+        # restore it rather than parse it: the visible sheets are OUTPUTS, so reading them as
+        # an inventory finds nothing and the upload reports "0 rows · No usable rows were
+        # found". The file the user is holding does contain their whole estimate - refusing it
+        # because it arrived at the wrong drop zone is a needless dead end.
+        if filename.lower().endswith(".xlsx"):
+            try:
+                saved_workflow = bom_export.read_workflow_state(str(saved_path))
+            except Exception:
+                saved_workflow = None
+            if isinstance(saved_workflow, dict) and (saved_workflow.get("rows") or []):
+                self.send_json(200, {
+                    "workflowRestore": True,
+                    "workflow": saved_workflow,
+                    "fileName": filename,
+                })
+                return
+
         # In cloud-bill mode, when the user hasn't forced a provider, guess from the
         # filename so parsing/mapping starts from the right cloud.
         filename_guess = guess_provider_from_filename(filename) if intake_mode == INTAKE_MODE_CLOUD_BILL else PROVIDER_AUTO

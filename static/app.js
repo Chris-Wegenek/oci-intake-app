@@ -2211,6 +2211,20 @@ async function uploadFile(file) {
       throw new Error(payload.error || "Upload failed.");
     }
 
+    // A Full BOM export dropped here instead of on "Load previous BOM". It carries the whole
+    // saved workflow, so restore it rather than making the user find the other drop zone.
+    if (payload.workflowRestore && payload.workflow) {
+      await applyWorkflowState(payload.workflow);
+      showSelectedDoc(
+        payload.fileName,
+        `${formatNumber((payload.workflow.rows || []).length)} rows · restored from a saved BOM`,
+      );
+      els.uploadStatus.textContent =
+        "That file is a saved BOM, so the whole estimate was restored - no re-upload needed.";
+      els.uploadStatus.style.color = "var(--success)";
+      return;
+    }
+
     state.fields = payload.fields;
     state.rows = payload.rows;
     state.rateCards = payload.rateCards || [];
