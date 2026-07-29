@@ -3942,15 +3942,13 @@ function renderResults(pricing) {
             fill: mappedShare || 8,
           })}
           ${resultKpiCard({
-            // Report the source spend that produces NO OCI cost and still needs attention.
-            // The old figure counted only rows with no mapping at all, so it read ~$384 on a
-            // bill where $62,884 landed at $0 - and hid that $28,805 of it was a real gap.
+            // The tile answers "how much is left to look at", and the honest unit for that is
+            // lines, not dollars. The dollar figure led people to read it as a cost when it is
+            // really a to-do count; the money is still in the tooltip, where the split between
+            // genuinely-free and mapped-but-unpriced spend can be explained properly.
             label: "Needs review",
-            value: formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0)),
-            // The tile reports only what needs attention. The genuinely-free spend is not a
-            // problem to review, so it stays in the tooltip rather than competing for the eye
-            // with the number that does need a decision.
-            meta: `${formatNumber(pricing.totals.unpricedRows || 0)} lines priced at $0 on OCI`,
+            value: formatNumber(pricing.totals.unpricedRows || 0),
+            meta: `${Number(pricing.totals.unpricedRows || 0) === 1 ? "line" : "lines"} priced at $0 on OCI`,
             accent: Number(pricing.totals.unpricedSourceMonthly || 0) > 0 ? "#d97706" : "#067647",
             fill: reviewRows ? reviewShare : 100,
             title: `${formatCurrency(Number(pricing.totals.zeroOciSourceMonthly || 0))} of source spend produces no OCI cost: ${formatCurrency(Number(pricing.totals.freeOnOciSourceMonthly || 0))} genuinely free on OCI (Savings Plans, support, VCN, Audit, included egress) and ${formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0))} mapped to a chargeable OCI product but not priced - that portion understates the OCI estimate.`,
