@@ -1474,6 +1474,11 @@ def to_gb(value, default=0.0):
 _NON_STORAGE_HEADER_TERMS = (
     "uuid", "bios", "serial", "guid", "gateway", "address", "url", "folder",
     "version", "vendor", "firmware", "domain", "hostname", "mac", "ip ",
+    # Columns that name a storage KIND rather than an amount - "Storage Type" holds
+    # "Premium SSD", not a number. They only became reachable once a bare "storage" /
+    # "disk" header was allowed to match, and they must never shadow the real capacity
+    # column on a sheet that has both.
+    "type", "tier", "class", "category", "protocol", "vmdk", "datastore name",
 )
 
 
@@ -7766,7 +7771,16 @@ def value_for(row, key, default=0.0):
 
 
 def row_operating_system(row):
-    """Scan all source values of a row for an OS hint (matches the BOM script)."""
+    """Scan all source values of a row for an OS hint (matches the BOM script).
+
+    An explicit per-row override from the Review table wins outright. Detection is a guess -
+    it reads any cell containing "windows" or "linux", so a comment like "migrating off
+    Windows" flips a Linux box - and the person reviewing the inventory knows better than the
+    scan does. Stored under a "__" key so the scan below can't see it and re-derive it.
+    """
+    override = str(row.get("__os") or "").strip().lower()
+    if override in {"windows", "linux"}:
+        return override
     detected = ""
     for key, value in row.items():
         if isinstance(key, str) and key.startswith("__"):
@@ -7881,6 +7895,24 @@ def find_key_any(fields, groups, section=None):
         key = find_key(fields, contains, section)
         if key:
             return key
+    return None
+
+
+def find_storage_key_any(fields, groups, section=None):
+    """find_key_any, but skipping columns that name a storage KIND instead of an amount.
+
+    Filtering has to happen DURING the search, not after it. A sheet with both "Storage Type"
+    and "Storage" matches the bare needle on whichever column comes first; rejecting the
+    winner afterwards threw away the real capacity column along with it, and the inventory
+    priced at zero storage.
+    """
+    for contains in groups:
+        for field in fields or []:
+            if not isinstance(field, dict) or not field.get("key"):
+                continue
+            key = find_key([field], contains, section)
+            if key and plausible_storage_field(fields, key):
+                return key
     return None
 
 
@@ -8460,17 +8492,22 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # Every set is anchored to a STORAGE word (storage/disk/provisioned). RAM is also in
         # GB, so a bare capacity+gb (or gb alone) would wrongly grab a "Memory (GB)" /
         # "RAM Capacity (GB)" column - never match on "gb" without a storage word.
-        "app_local_storage": (find_key_any(
+        # A bare "Storage" / "Disk" header is listed LAST so the specific needles win when a
+        # sheet has both, but it still resolves: plenty of inventories just write "Storage"
+        # with the unit in the cell ("384 GB", "1 TB") rather than in the header, and those
+        # were silently pricing at zero block storage. Safe because plausible_storage_field
+        # below rejects anything that isn't a capacity column.
+        "app_local_storage": (find_storage_key_any(
             fields,
             [["local storage"], ["total storage"], ["allocated storage"], ["storage", "gb"],
              ["disk", "gb"], ["disk", "size"], ["disk", "capacity"], ["provisioned", "storage"],
-             ["provisioned", "disk"]],
+             ["provisioned", "disk"], ["storage"], ["disk"]],
             "Application Details",
         )
-        or find_key_any(fields, [["local storage"], ["total storage"], ["allocated storage"],
-                                 ["storage", "gb"], ["disk", "gb"], ["disk", "size"],
-                                 ["disk", "capacity"], ["provisioned", "storage"],
-                                 ["provisioned", "disk"]])),
+        or find_storage_key_any(fields, [["local storage"], ["total storage"], ["allocated storage"],
+                                        ["storage", "gb"], ["disk", "gb"], ["disk", "size"],
+                                        ["disk", "capacity"], ["provisioned", "storage"],
+                                        ["provisioned", "disk"], ["storage"], ["disk"]])),
         # NOTE: needles must be specific - a bare "smb" matched "SMBios UUID" and the
         # UUID's digits were priced as file storage. Keep these anchored to storage words.
         "app_shared_storage": find_key_any(fields, [["shared storage"], ["file storage"], ["nas storage"], ["nfs"], ["smb share"], ["cifs"]], "Application Details")

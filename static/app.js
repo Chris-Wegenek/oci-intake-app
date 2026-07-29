@@ -1757,6 +1757,59 @@ function renderVirtualWindow() {
   }
 }
 
+// ---- Per-row OS on the Review step (on-prem inventory only) -----------------------------
+// Windows licensing is ~$0.09/OCPU-hr, so getting the OS wrong on a big server is worth real
+// money. Detection just looks for the words "windows"/"linux" anywhere in the row, which a
+// stray comment can flip, so on-prem inventories get an explicit toggle and the choice is
+// stored on the row as __os. The server prefers __os over its own scan.
+let osRepriceTimer = null;
+function osColumnVisible() {
+  return state.intakeMode === "on_prem";
+}
+function detectRowOs(row) {
+  for (const [key, value] of Object.entries(row || {})) {
+    if (key.startsWith("__")) continue;
+    const text = String(value ?? "").toLowerCase();
+    if (text.includes("windows")) return "windows";
+  }
+  for (const [key, value] of Object.entries(row || {})) {
+    if (key.startsWith("__")) continue;
+    if (String(value ?? "").toLowerCase().includes("linux")) return "linux";
+  }
+  return "";
+}
+function rowOs(row) {
+  const explicit = String(row?.__os || "").toLowerCase();
+  return explicit === "windows" || explicit === "linux" ? explicit : detectRowOs(row);
+}
+function buildOsCell(row, rowIndex) {
+  const td = document.createElement("td");
+  td.className = "os-cell";
+  const select = document.createElement("select");
+  select.className = `os-select is-${rowOs(row) || "unknown"}`;
+  select.setAttribute("aria-label", `Operating system, row ${rowIndex + 1}`);
+  select.title = "Windows adds OCI Windows OS licensing per OCPU. Linux adds none.";
+  [["linux", "Linux"], ["windows", "Windows"]].forEach(([value, label]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    select.append(opt);
+  });
+  select.value = rowOs(row) === "windows" ? "windows" : "linux";
+  select.addEventListener("change", () => {
+    row.__os = select.value;
+    select.className = `os-select is-${select.value}`;
+    // Any estimate on screen was calculated with the old OS, so it's stale. Debounced
+    // because setting the OS on a run of servers fires this once per dropdown.
+    clearTimeout(osRepriceTimer);
+    osRepriceTimer = setTimeout(() => {
+      if (typeof repriceIfEstimated === "function") repriceIfEstimated();
+    }, 400);
+  });
+  td.append(select);
+  return td;
+}
+
 function buildReviewRowEl(row, rowIndex, fields) {
   {
     const tr = document.createElement("tr");
@@ -1838,6 +1891,7 @@ function buildReviewRowEl(row, rowIndex, fields) {
       td.append(cellEditor);
       tr.append(td);
     });
+    if (osColumnVisible()) tr.append(buildOsCell(row, rowIndex));
     return tr;
   }
 }
@@ -1849,6 +1903,7 @@ function renderTable() {
   const headRow = document.createElement("tr");
   headRow.append(headerCell("Approve"));
   fields.forEach((field) => headRow.append(headerCell(field.label)));
+  if (osColumnVisible()) headRow.append(headerCell("OS"));
   thead.append(headRow);
 
   const tbody = document.createElement("tbody");
@@ -1856,7 +1911,7 @@ function renderTable() {
 
   if (rowEntries.length > VIRTUAL_ROW_THRESHOLD) {
     // Windowed rendering: only the visible slice lives in the DOM.
-    const colCount = fields.length + 1;
+    const colCount = fields.length + 1 + (osColumnVisible() ? 1 : 0);
     const topSpacer = spacerRow(colCount);
     const botSpacer = spacerRow(colCount);
     tbody.append(topSpacer, botSpacer);
@@ -1886,7 +1941,7 @@ function renderTable() {
       const emptyRow = document.createElement("tr");
       emptyRow.className = "table-empty-row";
       const emptyCell = document.createElement("td");
-      emptyCell.colSpan = fields.length + 1;
+      emptyCell.colSpan = fields.length + 1 + (osColumnVisible() ? 1 : 0);
       emptyCell.textContent = fields.length
         ? "No rows are missing data in the visible fields."
         : "No visible fields to check for missing data.";

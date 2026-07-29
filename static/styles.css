@@ -5376,3 +5376,22 @@ td input[type="checkbox"] {
 }
 
 
+
+/* Per-row OS picker on the Review step (on-prem inventory). Colour-coded so a column of
+   servers can be scanned for Windows at a glance - that is where the licensing cost is. */
+.os-cell { padding: 4px 8px; }
+.os-select {
+  width: 100%;
+  min-width: 96px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.os-select.is-windows { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
+.os-select.is-linux { border-color: #cbd5e1; background: var(--surface); color: var(--muted); }
+.os-select:focus-visible { outline: 2px solid var(--redwood); outline-offset: 1px; }
+:root[data-theme="dark"] .os-select.is-windows { background: #16263f; color: #93c5fd; }
