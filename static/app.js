@@ -3953,7 +3953,7 @@ function renderResults(pricing) {
             // narrower set for the tooltip.
             label: "Needs review",
             value: formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0)),
-            meta: `${formatNumber(pricing.totals.unpricedRows || 0)} ${Number(pricing.totals.unpricedRows || 0) === 1 ? "line" : "lines"} with no OCI price`,
+            meta: `${formatNumber(pricing.totals.unpricedRows || 0)} ${Number(pricing.totals.unpricedRows || 0) === 1 ? "line needs" : "lines need"} to be reviewed`,
             accent: Number(pricing.totals.unpricedSourceMonthly || 0) > 0 ? "#d97706" : "#067647",
             fill: reviewRows ? reviewShare : 100,
             title: `${formatCurrency(Number(pricing.totals.zeroOciSourceMonthly || 0))} of source spend produces no OCI cost: ${formatCurrency(Number(pricing.totals.freeOnOciSourceMonthly || 0))} genuinely free on OCI (Savings Plans, support, VCN, Audit, included egress) and ${formatCurrency(Number(pricing.totals.unpricedSourceMonthly || 0))} that should have cost something - that portion understates the OCI estimate. Of it, ${formatCurrency(Number(pricing.totals.unmappedZeroSourceMonthly || 0))} across ${formatNumber(pricing.totals.unmappedRows || 0)} lines has no OCI mapping at all; the rest mapped to a chargeable OCI product but never got a rate.`,
