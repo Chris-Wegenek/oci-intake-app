@@ -5249,6 +5249,25 @@ td input[type="checkbox"] {
   }
 }
 
+/* Estimate options (sizing mode + the Remove toggles) sit directly above the footer buttons,
+   so the reader meets the title first and the switches last, right where they act on them.
+   Rows are left-aligned on purpose: the sizing hint changes length when you toggle Right-size,
+   and left alignment means that growth extends rightward instead of shoving the switch around. */
+.shape-estimate-options {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.shape-estimate-options .pricing-options { margin-top: 0; }
+.shape-estimate-options .sizing-mode-row { margin-bottom: 0; }
+
 /* Sizing mode (1:1 vs Right-size) on the Shape step. */
 .sizing-mode-row {
   display: flex;
@@ -5268,6 +5287,11 @@ td input[type="checkbox"] {
   font-size: 12px;
   font-style: normal;
 }
+
+/* The Shape hero holds only the title now. Fixing the heading's measure keeps "Choose the OCI
+   Shape for This Estimate" breaking in exactly the same place no matter what else changes. */
+.shape-page > .shape-hero { display: block; }
+.shape-page > .shape-hero h2 { max-width: 720px; }
 
 /* OCI discount field: percent sign on the RIGHT, and no spinner arrows (the value is typed,
    and the steppers invited click-by-click re-pricing). */
@@ -5318,24 +5342,31 @@ td input[type="checkbox"] {
 :root[data-theme="dark"] .cross-cloud-delta.is-cheaper { color: #5dcaa5; }
 :root[data-theme="dark"] .cross-cloud-delta.is-pricier { color: #f0997b; }
 
-/* "Adding…" progress track on the Add-to-BOM buttons. The bar fills left to right ONCE and
-   reaches 100% to signal completion, rather than looping - the button is held for the same
-   duration so the fill always finishes. Sits along the bottom edge of the pill. */
-.svc-add { position: relative; overflow: hidden; }
+/* "Adding…" progress track on the Add-to-BOM buttons. The bar sits INSIDE the button, tucked
+   under the label, and fills left to right exactly ONCE to 100% - a bar that lands reads as
+   "done" where a spinner only reads as "busy". The button is held for the same duration so the
+   fill always completes rather than vanishing part-way. */
+.btn-adding {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  line-height: 1.1;
+}
 .btn-track {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  width: 76%;
   height: 3px;
-  background: rgba(26, 127, 75, 0.20);
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.22;
   overflow: hidden;
 }
 .btn-track i {
   display: block;
   height: 100%;
   width: 0;
-  background: #1a7f4b;
+  border-radius: 2px;
+  background: currentColor;
   animation: btn-fill 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1 forwards;
 }
 @keyframes btn-fill { from { width: 0; } to { width: 100%; } }
@@ -5343,4 +5374,5 @@ td input[type="checkbox"] {
 @media (prefers-reduced-motion: reduce) {
   .btn-track i { animation-duration: 0.01ms; width: 100%; }
 }
+
 

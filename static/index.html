@@ -286,32 +286,6 @@
           <h2>Choose the OCI Shape for This Estimate</h2>
           <p>Compute and memory rates change by flex shape. Storage rates stay constant across the options.</p>
         </div>
-        <div class="shape-actions">
-          <div class="sizing-mode-row">
-            <span class="sizing-mode-label">SIZING</span>
-            <div class="mode-switch sizing-switch" role="group" aria-label="Sizing Mode">
-              <button type="button" class="mode-opt is-active" data-sizing="one-to-one"
-                      title="Map every workload at its current size - same OCPU and RAM as the source.">1:1</button>
-              <button type="button" class="mode-opt" data-sizing="rightsize"
-                      title="Trim OCPU and RAM for the newer OCI generation: Ax shapes 15% OCPU / 20% RAM (doubling for each generation the source is behind), regular E6 a flat 10% / 15%.">Right-size</button>
-            </div>
-            <em id="sizingModeHint" class="sizing-mode-hint">Sizes match the source 1:1</em>
-          </div>
-          <div class="pricing-options" aria-label="Pricing Options">
-            <label class="opt-chip" title="Remove GPU per-GPU-hour pricing from the estimate and the export (GPU shapes are still mapped). Use when the GPUs are already owned or licensed separately.">
-              <input id="hideGpuToggle" type="checkbox" />
-              <span>Remove GPU Pricing</span>
-            </label>
-            <label class="opt-chip" title="Remove OCI Windows OS licensing (1 license per OCPU) from the OCI estimate, source-cloud estimate, cross-cloud comparison, and export. Use when Windows is BYOL / Azure Hybrid Benefit.">
-              <input id="hideWindowsToggle" type="checkbox" />
-              <span>Remove Windows OS Licensing</span>
-            </label>
-            <label class="opt-chip" title="Remove SQL Server licensing from the OCI estimate and export. Use when SQL Server is BYOL.">
-              <input id="hideSqlToggle" type="checkbox" />
-              <span>Remove SQL Server Licensing</span>
-            </label>
-          </div>
-        </div>
       </section>
 
       <section class="processor-section" aria-label="Processor Platform">
@@ -342,6 +316,33 @@
           </div>
           <div id="bareMetalGrid" class="bare-metal-grid"></div>
         </section>
+      </section>
+
+      <section class="shape-estimate-options" aria-label="Estimate Options">
+        <div class="sizing-mode-row">
+          <span class="sizing-mode-label">SIZING</span>
+          <div class="mode-switch sizing-switch" role="group" aria-label="Sizing Mode">
+            <button type="button" class="mode-opt is-active" data-sizing="one-to-one"
+                    title="Map every workload at its current size - same OCPU and RAM as the source.">1:1</button>
+            <button type="button" class="mode-opt" data-sizing="rightsize"
+                    title="Trim OCPU and RAM for the newer OCI generation: Ax shapes 15% OCPU / 20% RAM (doubling for each generation the source is behind), regular E6 a flat 10% / 15%.">Right-size</button>
+          </div>
+          <em id="sizingModeHint" class="sizing-mode-hint">Sizes match the source 1:1</em>
+        </div>
+        <div class="pricing-options" aria-label="Pricing Options">
+          <label class="opt-chip" title="Remove GPU per-GPU-hour pricing from the estimate and the export (GPU shapes are still mapped). Use when the GPUs are already owned or licensed separately.">
+            <input id="hideGpuToggle" type="checkbox" />
+            <span>Remove GPU Pricing</span>
+          </label>
+          <label class="opt-chip" title="Remove OCI Windows OS licensing (1 license per OCPU) from the OCI estimate, source-cloud estimate, cross-cloud comparison, and export. Use when Windows is BYOL / Azure Hybrid Benefit.">
+            <input id="hideWindowsToggle" type="checkbox" />
+            <span>Remove Windows OS Licensing</span>
+          </label>
+          <label class="opt-chip" title="Remove SQL Server licensing from the OCI estimate and export. Use when SQL Server is BYOL.">
+            <input id="hideSqlToggle" type="checkbox" />
+            <span>Remove SQL Server Licensing</span>
+          </label>
+        </div>
       </section>
 
       <div class="workflow-page-footer">

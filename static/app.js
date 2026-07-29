@@ -5910,11 +5910,13 @@ const ADDING_MIN_MS = 900;
 function showAddingState(btn, work) {
   if (!btn || btn.dataset.adding === "1") return;   // ignore double-clicks mid-add
   const original = btn.innerHTML;
-  const width = btn.offsetWidth;                    // pin the width so the card doesn't jump
+  const width = btn.offsetWidth;                    // pin the box so the card doesn't jump
+  const height = btn.offsetHeight;
   btn.dataset.adding = "1";
   btn.disabled = true;
   btn.style.minWidth = `${width}px`;
-  btn.innerHTML = 'Adding…<span class="btn-track" aria-hidden="true"><i></i></span>';
+  btn.style.minHeight = `${height}px`;
+  btn.innerHTML = '<span class="btn-adding">Adding…<span class="btn-track" aria-hidden="true"><i></i></span></span>';
   const startedAt = Date.now();
   const finish = () => {
     const wait = Math.max(0, ADDING_MIN_MS - (Date.now() - startedAt));
