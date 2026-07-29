@@ -5317,3 +5317,32 @@ td input[type="checkbox"] {
 .cross-cloud-delta.is-pricier { color: #c0392b; }
 :root[data-theme="dark"] .cross-cloud-delta.is-cheaper { color: #5dcaa5; }
 :root[data-theme="dark"] .cross-cloud-delta.is-pricier { color: #f0997b; }
+
+/* "Adding…" spinner on the Add-to-BOM buttons.
+   Swap look by changing THIS rule only:
+     ring    (current) - border with one coloured edge, steady spin
+     segment           - add `border-bottom-color: transparent;` for a snappier arc
+     pulse             - replace the border/animation with:
+                         background: currentColor; animation: btn-pulse 1s ease-in-out infinite; */
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 8px;
+  /* ONE slow, deliberate rotation - not an endless spin. The button is held for the same
+     duration (ADDING_MIN_MS) so the loop completes exactly once and then resolves. */
+  animation: btn-spin 0.9s cubic-bezier(0.45, 0.05, 0.35, 1) 1 both;
+}
+@keyframes btn-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes btn-pulse {
+  0%, 100% { transform: scale(0.75); opacity: 0.5; }
+  50%      { transform: scale(1);    opacity: 1; }
+}
+.svc-add[disabled] { opacity: 1; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner { animation: none; opacity: 0.6; }
+}

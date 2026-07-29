@@ -5902,6 +5902,42 @@ function renderServiceCart() {
     .join("");
 }
 
+// "Adding…" feedback on an Add-to-BOM button. The work itself is instant, so without a floor
+// the spinner would flash for a frame and read as a glitch rather than a confirmation. The
+// spinner makes ONE slow rotation and this hold matches its duration, so the loop completes
+// exactly once and then the button resolves. Swap the look via .btn-spinner in styles.css.
+const ADDING_MIN_MS = 900;
+function showAddingState(btn, work) {
+  if (!btn || btn.dataset.adding === "1") return;   // ignore double-clicks mid-add
+  const original = btn.innerHTML;
+  const width = btn.offsetWidth;                    // pin the width so the card doesn't jump
+  btn.dataset.adding = "1";
+  btn.disabled = true;
+  btn.style.minWidth = `${width}px`;
+  btn.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>Adding…';
+  const startedAt = Date.now();
+  const finish = () => {
+    const wait = Math.max(0, ADDING_MIN_MS - (Date.now() - startedAt));
+    setTimeout(() => {
+      btn.innerHTML = original;
+      btn.disabled = false;
+      btn.style.minWidth = "";
+      delete btn.dataset.adding;
+    }, wait);
+  };
+  // Let the browser paint the spinner before the (synchronous) add runs.
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      try {
+        Promise.resolve(work()).finally(finish);
+      } catch (err) {
+        finish();
+        throw err;
+      }
+    });
+  });
+}
+
 function addServiceFromCard(idx) {
   const entry = state.catalog.results[idx];
   if (!entry) return;
@@ -5966,7 +6002,7 @@ if (els.serviceResults) {
   els.serviceResults.addEventListener("click", (e) => {
     const add = e.target.closest(".svc-add");
     if (add) {
-      addServiceFromCard(Number(add.dataset.idx));
+      showAddingState(add, () => addServiceFromCard(Number(add.dataset.idx)));
       return;
     }
     const head = e.target.closest(".service-group-head");
