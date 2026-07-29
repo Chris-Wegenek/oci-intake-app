@@ -6365,6 +6365,20 @@ def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, re
     return items
 
 
+def _keyword_hit(kw, haystack):
+    """Match a mapping keyword against a bill row's text.
+
+    Short acronyms must match as WHOLE WORDS. A plain substring test let "emr" match inside
+    "ConfigurationItemRecorded" ("It-emR-ecorded"), so 248 AWS Config lines were mapped to OCI
+    Big Data Service. Longer keywords stay substring-matched so multi-word product names still
+    hit inside a longer meter description."""
+    if not kw:
+        return False
+    if len(kw) <= 4 and " " not in kw:
+        return re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(kw), haystack) is not None
+    return kw in haystack
+
+
 def map_service_comparison(provider, *texts):
     """Map a source-cloud service to its OCI equivalent using Oracle's Service
     Comparison guides. provider is 'aws'/'azure'; texts are the bill's service/
@@ -6376,15 +6390,26 @@ def map_service_comparison(provider, *texts):
     haystack = normalize(" ".join(clean_text(t) for t in texts if t))
     if not haystack:
         return None
-    for entry in entries:
-        for kw in entry.get("keywords", []):
-            if normalize(kw) in haystack:
-                return {
-                    "category": entry.get("category", ""),
-                    "product": entry.get("ociProduct", ""),
-                    "note": entry.get("note", ""),
-                }
-    return None
+
+    def _first_match(text):
+        if not text:
+            return None
+        for entry in entries:
+            for kw in entry.get("keywords", []):
+                if _keyword_hit(normalize(kw), text):
+                    return {
+                        "category": entry.get("category", ""),
+                        "product": entry.get("ociProduct", ""),
+                        "note": entry.get("note", ""),
+                    }
+        return None
+
+    # The SERVICE name is authoritative; a meter description only mentions other services in
+    # passing. Matching the joined text let "regional data transfer - in/out/between EC2 AZs"
+    # hit the EC2 rule (which is listed first) and map 55 AWSDataTransfer lines to OCI Virtual
+    # Machine Instances. Try the service on its own before falling back to the full text.
+    service_text = normalize(clean_text(texts[0])) if texts else ""
+    return _first_match(service_text) or _first_match(haystack)
 
 
 def seed_cloud_bill_mapping(row, fields, rate_card):
@@ -6409,8 +6434,12 @@ def seed_cloud_bill_mapping(row, fields, rate_card):
     # Reference Service Comp List as a higher-priority target than the generic
     # catalog fallback (so e.g. RDS -> DBaaS instead of "Block Volume Storage").
     _ref = ref_service_lookup(row.get("source_service"), row.get("source_product"), row.get("__usageType"))
-    ref_product = ((_ref.get("ociEquivalent") or "").lstrip("*").strip() if (_ref and not _ref.get("free")) else "")
-    ref_group = (_ref.get("group", "") if (_ref and not _ref.get("free")) else "")
+    # A reference entry flagged free ("OCI doesn't charge for this") still names the right OCI
+    # service, and that NAME must be kept. Discarding it let the generic price-list guess win
+    # instead - AWS Config, whose reference target is Cloud Guard / Security Zones, was being
+    # labelled "OCI Big Data Service" on 248 lines. Free affects PRICE, not identity.
+    ref_product = ((_ref.get("ociEquivalent") or "").lstrip("*").strip() if _ref else "")
+    ref_group = (_ref.get("group", "") if _ref else "")
     # For non-infra services (Database, Networking, Security, DevOps, etc.) the
     # reference target wins over a generic storage/compute catalog guess so e.g.
     # RDS -> DBaaS, not "Block Volume Storage". Storage/Compute ref matches stay
