@@ -58,6 +58,39 @@ class StorageColumnDetectionTests(unittest.TestCase):
                 self.assertIsNone(app.find_storage_key_any(fields(*headers), NEEDLES))
 
 
+class CapacityUnitTests(unittest.TestCase):
+    """A misread unit is silent and enormous - 1.5 TiB read as 1.5 GB is off by 1000x."""
+
+    def test_units_in_the_cell(self):
+        cases = {
+            "900": 900, "384 GB": 384, "250GB": 250, "1,024 GB": 1024,
+            "1 TB": 1024, "1TB": 1024, "2 tb": 2048, "0.5 TB": 512,
+            "12.125 TB": 12416, "3 TBs": 3072, "10 terabytes": 10240,
+            "1.5 TiB": 1536, "64 GiB": 64, "2048 MiB": 2,
+            "500 MB": 500 / 1024, "2 PB": 2 * 1024 ** 2, "1 EB": 1024 ** 3,
+        }
+        for text, want in cases.items():
+            with self.subTest(text):
+                self.assertAlmostEqual(app.to_gb(text), want, places=4)
+
+    def test_units_in_the_header(self):
+        """RVTools-style exports leave the cells bare and put the unit in the header."""
+        cases = {
+            "Storage": 1, "Storage (GB)": 1, "Disk GiB": 1, "Total Storage": 1,
+            "Storage (TB)": 1024, "Disk TB": 1024, "Storage in TB": 1024,
+            "Memory (MB)": 1 / 1024, "Provisioned MiB": 1 / 1024,
+            "Capacity (PB)": 1024 ** 2,
+        }
+        for header, want in cases.items():
+            with self.subTest(header):
+                self.assertAlmostEqual(app.header_unit_factor_to_gb(header), want, places=9)
+
+    def test_a_unit_word_inside_another_word_is_not_a_unit(self):
+        for text in ("Web Server", "Prebuilt", "Description", "Number of Disks"):
+            with self.subTest(text):
+                self.assertIsNone(app.capacity_unit_factor(text))
+
+
 class OperatingSystemOverrideTests(unittest.TestCase):
     def test_review_override_beats_detection(self):
         """Detection reads any cell for 'windows'/'linux'; the reviewer's choice must win."""

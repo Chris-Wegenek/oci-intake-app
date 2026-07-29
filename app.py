@@ -1457,18 +1457,39 @@ def to_number(value, default=0.0):
     return float(match.group(0)) if match else default
 
 
+# Capacity units -> GB, largest first so "PB" is never read as the "B" of something smaller.
+# Binary (IEC) spellings are treated as their decimal twins: inventories write TiB and TB for
+# the same thing, and OCI bills block storage in GB where 1 TB = 1024 GB, so one scale keeps
+# the estimate consistent with the invoice. Getting this wrong is silent and enormous - a
+# "1.5 TiB" volume read as 1.5 GB understates by a factor of a thousand.
+_CAPACITY_UNITS = (
+    (r"e(?:i)?bs?|exabytes?", 1024.0 ** 3),
+    (r"p(?:i)?bs?|petabytes?", 1024.0 ** 2),
+    (r"t(?:i)?bs?|terabytes?", 1024.0),
+    (r"g(?:i)?bs?|gigabytes?", 1.0),
+    (r"m(?:i)?bs?|megabytes?", 1.0 / 1024.0),
+    (r"k(?:i)?bs?|kilobytes?", 1.0 / (1024.0 ** 2)),
+)
+
+
+def capacity_unit_factor(text):
+    """GB multiplier implied by a unit word in `text`, or None when it carries no unit."""
+    text = normalize(text)
+    if not text:
+        return None
+    for pattern, factor in _CAPACITY_UNITS:
+        if re.search(r"(?:^|\d|\s)(?:%s)(?:$|\s)" % pattern, text):
+            return factor
+    return None
+
+
 def to_gb(value, default=0.0):
     number = to_number(value, default)
     text = normalize(value)
     if not text:
         return default
-    if re.search(r"(?:^|\d|\s)tbs?(?:$|\s)|terabytes?", text):
-        return number * 1024
-    if re.search(r"(?:^|\d|\s)mbs?(?:$|\s)|megabytes?", text):
-        return number / 1024
-    if re.search(r"(?:^|\d|\s)kbs?(?:$|\s)|kilobytes?", text):
-        return number / (1024 * 1024)
-    return number
+    factor = capacity_unit_factor(text)
+    return number * factor if factor is not None else number
 
 
 _NON_STORAGE_HEADER_TERMS = (
@@ -1593,14 +1614,8 @@ def header_unit_factor_to_gb(label):
     """Scale factor to GB implied by a COLUMN HEADER's unit, e.g. 'Memory (MB)' -> 1/1024
     or 'Storage (TB)' -> 1024. Inventories (RVTools-style) usually put the unit in the
     header and leave the cells as bare numbers, which to_gb() alone can't see."""
-    text = normalize(label)
-    if re.search(r"(?:^|\s)mb(?:$|\s)|megabyte", text):
-        return 1.0 / 1024.0
-    if re.search(r"(?:^|\s)tb(?:$|\s)|terabyte", text):
-        return 1024.0
-    if re.search(r"(?:^|\s)kb(?:$|\s)|kilobyte", text):
-        return 1.0 / (1024.0 * 1024.0)
-    return 1.0
+    factor = capacity_unit_factor(label)
+    return factor if factor is not None else 1.0
 
 
 def to_gb_with_header(value, factor=1.0):
