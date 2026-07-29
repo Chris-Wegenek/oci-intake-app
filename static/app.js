@@ -5518,18 +5518,18 @@ function currentActiveStep() {
 els.steps.forEach((step) => {
   step.addEventListener("click", () => {
     const target = step.dataset.step;
-    if (!step.disabled && isWorkflowStepUnlocked(target)) {
-      navigateStep(target);
-      return;
-    }
-    // Not yet unlocked: allow the IMMEDIATELY-next tab to act as the page's forward button.
     const current = currentActiveStep();
     const ci = workflowStepIndex(current);
     const ti = workflowStepIndex(target);
+    // The IMMEDIATELY-next tab always runs the page's forward button, whether or not that step
+    // has been unlocked before. Jumping straight to the next page would skip the work the
+    // button does - re-pricing with the shape and toggles chosen on this page - so a user who
+    // changed something here and clicked the tab would land on stale numbers.
     if (ci >= 0 && ti === ci + 1) {
       const btn = document.getElementById(STEP_FORWARD_BTN[current] || "");
-      if (btn && !btn.disabled) btn.click();
+      if (btn && !btn.disabled) { btn.click(); return; }
     }
+    if (!step.disabled && isWorkflowStepUnlocked(target)) navigateStep(target);
   });
 });
 els.modeOnPrem?.addEventListener("click", () => setIntakeMode("on_prem"));

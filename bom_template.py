@@ -2308,73 +2308,109 @@ def _populate_ramp(ws, ramp, include_windows=False, po_delta=0, discount_cell=No
 # Public entry point
 # ---------------------------------------------------------------------------
 def _strip_orphan_drawings(path):
-    """Remove drawing/media parts that no worksheet references any more.
+    """Drop package parts nothing can reach, and heal relationships that point at nothing.
 
-    The template ships images on sheets the Full BOM deletes, and rewriting it drops the
-    sheet->drawing relationships while leaving the drawing, its rels, its images and its
-    [Content_Types].xml overrides behind. Excel treats parts it can't reach from the workbook
-    as unreadable and opens the file with "repairing or removing the unreadable content";
-    openpyxl and LibreOffice both tolerate them, which is why this survived every earlier check.
+    The template ships images and a chart on sheets the Full BOM deletes. Rewriting it leaves
+    the abandoned parts and their [Content_Types].xml overrides behind, and Excel treats a part
+    it can't reach as unreadable - hence "we found a problem with some content".
+
+    Reachability is computed properly, by walking the relationship graph from the package root
+    the way Excel does, instead of pattern-matching one spelling of a target path. An earlier
+    version only recognised relative targets ("../drawings/drawing1.xml"); openpyxl writes
+    absolute ones ("/xl/drawings/drawing1.xml"), so every drawing looked unreferenced and got
+    deleted while the sheets kept pointing at them - which caused the very corruption this is
+    meant to prevent. Targets are now resolved in both forms, and anything still dangling has
+    both the relationship and the element that referenced it removed.
+
+    openpyxl and LibreOffice tolerate both faults, which is why only Excel ever complained.
     """
     import os as _os, zipfile, re as _re, posixpath, shutil, tempfile as _tf
     try:
         with zipfile.ZipFile(path) as z:
-            names = z.namelist()
-            drawings = [n for n in names if _re.match(r"xl/drawings/drawing\d+\.xml$", n)]
-            if not drawings:
-                return
-            referenced = set()
-            for n in names:
-                if _re.match(r"xl/worksheets/_rels/sheet\d+\.xml\.rels$", n):
-                    x = z.read(n).decode("utf-8", "replace")
-                    for t in _re.findall(r'Target="\.\./drawings/(drawing\d+\.xml)"', x):
-                        referenced.add("xl/drawings/" + t)
-            orphans = [d for d in drawings if d not in referenced]
-            if not orphans:
-                return
-            drop = set()
-            keep_media = set()
-            # Media still used by a drawing we're keeping must survive.
-            for d in drawings:
-                rels = "xl/drawings/_rels/%s.rels" % posixpath.basename(d)
-                if rels not in names:
+            names = set(z.namelist())
+            payload = {n: z.read(n) for n in z.namelist()}
+
+        def rels_for(part):
+            d, b = posixpath.split(part)
+            return posixpath.join(d, "_rels", b + ".rels") if part else "_rels/.rels"
+
+        def resolve(base_part, target):
+            """A rel target is either absolute ('/xl/...') or relative to its owner's folder."""
+            if target.startswith("/"):
+                return target.lstrip("/")
+            return posixpath.normpath(posixpath.join(posixpath.dirname(base_part), target))
+
+        rel_re = _re.compile(r"<Relationship\b[^>]*/>|<Relationship\b[^>]*>.*?</Relationship>", _re.S)
+
+        def parse_rels(rels_part):
+            """-> [(rel_id, resolved_target_part, raw_xml)] for internal (non-external) rels."""
+            out = []
+            owner = rels_part.replace("/_rels/", "/", 1)[:-5] if rels_part != "_rels/.rels" else ""
+            blob = payload.get(rels_part)
+            if not blob:
+                return out
+            for tag in rel_re.findall(blob.decode("utf-8", "replace")):
+                if 'TargetMode="External"' in tag:
                     continue
-                x = z.read(rels).decode("utf-8", "replace")
-                targets = {posixpath.normpath(posixpath.join("xl/drawings", t))
-                           for t in _re.findall(r'Target="([^"]+)"', x)
-                           if not t.startswith(("http", "mailto"))}
-                if d in orphans:
-                    drop |= targets
-                    drop.add(rels)
-                else:
-                    keep_media |= targets
-            drop |= set(orphans)
-            drop -= keep_media
-            drop = {n for n in drop if n in names}
-            if not drop:
-                return
-            payload = {n: z.read(n) for n in names if n not in drop}
-            # Second pass: any image left that nothing points at is also unreachable. Target
-            # spellings vary (../media/x.png, /xl/media/x.png), so rather than parse them,
-            # just check whether the filename appears anywhere in the remaining parts.
-            for _ in range(3):
-                blob = b"".join(v for k, v in payload.items()
-                                if k.endswith((".xml", ".rels")))
-                gone = set()
-                for k in list(payload):
-                    if not k.startswith("xl/media/"):
-                        continue
-                    if posixpath.basename(k).encode() not in blob:
-                        gone.add(k)
-                if not gone:
-                    break
-                for k in gone:
-                    payload.pop(k, None)
-                drop |= gone
-        ct = payload.get("[Content_Types].xml", b"").decode("utf-8", "replace")
+                tid = _re.search(r'Id="([^"]+)"', tag)
+                tgt = _re.search(r'Target="([^"]+)"', tag)
+                if not (tid and tgt):
+                    continue
+                out.append((tid.group(1), resolve(owner, tgt.group(1)), tag))
+            return out
+
+        # ---- pass 1: heal dangling relationships (target part is not in the package) -------
+        for rels_part in [n for n in list(payload) if n.endswith(".rels")]:
+            dangling = [(i, t, tag) for i, t, tag in parse_rels(rels_part)
+                        if t not in names]
+            if not dangling:
+                continue
+            xml = payload[rels_part].decode("utf-8", "replace")
+            owner = rels_part.replace("/_rels/", "/", 1)[:-5]
+            owner_xml = payload.get(owner, b"").decode("utf-8", "replace")
+            for rid, _t, tag in dangling:
+                xml = xml.replace(tag, "")
+                # Remove whatever element pointed at it (<drawing r:id="rId1"/> and friends),
+                # otherwise the sheet references a relationship that no longer exists.
+                owner_xml = _re.sub(r'<[A-Za-z:]+[^>]*r:id="%s"[^>]*/>' % _re.escape(rid),
+                                    "", owner_xml)
+            payload[rels_part] = xml.encode("utf-8")
+            if owner in payload:
+                payload[owner] = owner_xml.encode("utf-8")
+
+        # ---- pass 2: reachability walk from the package root -------------------------------
+        reachable = set()
+        queue = [""]
+        while queue:
+            part = queue.pop()
+            rp = rels_for(part)
+            if rp in payload:
+                reachable.add(rp)
+            for _rid, target, _tag in parse_rels(rp):
+                if target in names and target not in reachable:
+                    reachable.add(target)
+                    queue.append(target)
+
+        keep_always = {"[Content_Types].xml", "_rels/.rels"}
+        drop = {n for n in payload
+                if n not in reachable and n not in keep_always and not n.endswith("/")}
+        # Only ever prune inside xl/ - docProps and friends are reached by the root rels, and
+        # anything unexpected outside xl/ is left alone rather than guessed at.
+        drop = {n for n in drop if n.startswith("xl/")}
         for n in drop:
-            ct = _re.sub(r'<Override[^>]*PartName="/%s"[^>]*/>' % _re.escape(n), "", ct)
+            payload.pop(n, None)
+
+        # Content types must describe exactly what's in the package: drop the overrides for
+        # parts we removed, and for any part that was already missing. An override naming a
+        # part that isn't there is itself enough to make Excel offer to repair the file.
+        ct = payload.get("[Content_Types].xml", b"").decode("utf-8", "replace")
+        ct = _re.sub(
+            r'<Override[^>]*PartName="/([^"]+)"[^>]*/>',
+            lambda m: m.group(0) if m.group(1) in payload else "",
+            ct,
+        )
         payload["[Content_Types].xml"] = ct.encode("utf-8")
+
         fd, tmp = _tf.mkstemp(suffix=".xlsx")
         _os.close(fd)
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
