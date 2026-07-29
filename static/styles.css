@@ -5205,3 +5205,35 @@ td input[type="checkbox"] {
   font-size: 12px;
   font-style: normal;
 }
+
+/* OCI discount field: percent sign on the RIGHT, and no spinner arrows (the value is typed,
+   and the steppers invited click-by-click re-pricing). */
+.ramp-control .discount-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.ramp-control .discount-input-wrap input {
+  width: 100%;
+  padding-right: 30px;
+}
+.ramp-control .discount-input-wrap .discount-suffix {
+  position: absolute;
+  right: 12px;
+  z-index: 1;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 850;
+  line-height: 1;
+  pointer-events: none;
+}
+.ramp-control .discount-input-wrap input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.ramp-control .discount-input-wrap input[type="number"]::-webkit-outer-spin-button,
+.ramp-control .discount-input-wrap input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}

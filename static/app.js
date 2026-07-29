@@ -4922,6 +4922,10 @@ function onDiscountInput(raw) {
   if (!Number.isFinite(pct) || pct < 0) pct = 0;
   if (pct > 99) pct = 99;
   state.ociDiscount = pct;
+  // Reflect the clamped value back so the field can't sit on something out of range.
+  if (els.ociDiscount && String(pct) !== String(els.ociDiscount.value)) {
+    els.ociDiscount.value = String(pct);
+  }
   clearTimeout(_discountTimer);
   _discountTimer = setTimeout(() => {
     if (!state.pricing) return;
@@ -4942,15 +4946,19 @@ function onDiscountInput(raw) {
         setTimeout(() => { if (overlay) overlay.hidden = true; }, wait);
       }
     });
-  }, 650);
+  }, 0);
 }
 if (els.ociDiscount) {
-  els.ociDiscount.addEventListener("input", (e) => onDiscountInput(e.target.value));
-  // Enter / leaving the field applies immediately instead of waiting out the debounce.
-  els.ociDiscount.addEventListener("change", (e) => {
-    clearTimeout(_discountTimer);
-    _discountTimer = null;
-    onDiscountInput(e.target.value);
+  // Apply only when the field is committed - blur or Enter. Re-pricing while the user is still
+  // typing meant an intermediate value (a bare "1" on the way to "15") briefly became the
+  // estimate, and the field fought the caret.
+  els.ociDiscount.addEventListener("change", (e) => onDiscountInput(e.target.value));
+  els.ociDiscount.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onDiscountInput(e.target.value);
+      e.target.blur();
+    }
   });
 }
 
