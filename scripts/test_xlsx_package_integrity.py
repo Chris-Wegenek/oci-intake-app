@@ -105,6 +105,21 @@ def package_faults(blob):
             if child and f"<{child}" not in body:
                 faults.append(f"conditional rule missing its {child}: {name} {body[:60]}")
 
+    # A sheet-qualified reference must be followed by a cell or range address. The discount
+    # rewrite once substituted an expression into one - 'Consumption Ramp'!($B$12*(1-$B$7)):$B$23 -
+    # which Excel rejects outright while openpyxl (which never parses formulas) and LibreOffice
+    # both accept it. That is precisely the blind spot a package-level check cannot see.
+    for name in sorted(names):
+        if not name.startswith("xl/worksheets/"):
+            continue
+        sheet = z.read(name).decode("utf-8", "replace")
+        for cell in re.finditer(r'<c r="([A-Z]+\d+)"[^>]*>\s*<f[^>]*>(.*?)</f>', sheet, re.S):
+            ref, formula = cell.group(1), cell.group(2)
+            for after in re.findall(r"!(.)", formula):
+                if not (after.isalpha() or after == "$"):
+                    faults.append(f"malformed cross-sheet reference: {name} {ref} -> {formula[:90]}")
+                    break
+
     reachable, queue = set(), [""]
     while queue:
         part = queue.pop()
@@ -144,6 +159,29 @@ def _sample_bom(**kwargs):
     pricing = {"rows": priced, "totals": {"ociMonthly": 7200.0, "monthly": 7200.0}}
     return bom_template.build_full_bom_bytes(
         pricing, rows=rows, fields=fields, bom_name="Package Integrity", **kwargs)
+
+
+class DiscountFormulaRewriteTests(unittest.TestCase):
+    """The discount rewrite must never reach inside a cross-sheet range."""
+
+    def test_a_same_sheet_reference_is_substituted(self):
+        formula = "=IFERROR($B$12*SUM('Consumption Ramp'!$B$12:$B$23),0)"
+        self.assertEqual(
+            bom_template._local_ref_sub(formula, "$B$12", "($B$12*(1-$B$7))"),
+            "=IFERROR(($B$12*(1-$B$7))*SUM('Consumption Ramp'!$B$12:$B$23),0)",
+        )
+
+    def test_the_cross_sheet_range_is_left_alone(self):
+        """str.replace() rewrote this into 'Consumption Ramp'!($B$12*(1-$B$7)):$B$23."""
+        formula = "=IFERROR($B$16*SUM('Consumption Ramp'!$B$12:$B$23),0)"
+        self.assertFalse(bom_template._local_ref_pattern("$B$12").search(formula))
+        self.assertEqual(
+            bom_template._local_ref_sub(formula, "$B$16", "($B$16*(1-$B$7))"),
+            "=IFERROR(($B$16*(1-$B$7))*SUM('Consumption Ramp'!$B$12:$B$23),0)",
+        )
+
+    def test_a_reference_is_not_matched_inside_a_longer_one(self):
+        self.assertFalse(bom_template._local_ref_pattern("$B$12").search("=$B$120*2"))
 
 
 class FullBomPackageIntegrityTests(unittest.TestCase):

@@ -26,6 +26,7 @@ import datetime
 import io
 import json
 import re
+from functools import lru_cache
 import shutil
 import zipfile
 from pathlib import Path
@@ -1896,8 +1897,8 @@ def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
     ws["B19"] = "=B18*12"
 
     # OCI Cost Profile (D:H, rows 10-13): mirror the same math - discount the service refs,
-    # leave the licensing ref ($B$17) at list. Cell references only. String substitution keeps
-    # each formula's Consumption-Ramp range intact.
+    # leave the licensing ref ($B$17) at list. Cell references only, substituted with
+    # _local_ref_sub so a cross-sheet range is never touched.
     subs = [
         ("SUM($B$9:$B$11,$B$17)", "(SUM($B$9:$B$11)*(1-$B$7)+$B$17)"),  # Core infra (B17 = Windows+SQL, at list)
         ("SUM($B$14:$B$15)", "(SUM($B$14:$B$15)*(1-$B$7))"),           # Network, security & KMS
@@ -1910,9 +1911,31 @@ def _apply_overview_discount(ws, discount, sql_compute=0.0, sql_database=0.0):
             v = cell.value
             if isinstance(v, str) and v.startswith("="):
                 for old, new in subs:
-                    if old in v:
-                        cell.value = v.replace(old, new)
+                    if _local_ref_pattern(old).search(v):
+                        cell.value = _local_ref_sub(v, old, new)
                         break                  # one discountable ref type per cell
+
+
+@lru_cache(maxsize=None)
+def _local_ref_pattern(ref):
+    """Match `ref` only where it addresses THIS sheet.
+
+    The discount rewrite substitutes cell references like `$B$12` into the Pricing Overview
+    formulas. But `$B$12` also occurs inside `'Consumption Ramp'!$B$12:$B$23`, and a plain
+    str.replace() rewrote that range into `'Consumption Ramp'!($B$12*(1-$B$7)):$B$23` - not a
+    range, and not a formula Excel accepts. Excel refused the workbook with "we found a problem
+    with some content"; openpyxl never parses formulas and LibreOffice repaired it silently, so
+    only Excel ever objected.
+
+    Anything directly after a `!` belongs to another sheet, so it is left alone. The trailing
+    guard stops `$B$12` matching inside `$B$120`.
+    """
+    return re.compile(r"(?<!!)" + re.escape(ref) + r"(?!\d)")
+
+
+def _local_ref_sub(formula, ref, replacement):
+    """Substitute a same-sheet reference, leaving cross-sheet ranges untouched."""
+    return _local_ref_pattern(ref).sub(lambda _m: replacement, formula)
 
 
 def _relayout_pricing_overview(ws, delta=4):
