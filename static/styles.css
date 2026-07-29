@@ -5185,3 +5185,23 @@ td input[type="checkbox"] {
     right: -2px;
   }
 }
+
+/* Sizing mode (1:1 vs Right-size) on the Shape step. */
+.sizing-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.sizing-mode-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.sizing-mode-hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}

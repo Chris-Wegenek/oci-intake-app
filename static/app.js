@@ -25,6 +25,7 @@ const state = {
   hoursOverride: false,
   bomName: "",
   ociDiscount: 0,
+  rightsize: false,
   oicMessagePacks: 1,
   // Services the user added from the "Add OCI services" panel. Each: {id, catalogId, name,
   // group, sku, unit, basis, values, monthly}. Included in totals and both BOM exports.
@@ -238,6 +239,8 @@ const els = {
   convertBomStatus: document.querySelector("#convertBomStatus"),
   bomName: document.querySelector("#bomName"),
   ociDiscount: document.querySelector("#ociDiscount"),
+  sizingSwitch: document.querySelector(".sizing-switch"),
+  sizingModeHint: document.querySelector("#sizingModeHint"),
   oicMessagePacks: document.querySelector("#oicMessagePacks"),
   oicMessagePacksControl: document.querySelector("#oicMessagePacksControl"),
   serviceSearch: document.querySelector("#serviceSearch"),
@@ -2367,6 +2370,8 @@ async function priceRows({ keepView = false, destination = "price" } = {}) {
       hoursPerMonth: state.hoursPerMonth,
       hoursOverride: state.hoursOverride,
       oicMessagePacks: state.oicMessagePacks,
+      // Gen-gap sizing trim. Off = map every workload 1:1 with the source.
+      rightsize: !!state.rightsize,
     });
     const { response, payload } = await fetchJson(
       "/api/price",
@@ -2610,6 +2615,7 @@ function collectWorkflowState() {
     hoursOverride: state.hoursOverride,
     bomName: state.bomName,
     ociDiscount: state.ociDiscount,
+    rightsize: state.rightsize,
     oicMessagePacks: state.oicMessagePacks,
     selectedShape: state.selectedShape,
     selectedVendor: state.selectedVendor,
@@ -2663,6 +2669,7 @@ async function applyWorkflowState(wf) {
     hoursOverride: false,
     bomName: "",
     ociDiscount: 0,
+    rightsize: false,
     oicMessagePacks: 1,
     selectedShape: "e6-standard-ax",
     selectedVendor: "amd",
@@ -2689,7 +2696,7 @@ async function applyWorkflowState(wf) {
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
     "hideWindowsPricing", "hideSqlPricing",
     "cpuUnit",
-    "bomName", "ociDiscount", "oicMessagePacks", "selectedShape", "existingInfraCost",
+    "bomName", "ociDiscount", "rightsize", "oicMessagePacks", "selectedShape", "existingInfraCost",
     "selectedVendor", "lastShapeByVendor", "crossCloudTopTier", "uploadMetadata",
     "workflowMaxUnlockedStep",
     "showMissingOnly", "extraServices", "fields", "rows",
@@ -2768,6 +2775,7 @@ async function applyWorkflowState(wf) {
   // Reflect restored simple inputs back into their controls if present.
   if (els.bomName) els.bomName.value = state.bomName || "";
   if (els.ociDiscount) els.ociDiscount.value = String(Number(state.ociDiscount || 0));
+  if (typeof syncSizingModeUi === "function") syncSizingModeUi();
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
   syncModeUi();
   setCpuUnit(state.cpuUnit);
@@ -4907,6 +4915,7 @@ els.priceShapeButton.addEventListener("click", onPriceShapeClick);
 els.rerunPricing?.addEventListener("click", priceRows);
 // The discount re-prices the whole estimate, so debounce it: typing "27" must not fire a request
 // for "2" then "27". Wait until typing stops, then show a brief loading state while it refreshes.
+const OVERLAY_MIN_MS = 500;   // keep any "working" overlay up long enough to be readable
 let _discountTimer = null;
 function onDiscountInput(raw) {
   let pct = Number(raw);
@@ -4922,11 +4931,15 @@ function onDiscountInput(raw) {
     const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
     if (overlayText) overlayText.textContent = `Applying ${pct}% OCI discount…`;
     if (overlay) overlay.hidden = false;
+    const shownAt = Date.now();
     window.requestAnimationFrame(() => {
       try {
         refreshResultsTotals();
       } finally {
-        setTimeout(() => { if (overlay) overlay.hidden = true; }, 180);
+        // Re-rendering is near-instant, so without a floor the overlay just flickers. Hold it
+        // for a minimum visible moment so the change reads as "applied" rather than a glitch.
+        const wait = Math.max(0, OVERLAY_MIN_MS - (Date.now() - shownAt));
+        setTimeout(() => { if (overlay) overlay.hidden = true; }, wait);
       }
     });
   }, 650);
@@ -4941,6 +4954,30 @@ if (els.ociDiscount) {
   });
 }
 
+function syncSizingModeUi() {
+  const mode = state.rightsize ? "rightsize" : "one-to-one";
+  document.querySelectorAll(".sizing-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.sizing === mode);
+  });
+  if (els.sizingModeHint) {
+    els.sizingModeHint.textContent = state.rightsize
+      ? "OCPU and RAM trimmed for the newer OCI generation"
+      : "Sizes match the source 1:1";
+  }
+}
+if (els.sizingSwitch) {
+  els.sizingSwitch.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-sizing]");
+    if (!btn) return;
+    const next = btn.dataset.sizing === "rightsize";
+    if (next === !!state.rightsize) return;
+    state.rightsize = next;
+    syncSizingModeUi();
+    // Sizing changes the OCPU/RAM behind every line, so the existing estimate is stale.
+    repriceIfEstimated();
+  });
+}
+
 function repriceIfEstimated() {
   // A licensing / GPU toggle changes the money, so the existing estimate is immediately stale.
   // Drop it and re-lock the downstream steps so Price, Compare, Architecture and Deliverables
@@ -4948,15 +4985,19 @@ function repriceIfEstimated() {
   if (!state.pricing) return;
   state.pricing = null;
   syncWorkflowAvailability();
-  if (els.pricePageStatus) {
-    els.pricePageStatus.hidden = false;
-    els.pricePageStatus.textContent = "Licensing changed - re-pricing this estimate…";
-  }
+  const overlay = document.querySelector("#exportOverlay");
+  const overlayText = overlay ? overlay.querySelector(".export-overlay-text") : null;
+  if (overlayText) overlayText.textContent = "Re-pricing this estimate…";
+  if (overlay) overlay.hidden = false;
+  const shownAt = Date.now();
   if (typeof priceRows === "function") {
     Promise.resolve(priceRows({ keepView: true })).finally(() => {
-      if (els.pricePageStatus) els.pricePageStatus.hidden = true;
+      const wait = Math.max(0, OVERLAY_MIN_MS - (Date.now() - shownAt));
+      setTimeout(() => { if (overlay) overlay.hidden = true; }, wait);
       syncWorkflowAvailability();
     });
+  } else if (overlay) {
+    overlay.hidden = true;
   }
 }
 els.hideGpuToggle?.addEventListener("change", (event) => {
