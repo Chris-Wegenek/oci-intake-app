@@ -98,27 +98,26 @@ If the repo is public, skip this step entirely.
 
 ---
 
-## 4. Clone the repo and switch to the right branch
+## 4. Clone the repo
 
 ```bash
 cd ~/Documents
 git clone https://github.com/Chris-Wegenek/oci-intake-app.git
 cd oci-intake-app
-git checkout "Chris'-Branch"
 ```
 
-> **The quotes around the branch name are required.** The branch is literally
-> called `Chris'-Branch`, apostrophe included. Without quotes your shell sees an
-> unterminated string and hangs at a `quote>` prompt — if that happens, press
-> Ctrl+C and retype it with the double quotes.
+`git clone` checks out `main` for you, which is the branch to use — there is no
+second checkout step.
 
-`main` is well behind; all current work is on `Chris'-Branch`.
-
-Confirm you're in the right place:
+Confirm you got current code:
 
 ```bash
 git log --oneline -3
 ```
+
+You should see recent dates. If the newest commit is from July 2026 or earlier
+and someone has told you there are newer fixes, `main` hasn't been updated yet —
+go back to whoever sent you here rather than working around it.
 
 ---
 
@@ -232,7 +231,7 @@ The venv step is the one people forget. If you get
 ## Getting later changes
 
 ```bash
-git pull
+git pull                          # you are on main; nothing else to switch to
 pip install -r requirements.txt   # only needed if requirements.txt changed
 ```
 
@@ -243,7 +242,6 @@ pip install -r requirements.txt   # only needed if requirements.txt changed
 | Symptom | Cause and fix |
 |---|---|
 | `brew: command not found` | The PATH line from the Homebrew installer wasn't run. See the end of Step 1, or open a new Terminal. |
-| Shell hangs showing `quote>` | The branch name's apostrophe. Ctrl+C, then `git checkout "Chris'-Branch"` with double quotes. |
 | `Repository not found` on clone | Private repo and you're not authenticated or not a collaborator. Do Step 3, and check the invite. |
 | `error: externally-managed-environment` | pip outside a venv. Activate it (Step 5), or add `--break-system-packages`. |
 | `ModuleNotFoundError: No module named 'pandas'` | The venv isn't active. `source .venv/bin/activate`. |
