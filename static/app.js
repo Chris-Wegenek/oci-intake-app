@@ -1,6 +1,9 @@
 const state = {
   fields: [],
   rows: [],
+  // Ordered sort keys for the review table: [{key, direction}, ...], primary first.
+  // Empty means the spreadsheet's own row order.
+  reviewSort: [],
   rateCard: [],
   rateCards: [],
   fullServiceCatalog: [],
@@ -26,6 +29,13 @@ const state = {
   bomName: "",
   ociDiscount: 0,
   rightsize: false,
+  // Auto (like-for-like) shape mapping: map every workload onto the OCI shape of its OWN CPU
+  // family - Intel to Intel, AMD to AMD, Arm to Arm - instead of putting the whole estate on
+  // the one shape picked below. Off = every row uses the selected shape.
+  autoMap: false,
+  // "best" = equivalent generation to the source instance; "top" = newest OCI shape for that
+  // family. Only distinguishable when the source names an instance type (a cloud bill).
+  autoTier: "best",
   oicMessagePacks: 1,
   // Services the user added from the "Add OCI services" panel. Each: {id, catalogId, name,
   // group, sku, unit, basis, values, monthly}. Included in totals and both BOM exports.
@@ -52,10 +62,9 @@ const state = {
   openaiApiConfigured: false,
   openaiApiConnected: false,
   openaiModel: "",
-  resultSort: {
-    key: "document",
-    direction: "asc",
-  },
+  // Ordered sort keys for the results table: [{key, direction}], primary first.
+  // Empty means document order.
+  resultSort: [],
   ramp: {
     months: 12,
     ceiling: 0,
@@ -213,6 +222,7 @@ const els = {
   columnCount: document.querySelector("#columnCount"),
   approvedCount: document.querySelector("#approvedCount"),
   sheetName: document.querySelector("#sheetName"),
+  sheetSelect: document.querySelector("#sheetSelect"),
   addRow: document.querySelector("#addRow"),
   addColumn: document.querySelector("#addColumn"),
   addColumnForm: document.querySelector("#addColumnForm"),
@@ -248,6 +258,9 @@ const els = {
   bomName: document.querySelector("#bomName"),
   ociDiscount: document.querySelector("#ociDiscount"),
   sizingSwitch: document.querySelector(".sizing-switch"),
+  mappingSwitch: document.querySelector(".mapping-switch"),
+  mappingTierSwitch: document.querySelector(".mapping-tier-switch"),
+  mappingModeHint: document.querySelector("#mappingModeHint"),
   sizingModeHint: document.querySelector("#sizingModeHint"),
   oicMessagePacks: document.querySelector("#oicMessagePacks"),
   oicMessagePacksControl: document.querySelector("#oicMessagePacksControl"),
@@ -925,8 +938,13 @@ function ensureIdentityReviewFields() {
     (field) => field?.key !== "application_name"
       && isApplicationIdentityLabel(field?.sourceHeader || field?.label),
   );
+  // A column the server tagged as the server-name source counts too, so a header the
+  // phrase list above can't spell - an abbreviated one, or the misspelled "Enviornment
+  // Name" seen on a real discovery sheet - still fills the canonical machine_name column
+  // instead of leaving every row "Missing data".
   const machineSourceFields = state.fields.filter(
-    (field) => field?.key !== "machine_name" && isMachineIdentityLabel(field?.sourceHeader || field?.label),
+    (field) => field?.key !== "machine_name"
+      && (isMachineIdentityLabel(field?.sourceHeader || field?.label) || field?.machineSourceLabel),
   );
 
   // Older saved workflows mapped server/host columns into application_name.
@@ -1342,7 +1360,18 @@ const SIZING_MARKER_BY_LABEL = {
   "Storage (GB)": "storageSourceLabel",
 };
 
-function findField(rule) {
+// Identity columns the server tagged from the Data Check's looser needles, so an
+// abbreviated "Env" or a misspelled "Enviornment Name" fills Environment and Machine Name
+// instead of every row reading "Missing data" while the Data Check panel directly above
+// reports the column as present. Tried only AFTER the phrase rules, so a well-formed
+// header still wins, and skipped when an earlier rule already claimed the column.
+// (Machine Name is not here: ensureIdentityReviewFields() already copies a tagged column
+// into the canonical machine_name field, which the rule matches by key.)
+const IDENTITY_MARKER_BY_LABEL = {
+  "Environment": "environmentSourceLabel",
+};
+
+function findField(rule, claimed) {
   if (rule.key) {
     const keyedMatch = state.fields.find((field) => field?.key === rule.key);
     if (keyedMatch) return { ...keyedMatch, label: rule.label };
@@ -1365,7 +1394,19 @@ function findField(rule) {
     if (section && !label.trim().startsWith(section)) return false;
     return matchGroups.some((terms) => terms.every((term) => label.includes(` ${term} `) || label.includes(term)));
   });
-  return match ? { ...match, label: rule.label } : null;
+  if (match) return { ...match, label: rule.label };
+  const identityMarker = IDENTITY_MARKER_BY_LABEL[rule.label];
+  if (identityMarker) {
+    const tagged = state.fields.find(
+      (field) =>
+        field &&
+        field[identityMarker] &&
+        !(claimed && claimed.has(field.key)) &&
+        state.rows.some((row) => hasCellContent(row[field.key]))
+    );
+    if (tagged) return { ...tagged, label: rule.label };
+  }
+  return null;
 }
 
 function previewFields() {
@@ -1378,7 +1419,7 @@ function previewFields() {
   const fields = [];
   const seen = new Set();
   rules.forEach((rule) => {
-    const field = findField(rule);
+    const field = findField(rule, seen);
     if (field && !seen.has(field.key) && (rule.required || shouldShowField(field))) {
       fields.push(field);
       seen.add(field.key);
@@ -1624,7 +1665,27 @@ function renderStats(meta = {}) {
 // CPU-unit interpretation. The parser stores the CPU column already halved
 // (raw vCPU / 2 = OCPU under the default vCPU assumption). "Already OCPUs" means the
 // source count is the OCPU count, so the review/pricing value is doubled back to the
-// raw count. "Auto" detects vCPU vs OCPU from the original header, defaulting to vCPU.
+// raw count. "Auto" detects vCPU vs OCPU. MUST mirror detect_cpu_unit() in app.py - if
+// these two disagree, the review table shows one core count and the BOM prices another.
+
+// Named virtualization platforms - see _VIRTUALIZATION_CUES in app.py for why the bare
+// token "vm" is not one.
+const VIRTUALIZATION_CUES = [
+  "vmware", "esx", "esxi", "vsphere", "vcenter", "rvtools",
+  "hyper v", "hyperv", "nutanix", "proxmox", "xenserver", "xen server",
+  "citrix hypervisor", "hypervisor", "oracle vm", "ovm", "virtual machine", "vmdk",
+  "datastore", "guest os", "vm host", "esx host",
+];
+
+function mentionsVirtualization() {
+  const hit = (text) =>
+    !!text && VIRTUALIZATION_CUES.some((cue) => new RegExp(`(?:^|[^a-z0-9])${cue}(?:[^a-z0-9]|$)`).test(text));
+  if ((state.fields || []).some((f) => hit(normalizeText(f?.sourceHeader || f?.label || "")))) return true;
+  return (state.rows || []).slice(0, 200).some((row) =>
+    Object.entries(row || {}).some(([key, value]) => !key.startsWith("__") && hit(normalizeText(value))),
+  );
+}
+
 function resolvedCpuUnit() {
   if (state.cpuUnit === "vcpu" || state.cpuUnit === "ocpu") return state.cpuUnit;
   const f = (state.fields || []).find((x) => x && x.cpuSourceLabel);
@@ -1634,7 +1695,11 @@ function resolvedCpuUnit() {
   // Physical cores are OCPUs 1:1 (CPU cores per server, physical cores, rationalized cores),
   // so treat a "core" column as OCPUs, not halved like vCPUs. Mirror server detect_cpu_unit.
   if (src.includes("core")) return "ocpu";
-  return "vcpu";
+  // Halving now needs a positive reason. An on-prem sheet counts physical cores and 1 OCPU
+  // = 1 physical core, so an ambiguous "CPUs" column is OCPUs; only a named hypervisor says
+  // the figure came from a guest VM and is therefore vCPUs.
+  if (mentionsVirtualization()) return "vcpu";
+  return "ocpu";
 }
 function cpuDisplayMult() {
   return resolvedCpuUnit() === "ocpu" ? 2 : 1;
@@ -1651,7 +1716,12 @@ function updateCpuUnitHint() {
   if (state.cpuUnit === "auto" && (state.fields || []).some((f) => f && f.cpuSourceLabel)) {
     const r = resolvedCpuUnit();
     els.cpuUnitDetected.textContent =
-      "Auto-detected: " + (r === "ocpu" ? "already OCPUs" : "vCPUs (halved for OCI)");
+      "Auto-detected: " +
+      (r === "ocpu"
+        ? "physical cores / OCPUs (1:1, not halved)"
+        : mentionsVirtualization()
+        ? "vCPUs (halved for OCI — this sheet names a hypervisor)"
+        : "vCPUs (halved for OCI)");
     els.cpuUnitDetected.hidden = false;
   } else {
     els.cpuUnitDetected.hidden = true;
@@ -1670,6 +1740,56 @@ const DATA_CHECK_CONSEQUENCE = {
   environment: "the Environment column stays blank",
   application: "the Applications sheet and Master Application column stay empty",
 };
+
+// The "Default Sheet" tile doubles as the sheet picker. pick_sheet() scores the sheets and
+// is usually right, but it is a heuristic on someone else's workbook - when it lands on the
+// wrong tab the only recourse used to be editing the file and uploading again. Reads as a
+// plain tile value until the workbook actually offers an alternative.
+function renderSheetPicker(payload) {
+  const select = els.sheetSelect;
+  const label = els.sheetName;
+  if (!select || !label) return;
+  // Hidden sheets are excluded server-side; the fallbacks cover a CSV or a PDF bill, which
+  // report a single pseudo-sheet.
+  const sheets = (payload?.visibleSheets || payload?.sheets || []).filter(Boolean);
+  const current = payload?.sheetName || "";
+  if (sheets.length < 2 || !state.lastUploadFile) {
+    select.hidden = true;
+    label.hidden = false;
+    return;
+  }
+  select.innerHTML = sheets
+    .map((name) => `<option value="${escapeHtml(name)}"${name === current ? " selected" : ""}>${escapeHtml(name)}</option>`)
+    .join("");
+  select.title = `Reading "${current}". Pick another sheet in this workbook to parse it instead.`;
+  select.disabled = false;
+  label.hidden = true;
+  select.hidden = false;
+}
+
+async function reparseWithSheet(sheetName) {
+  const file = state.lastUploadFile;
+  if (!file || !sheetName) return;
+  if (els.sheetSelect) els.sheetSelect.disabled = true;
+  try {
+    // Other OCI Bill has its own converter (and its own per-sheet totals), so route there;
+    // on-prem and cloud-bill both re-enter the normal upload path with the override.
+    if (isOtherOciBillMode()) {
+      await convertBomFromFile(file, sheetName);
+      return;
+    }
+    await uploadFile(file, sheetName);
+    // uploadFile() ends on the Upload step, which is right for a fresh drop but not here:
+    // the picker lives on Review, so stay there and show the newly parsed sheet.
+    if (state.uploadReady) showReviewPage();
+  } catch (error) {
+    setUploadingError(error);
+  } finally {
+    if (els.sheetSelect) els.sheetSelect.disabled = false;
+  }
+}
+
+els.sheetSelect?.addEventListener("change", (event) => reparseWithSheet(event.target.value));
 
 function renderDataCheck(check) {
   const panel = document.getElementById("dataCheck");
@@ -1934,11 +2054,16 @@ function buildReviewRowEl(row, rowIndex, fields) {
 
 function renderTable() {
   const fields = previewFields();
+  ensureRowSequence();
+  // A column that has since been removed (sheet switch, column delete) must not leave the
+  // table claiming a sort it is no longer applying.
+  const visibleKeys = new Set(fields.map((field) => field?.key));
+  state.reviewSort = (state.reviewSort || []).filter((s) => s && visibleKeys.has(s.key));
   const rowEntries = reviewRowEntries(fields);
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   headRow.append(headerCell("Approve"));
-  fields.forEach((field) => headRow.append(headerCell(field.label)));
+  fields.forEach((field) => headRow.append(headerCell(field.label, field)));
   if (osColumnVisible()) headRow.append(headerCell("OS"));
   thead.append(headRow);
 
@@ -2007,14 +2132,149 @@ function focusReviewField(fieldKey) {
   });
 }
 
-function headerCell(label) {
+function headerCell(label, field) {
   const th = document.createElement("th");
   th.scope = "col";
   th.textContent = label;
   if (label.toLowerCase().includes("ocpu")) {
     th.title = "Uploaded spreadsheet CPU values are assumed to be vCPUs and converted using 2 vCPUs = 1 OCPU.";
   }
+  if (field?.key) makeHeaderSortable(th, label, field.key);
   return th;
+}
+
+// ---- Sorting the review table ------------------------------------------------------
+// Clicking a column header reorders state.rows itself, not just the view, so the BOM,
+// the export and the architecture diagram all come out in the order on screen. Safe to
+// reorder in place: per-row state (approvals, overrides, selections) is keyed by
+// row.__id, and rowIndex is re-derived from the array on every render.
+
+// Original file order, so a third click can put it back. Stamped on first render, when
+// the rows are still in the order the spreadsheet had them.
+function ensureRowSequence() {
+  (state.rows || []).forEach((row, index) => {
+    if (row && row.__seq === undefined) row.__seq = index;
+  });
+}
+
+function compareReviewCells(a, b) {
+  const numeric = (value) => {
+    const text = String(value).replace(/[$,%\s]/g, "");
+    return text === "" ? NaN : Number(text);
+  };
+  const an = numeric(a);
+  const bn = numeric(b);
+  if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+  // numeric:true so "APP2" sorts after "APP10"'s neighbours sensibly and DB1 < DB2 < DB10.
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+}
+
+// Multi-key: compare on the primary column, and only where it ties fall through to the
+// next one. That is what "Environment, then Machine Name" means - the second key orders
+// rows WITHIN each environment rather than re-sorting the whole table.
+function sortReviewRows(sortKeys) {
+  ensureRowSequence();
+  const seq = (row) => (row?.__seq ?? 0);
+  const keys = (sortKeys || []).filter((s) => s && s.key && s.direction);
+  if (!keys.length) {
+    state.rows.sort((ra, rb) => seq(ra) - seq(rb));
+    return;
+  }
+  state.rows.sort((ra, rb) => {
+    for (const { key, direction } of keys) {
+      const a = ra[key];
+      const b = rb[key];
+      const aBlank = !hasCellContent(a);
+      const bBlank = !hasCellContent(b);
+      // Blanks sink to the bottom in BOTH directions - flipping the sort shouldn't bury
+      // the rows that still need filling in under a screen of empties.
+      if (aBlank !== bBlank) return aBlank ? 1 : -1;
+      if (aBlank && bBlank) continue; // both empty here: let the next key decide
+      const cmp = compareReviewCells(a, b);
+      if (cmp) return direction === "desc" ? -cmp : cmp;
+    }
+    return seq(ra) - seq(rb); // stable: rows equal on every key keep file order
+  });
+}
+
+function reviewSortEntry(fieldKey) {
+  return (state.reviewSort || []).find((s) => s && s.key === fieldKey) || null;
+}
+
+function applyReviewSort(sortKeys) {
+  state.reviewSort = sortKeys;
+  sortReviewRows(sortKeys);
+  renderTable();
+}
+
+function makeHeaderSortable(th, label, fieldKey) {
+  const chain = state.reviewSort || [];
+  const rank = chain.findIndex((s) => s && s.key === fieldKey);
+  const active = rank >= 0 ? chain[rank].direction : null;
+  th.classList.add("is-sortable");
+  if (active) th.classList.add(active === "asc" ? "is-sorted-asc" : "is-sorted-desc");
+  // aria-sort is single-valued by spec, so only the primary column advertises it; the
+  // full chain is spelled out in the title, which is also the accessible description.
+  th.setAttribute(
+    "aria-sort",
+    rank === 0 ? (active === "asc" ? "ascending" : "descending") : "none",
+  );
+  th.tabIndex = 0;
+  const chainText = chain.length > 1
+    ? " Sorting by " + chain.map((s, i) => `${i + 1}. ${fieldLabelForKey(s.key)} ${s.direction === "desc" ? "Z→A" : "A→Z"}`).join(", ") + "."
+    : "";
+  th.title = (active === "asc"
+    ? `Sorted by ${label}, A→Z. Click to reverse.`
+    : active === "desc"
+    ? `Sorted by ${label}, Z→A. Click to restore the spreadsheet's order.`
+    : `Sort rows by ${label}.`)
+    + ` Shift-click to add ${label} as a further tie-breaker instead of replacing the sort.`
+    + chainText;
+
+  const marker = document.createElement("span");
+  marker.className = "sort-marker";
+  marker.setAttribute("aria-hidden", "true");
+  marker.textContent = active === "asc" ? "▲" : active === "desc" ? "▼" : "↕";
+  // Only worth numbering once more than one column is in play.
+  if (active && chain.length > 1) {
+    const badge = document.createElement("sup");
+    badge.className = "sort-rank";
+    badge.textContent = String(rank + 1);
+    marker.append(badge);
+  }
+  th.append(marker);
+
+  const activate = (additive) => {
+    const current = (state.reviewSort || []).map((s) => ({ ...s }));
+    const at = current.findIndex((s) => s.key === fieldKey);
+    if (additive) {
+      // Shift-click builds the chain: add as the next tie-breaker, then reverse it, then
+      // drop just this key and leave the rest of the chain intact.
+      if (at === -1) current.push({ key: fieldKey, direction: "asc" });
+      else if (current[at].direction === "asc") current[at].direction = "desc";
+      else current.splice(at, 1);
+      applyReviewSort(current);
+      return;
+    }
+    // Plain click sorts by this column ALONE, cycling asc -> desc -> the file's order.
+    // Clicking a column that was only part of a chain restarts from it, ascending.
+    const wasOnlyKey = at === 0 && current.length === 1;
+    const next = wasOnlyKey ? (active === "asc" ? "desc" : active === "desc" ? null : "asc") : "asc";
+    applyReviewSort(next ? [{ key: fieldKey, direction: next }] : []);
+  };
+
+  th.addEventListener("click", (event) => activate(event.shiftKey));
+  th.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      activate(event.shiftKey);
+    }
+  });
+}
+
+function fieldLabelForKey(key) {
+  const field = (state.fields || []).find((f) => f?.key === key);
+  return field?.label || key;
 }
 
 function clearFillPreview() {
@@ -2175,7 +2435,7 @@ async function jsonRequestOptions(payload) {
   };
 }
 
-async function compressedUploadRequest(file) {
+async function compressedUploadRequest(file, sheetOverride = "") {
   if (
     file.size < COMPRESSED_UPLOAD_THRESHOLD
     || typeof CompressionStream === "undefined"
@@ -2199,6 +2459,8 @@ async function compressedUploadRequest(file) {
         "X-Intake-Mode": state.intakeMode,
         "X-Provider-Hint": state.providerHint,
         "X-Full-Service-Beta": state.fullServiceBeta ? "true" : "false",
+        // Header values must be latin-1; a sheet name can hold anything.
+        ...(sheetOverride ? { "X-Sheet-Name": encodeURIComponent(sheetOverride) } : {}),
       },
       body: compressedBody,
     },
@@ -2216,12 +2478,12 @@ function showSelectedDoc(name, sub) {
   if (els.selectedDocSub) els.selectedDocSub.textContent = sub || "";
 }
 
-async function uploadFile(file) {
+async function uploadFile(file, sheetOverride = "") {
   if (!file) return;
   // Other OCI Bill mode: the file is already a priced OCI BOM, not a raw inventory or bill,
   // so the inventory parser would make nonsense of it. Route the whole drop zone (and the file
   // picker, which shares this entry point) to the converter instead.
-  if (isOtherOciBillMode()) return convertBomFromFile(file);
+  if (isOtherOciBillMode()) return convertBomFromFile(file, sheetOverride);
   clearIntakeStatuses();   // starting a fresh upload - drop any load/convert banners
   resetWorkflowProgress();
   state.lastUploadFile = file;
@@ -2229,12 +2491,13 @@ async function uploadFile(file) {
   setUploadLoading(true, file.name);
 
   try {
-    const compressedRequest = await compressedUploadRequest(file);
+    const compressedRequest = await compressedUploadRequest(file, sheetOverride);
     const body = new FormData();
     body.append("file", file);
     body.append("intakeMode", state.intakeMode);
     body.append("providerHint", state.providerHint);
     body.append("fullServiceBeta", state.fullServiceBeta ? "true" : "false");
+    if (sheetOverride) body.append("sheetName", sheetOverride);
     const request = compressedRequest || {
       url: "/api/upload",
       options: {
@@ -2319,6 +2582,7 @@ async function uploadFile(file) {
     els.sheetMeta.textContent = payload.fileName;
     els.sheetMeta.title = `Sheet "${payload.sheetName}" • ${parserLabel}${modeLabel}${grain} • data begins on row ${payload.metadata.dataStartRow}`;
     els.sheetName.textContent = payload.sheetName;
+    renderSheetPicker(payload);
     renderDataCheck(payload.dataCheck);
     renderRateCard();
     renderProcessorPicker();
@@ -2738,6 +3002,8 @@ function collectWorkflowState() {
     bomName: state.bomName,
     ociDiscount: state.ociDiscount,
     rightsize: state.rightsize,
+    autoMap: state.autoMap,
+    autoTier: state.autoTier,
     oicMessagePacks: state.oicMessagePacks,
     selectedShape: state.selectedShape,
     selectedVendor: state.selectedVendor,
@@ -2797,6 +3063,8 @@ async function applyWorkflowState(wf) {
     bomName: "",
     ociDiscount: 0,
     rightsize: false,
+    autoMap: false,
+    autoTier: "best",
     oicMessagePacks: 1,
     selectedShape: "e6-standard-ax",
     selectedVendor: "amd",
@@ -2818,13 +3086,14 @@ async function applyWorkflowState(wf) {
     hiddenSources: {},
     selectedRows: {},
     columnPrefs: {},
-    resultSort: { key: "document", direction: "asc" },
+    resultSort: [],
   });
   const assign = [
     "intakeMode", "providerHint", "fullServiceBeta", "hideGpuPricing",
     "hideWindowsPricing", "hideSqlPricing",
     "cpuUnit",
-    "bomName", "ociDiscount", "rightsize", "oicMessagePacks", "selectedShape", "existingInfraCost",
+    "bomName", "ociDiscount", "rightsize", "autoMap", "autoTier", "oicMessagePacks",
+    "selectedShape", "existingInfraCost",
     // Pricing inputs: these MUST be restored, or a re-imported BOM re-prices differently from
     // the one that was exported. hoursPerMonth/hoursOverride used to be saved and then thrown
     // away by a hard reset below.
@@ -2885,10 +3154,11 @@ async function applyWorkflowState(wf) {
       state[key] = {};
     }
   });
-  if (!state.resultSort || typeof state.resultSort !== "object") {
-    state.resultSort = { key: "document", direction: "asc" };
-  }
+  // Tolerates both shapes: a pre-multi-sort workflow saved a single {key, direction}.
+  state.resultSort = normalizeResultSort(state.resultSort);
   state.cpuUnit = ["auto", "vcpu", "ocpu"].includes(state.cpuUnit) ? state.cpuUnit : "auto";
+  state.autoMap = !!state.autoMap;
+  state.autoTier = state.autoTier === "top" ? "top" : "best";
   // Validate the restored hours rather than discarding them: a saved BOM that was priced on a
   // custom hours/month must re-import at that same figure, or the reopened workbook disagrees
   // with the one the customer already has.
@@ -2932,6 +3202,7 @@ async function applyWorkflowState(wf) {
   if (els.ociDiscount) els.ociDiscount.value = String(Number(state.ociDiscount || 0));
   if (typeof syncExistingInfraUi === "function") syncExistingInfraUi();
   if (typeof syncSizingModeUi === "function") syncSizingModeUi();
+  if (typeof syncMappingModeUi === "function") syncMappingModeUi();
   if (typeof syncOptChips === "function") syncOptChips();
   if (els.oicMessagePacks) els.oicMessagePacks.value = state.oicMessagePacks || 1;
   syncModeUi();
@@ -3722,6 +3993,10 @@ function pricingInputs() {
     oicMessagePacks: state.oicMessagePacks,
     // Gen-gap sizing trim. Off = map every workload 1:1 with the source.
     rightsize: !!state.rightsize,
+    // Like-for-like shape mapping (Intel -> Intel, AMD -> AMD, Arm -> Arm) instead of putting
+    // the whole estate on the single selected shape.
+    auto: !!state.autoMap,
+    autoTier: state.autoTier === "top" ? "top" : "best",
   };
 }
 
@@ -4400,32 +4675,48 @@ function compareSortValues(left, right, direction = "asc") {
   }) * multiplier;
 }
 
+// state.resultSort is an ORDERED list of {key, direction}, primary first; empty means
+// document order. Saved workflows from before multi-column sort hold a single
+// {key, direction} object (with key "document" meaning unsorted), so accept both.
+function normalizeResultSort(value) {
+  const list = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : [];
+  return list
+    .filter((s) => s && typeof s.key === "string" && s.key && s.key !== "document")
+    .map((s) => ({ key: s.key, direction: s.direction === "desc" ? "desc" : "asc" }));
+}
+
 function activeResultSort(columns) {
-  // "document" (the default) means keep the original upload/order - no column sort.
-  if (state.resultSort.key === "document") return { column: null, direction: "asc" };
-  const requestedColumn = columns.find((column) => column.key === state.resultSort.key);
-  if (!requestedColumn) return { column: null, direction: "asc" };
-  return { column: requestedColumn, direction: state.resultSort.direction === "asc" ? "asc" : "desc" };
+  return normalizeResultSort(state.resultSort)
+    .map((s) => ({ column: columns.find((c) => c.key === s.key), direction: s.direction }))
+    .filter((s) => s.column);
 }
 
 function sortResultRows(rows, columns) {
-  const { column: activeColumn, direction } = activeResultSort(columns);
-  if (!activeColumn) return rows.slice();
+  const sorts = activeResultSort(columns);
+  if (!sorts.length) return rows.slice();
   return rows
     .map((row, index) => ({ row, index }))
     .sort((left, right) => {
-      const comparison = compareSortValues(
-        activeColumn.sortValue(left.row),
-        activeColumn.sortValue(right.row),
-        direction,
-      );
-      return comparison || left.index - right.index;
+      // Each key only breaks ties left unresolved by the one before it, so "Env then
+      // Machine Name" orders machines WITHIN an environment.
+      for (const { column, direction } of sorts) {
+        const comparison = compareSortValues(
+          column.sortValue(left.row),
+          column.sortValue(right.row),
+          direction,
+        );
+        if (comparison) return comparison;
+      }
+      return left.index - right.index;
     })
     .map((item) => item.row);
 }
 
 function renderSortableHead(columns) {
-  const { column: activeColumn, direction } = activeResultSort(columns);
+  const sorts = activeResultSort(columns);
+  const chainText = sorts.length > 1
+    ? " Sorting by " + sorts.map((s, i) => `${i + 1}. ${s.column.label} ${s.direction === "desc" ? "Z→A" : "A→Z"}`).join(", ") + "."
+    : "";
   return `
     <thead>
       <tr>
@@ -4434,13 +4725,24 @@ function renderSortableHead(columns) {
             if (column.selector) {
               return `<th class="select-col"><input type="checkbox" id="selectAllRows" aria-label="Select All Rows"/></th>`;
             }
-            const active = activeColumn?.key === column.key;
-            const ariaSort = active ? (direction === "asc" ? "ascending" : "descending") : "none";
+            const rank = sorts.findIndex((s) => s.column.key === column.key);
+            const direction = rank >= 0 ? sorts[rank].direction : null;
+            // aria-sort is single-valued by spec: only the primary advertises it, and the
+            // whole chain is spelled out in the title.
+            const ariaSort = rank === 0 ? (direction === "asc" ? "ascending" : "descending") : "none";
+            const title = (direction
+              ? `Sorted by ${column.label}, ${direction === "asc" ? "A→Z" : "Z→A"}.`
+              : `Sort rows by ${column.label}.`)
+              + ` Shift-click to add it as a further tie-breaker instead of replacing the sort.`
+              + chainText;
+            const badge = direction && sorts.length > 1
+              ? `<sup class="sort-rank">${rank + 1}</sup>`
+              : "";
             return `
-              <th class="${active ? `is-sorted is-${direction}` : "is-sortable"}" aria-sort="${ariaSort}">
-                <button type="button" class="sort-header" data-result-sort="${escapeHtml(column.key)}">
+              <th class="${direction ? `is-sorted is-${direction}` : "is-sortable"}" aria-sort="${ariaSort}">
+                <button type="button" class="sort-header" data-result-sort="${escapeHtml(column.key)}" title="${escapeHtml(title)}">
                   <span>${escapeHtml(column.label)}</span>
-                  <i aria-hidden="true"></i>
+                  <i aria-hidden="true"></i>${badge}
                 </button>
               </th>
             `;
@@ -4533,11 +4835,31 @@ function applyBulkCostAction(value) {
   return priceRows({ keepView: true });
 }
 
+// A row whose size fits no OCI shape at all - the mapping can't be delivered as it stands.
+function isImpossibleRow(row) {
+  return (row?.sizeCheck?.status || "") === "impossible";
+}
+
+// Impossible mappings are the rows that need a decision before the BOM can go out, so they are
+// PINNED to the top of the table in every mode - a column sort re-orders within the two groups
+// rather than burying them again. Stable, so everything else keeps the order it already had
+// (the cloud-bill branch pre-orders by flag, then by cost on the bill).
+function impossibleFirst(rows) {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort(
+      (a, b) =>
+        (isImpossibleRow(b.row) ? 1 : 0) - (isImpossibleRow(a.row) ? 1 : 0) ||
+        a.index - b.index,
+    )
+    .map((item) => item.row);
+}
+
 function renderResultTableFromColumns(rows, columns) {
   renderColumnPicker(columns);
   const visible = columns.filter((c) => !isColumnHidden(c.key));
   const cols = visible.length ? visible : columns;
-  const sortedRows = sortResultRows(rows, cols);
+  const sortedRows = impossibleFirst(sortResultRows(rows, cols));
   const body = sortedRows
     .map((row) => `
       <tr>
@@ -4609,27 +4931,66 @@ function recomputeConvertedTotals(pricing) {
 function applyShapeToVm(row, shape) {
   if (!row || !row.isConvertedCompute || !shape) return;
   const hours = Number(row.computeHours || 730);
-  const ocpu = Number(row.originalOcpus || row.specs?.ocpus || 0);
-  const mem = Number(row.originalMemoryGb || row.specs?.memoryGb || 0);
+  const specOcpu = Number(row.originalOcpus || row.specs?.ocpus || 0);
+  const specMem = Number(row.originalMemoryGb || row.specs?.memoryGb || 0);
+  // Bare metal is a dedicated physical machine at one fixed size, so a VM re-mapped onto one
+  // bills that box in full - not its own OCPU/RAM at bare-metal rates. Exactly ONE box: a
+  // converted row is a single VM, and a VM cannot be spread across two machines. When it does
+  // not fit, the row is flagged rather than rounded up into a number nobody can buy.
+  let ocpu = specOcpu;
+  let mem = specMem;
+  let servers = 0;
+  let overflows = false;
+  const bmOcpu = Number(shape.bmOcpu || 0);
+  const bmMem = Number(shape.bmMemoryGb || 0);
+  if (shape.bareMetal && bmOcpu > 0 && (specOcpu > 0 || specMem > 0)) {
+    servers = 1;
+    ocpu = bmOcpu;
+    mem = bmMem;
+    overflows = specOcpu > bmOcpu || (bmMem > 0 && specMem > bmMem);
+  }
   const cRate = Number(shape.computeRate || 0);
   const mRate = Number(shape.memoryRate || 0);
   const ocpuMonthly = round2(ocpu * hours * cRate);
   const memMonthly = round2(mem * hours * mRate);
   const lbl = shape.shortLabel || shape.label;
+  const bmNote = servers
+    ? ` Bare metal is a dedicated physical machine, so ${shape.label} `
+      + `(${bmOcpu} OCPU / ${bmMem} GB) is billed at its full fixed size for a VM spec'd at `
+      + `${specOcpu} OCPU / ${specMem} GB.`
+      + (overflows
+        ? ` This VM does NOT fit the box - a VM cannot span two machines. Choose a larger shape or split it.`
+        : "")
+    : "";
   row.lineItems = [
     { sku: shape.computeSku || "", description: `OCI Compute ${lbl} - OCPU`, quantity: ocpu,
       unit: "OCPU Per Hour", rate: cRate, monthly: ocpuMonthly,
-      mapping: `Re-mapped to ${shape.label}: ${ocpu} OCPU x ${hours} hrs x $${cRate}/OCPU-hr.` },
+      mapping: `Re-mapped to ${shape.label}: ${ocpu} OCPU x ${hours} hrs x $${cRate}/OCPU-hr.${bmNote}` },
     { sku: shape.memorySku || "", description: `OCI Compute ${lbl} - Memory`, quantity: mem,
       unit: "Gigabyte Per Hour", rate: mRate, monthly: memMonthly,
-      mapping: `Re-mapped to ${shape.label}: ${mem} GB x ${hours} hrs x $${mRate}/GB-hr.` },
+      mapping: `Re-mapped to ${shape.label}: ${mem} GB x ${hours} hrs x $${mRate}/GB-hr.${bmNote}` },
   ];
   row.monthly = round2(ocpuMonthly + memMonthly);
   row.annual = round2(row.monthly * 12);
   row.shapeUsed = shape;
   row.specs.ocpus = ocpu;
   row.specs.memoryGb = mem;
-  row.ociProduct = `OCI Compute VM - ${lbl} (${ocpu} OCPU / ${mem} GB)`;
+  row.specs.specOcpus = specOcpu;
+  row.specs.specMemoryGb = specMem;
+  row.bareMetalServers = servers;
+  // Mirror the server's oci_size_check: a VM larger than the box is an impossible mapping, and
+  // the results table pins impossible rows to the top until they are dealt with.
+  if (servers) {
+    row.sizeCheck = overflows
+      ? { status: "impossible", shape: shape.label,
+          message: `This workload does not fit ${shape.label} (${bmOcpu} OCPU / ${bmMem} GB). `
+            + `Bare metal is a single physical machine - one VM cannot span two boxes. `
+            + `Choose a larger shape, or split the workload.` }
+      : { status: "ok", shape: shape.label };
+  }
+  row.ociProduct = servers
+    ? `OCI Bare Metal - ${lbl} (${ocpu} OCPU / ${mem} GB)`
+    : `OCI Compute VM - ${lbl} (${ocpu} OCPU / ${mem} GB)`;
   if (row.fullServiceMapping) row.fullServiceMapping.ociProduct = row.ociProduct;
 }
 
@@ -4691,7 +5052,16 @@ function computeShapeBadge(row) {
   if (ocpus <= 0) return "";
   const shape = row.shapeUsed?.shortLabel || row.shapeUsed?.label;
   if (!shape) return "";
-  return ` <span class="shape-map-badge" title="OCI shape mapped for this compute line">${escapeHtml(shape)}</span>`;
+  // A bare-metal line bills whole physical servers, so the badge names how many. This table
+  // has no OCPU column, so the billed size and the spec'd size are spelled out beside it.
+  const servers = Number(row.bareMetalServers || 0);
+  const label = servers > 1 ? `${servers} x ${shape}` : shape;
+  const badge = ` <span class="shape-map-badge" title="OCI shape mapped for this compute line">${escapeHtml(label)}</span>`;
+  if (!servers) return badge;
+  const spec = Number(row.specs?.specOcpus || 0);
+  const size = `${formatNumber(ocpus)} OCPU billed${spec && spec !== ocpus ? ` (was ${formatNumber(spec)})` : ""}`;
+  const why = `Bare metal is billed as a whole physical server: ${servers} x ${row.shapeUsed?.label || shape}.`;
+  return `${badge} <span class="spec-was" title="${escapeHtml(why)}">${escapeHtml(size)}</span>`;
 }
 
 function mappingFlagBadge(row) {
@@ -4729,6 +5099,23 @@ function applyCostOverride(rowId, value) {
   if (value === "estimate" || !value) delete state.costOverrides[rowId];
   else state.costOverrides[rowId] = value;
   priceRows({ keepView: true });
+}
+
+// "(was 288)" - the size the workload asked for, shown small beside the size it is actually
+// billed at. They differ when the row was put on bare metal: a bare-metal shape is a whole
+// physical box, so the row bills the server's OCPU/RAM, not the workload's.
+function wasNote(row, billedKey, specKey, unit = "") {
+  const specs = row?.specs || {};
+  const billed = Number(specs[billedKey] || 0);
+  const spec = Number(specs[specKey]);
+  if (!Number.isFinite(spec) || spec <= 0) return "";
+  if (Math.abs(spec - billed) < 0.0001) return "";
+  const servers = Number(row.bareMetalServers || 0);
+  const box = row.shapeUsed?.label || "bare metal";
+  const why = servers
+    ? `Billed at the full fixed size of ${servers > 1 ? `${servers} x ` : ""}${box} - bare metal is a dedicated physical machine. Spec'd size was ${formatNumber(spec)}${unit}.`
+    : `Spec'd size was ${formatNumber(spec)}${unit}.`;
+  return ` <span class="spec-was" title="${escapeHtml(why)}">(was ${formatNumber(spec)}${unit})</span>`;
 }
 
 function sizeFlagBadge(row) {
@@ -4924,13 +5311,13 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false, co
       key: "ocpus",
       label: "OCPUs",
       sortValue: (row) => Number(row.specs?.ocpus || 0),
-      render: (row) => formatNumber(row.specs?.ocpus),
+      render: (row) => formatNumber(row.specs?.ocpus) + wasNote(row, "ocpus", "specOcpus"),
     },
     {
       key: "memory",
       label: "Memory",
       sortValue: (row) => Number(row.specs?.memoryGb || 0),
-      render: (row) => `${formatNumber(row.specs?.memoryGb)} GB`,
+      render: (row) => `${formatNumber(row.specs?.memoryGb)} GB${wasNote(row, "memoryGb", "specMemoryGb", " GB")}`,
     },
     {
       key: "storage",
@@ -4981,8 +5368,22 @@ if (els.resultsTable) {
     const button = event.target.closest("[data-result-sort]");
     if (!button) return;
     const key = button.dataset.resultSort;
-    const direction = state.resultSort.key === key && state.resultSort.direction === "asc" ? "desc" : "asc";
-    state.resultSort = { key, direction };
+    const current = normalizeResultSort(state.resultSort);
+    const at = current.findIndex((s) => s.key === key);
+    if (event.shiftKey) {
+      // Build the chain: add as the next tie-breaker, reverse it, then drop just this key.
+      if (at === -1) current.push({ key, direction: "asc" });
+      else if (current[at].direction === "asc") current[at].direction = "desc";
+      else current.splice(at, 1);
+      state.resultSort = current;
+    } else {
+      // Sort by this column alone, cycling asc -> desc -> back to document order.
+      const wasOnlyKey = at === 0 && current.length === 1;
+      const next = wasOnlyKey
+        ? (current[0].direction === "asc" ? "desc" : null)
+        : "asc";
+      state.resultSort = next ? [{ key, direction: next }] : [];
+    }
     rerenderResultsTable();
   });
   // Editable shape / shape-family dropdowns -> set per-row override and re-price.
@@ -5239,6 +5640,53 @@ if (els.sizingSwitch) {
     state.rightsize = next;
     syncSizingModeUi();
     // Sizing changes the OCPU/RAM behind every line, so the existing estimate is stale.
+    repriceIfEstimated();
+  });
+}
+
+// Auto (like-for-like) shape mapping. This lived on the shape page before and is back: it maps
+// each workload onto its OWN processor family's OCI shape (Intel -> Intel, AMD -> AMD, Arm ->
+// Arm) instead of putting the whole estate on the single shape selected above. The family comes
+// from the source instance type on a cloud bill, or the CPU / chipset column on an on-prem
+// inventory, so it works in every intake mode. A per-row OCI Shape override still wins.
+function syncMappingModeUi() {
+  const auto = !!state.autoMap;
+  const tier = state.autoTier === "top" ? "top" : "best";
+  document.querySelectorAll(".mapping-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", (b.dataset.mapping === "auto") === auto);
+  });
+  document.querySelectorAll(".mapping-tier-switch .mode-opt").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.maptier === tier);
+  });
+  if (els.mappingTierSwitch) els.mappingTierSwitch.hidden = !auto;
+  if (els.mappingModeHint) {
+    els.mappingModeHint.textContent = !auto
+      ? "Every workload uses the shape selected above"
+      : tier === "top"
+        ? "Each workload maps to the newest OCI shape for its own CPU family"
+        : "Each workload maps to the OCI shape matching its own CPU family and generation";
+  }
+}
+if (els.mappingSwitch) {
+  els.mappingSwitch.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-mapping]");
+    if (!btn) return;
+    const next = btn.dataset.mapping === "auto";
+    if (next === !!state.autoMap) return;
+    state.autoMap = next;
+    syncMappingModeUi();
+    // Mapping changes which shape (and therefore which rate) every line prices on.
+    repriceIfEstimated();
+  });
+}
+if (els.mappingTierSwitch) {
+  els.mappingTierSwitch.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-maptier]");
+    if (!btn) return;
+    const next = btn.dataset.maptier === "top" ? "top" : "best";
+    if (next === state.autoTier) return;
+    state.autoTier = next;
+    syncMappingModeUi();
     repriceIfEstimated();
   });
 }
