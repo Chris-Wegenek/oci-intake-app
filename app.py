@@ -2740,13 +2740,19 @@ def resolve_sheet_choice(excel_file, sheet_override=""):
 
 
 def parse_workbook_rule_based(path, full_service_beta=False, sheet_override=""):
-    # RVTools exports have their own parser and their own fixed schema. An explicit sheet
-    # choice from the Review header wins over that auto-detection, though - the user naming
-    # a sheet is a stronger signal than the workbook looking like an RVTools export.
-    if not clean_text(sheet_override):
-        rvtools = parse_rvtools_workbook(path, full_service_beta)
-        if rvtools:
-            return rvtools
+    # A confirmed RVTools export is ALWAYS read by the RVTools parser, and the sheet override
+    # never applies to it. The adapter exists because RVTools puts memory in MiB and VM disks
+    # on a separate vDisk sheet: pushing vInfo through the generic heuristics instead reads
+    # 65,536 MiB as 65,536 GB, loses the disk totals, and stops filtering template rows. That
+    # is a silently wrong BOM, so it is not something a dropdown should be able to select.
+    #
+    # parse_rvtools_workbook() returns None for anything that is not a confirmed RVTools table
+    # (vInfo or a compact extract carrying VM/Powerstate/CPUs/Memory), so sheet_override still
+    # governs every other workbook. The Review sheet picker is hidden for RVTools files rather
+    # than left there doing nothing - see renderSheetPicker() in static/app.js.
+    rvtools = parse_rvtools_workbook(path, full_service_beta)
+    if rvtools:
+        return rvtools
     excel_file = pd.ExcelFile(path)
     sheet = resolve_sheet_choice(excel_file, sheet_override)
     raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)

@@ -1753,6 +1753,19 @@ function renderSheetPicker(payload) {
   // report a single pseudo-sheet.
   const sheets = (payload?.visibleSheets || payload?.sheets || []).filter(Boolean);
   const current = payload?.sheetName || "";
+  label.title = "";
+  // A confirmed RVTools export is always read by the RVTools parser, from vInfo plus vDisk,
+  // whatever sheet is named - so a picker here would be a control that silently does nothing.
+  // Say why instead of offering it. (See parse_workbook_rule_based() in app.py.)
+  if (payload?.metadata?.parser === "rvtools") {
+    select.hidden = true;
+    label.hidden = false;
+    label.title =
+      "RVTools export: read by the RVTools parser from vInfo, with disk capacity summed from "
+      + "vDisk. The sheet cannot be changed - the generic reader would take memory in MiB as GB "
+      + "and lose the disk totals.";
+    return;
+  }
   if (sheets.length < 2 || !state.lastUploadFile) {
     select.hidden = true;
     label.hidden = false;
