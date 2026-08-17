@@ -951,6 +951,31 @@ SHAPE_LOOKUP = {shape["key"]: shape for shape in SHAPE_DEFINITIONS}
 # Best (newest) OCI shape per CPU vendor, used by the "Auto" mapping mode.
 BEST_SHAPE_BY_VENDOR = {"amd": "e6-standard-ax", "intel": "x12-standard-ax", "arm": "a4-standard-ax"}
 
+# Like-for-like CPU vendor detection from free text (a "CPU name" / "Chipset" / "Processor"
+# column on an on-prem inventory, e.g. "Intel(R) Xeon(R) Gold 6342"). Cloud bills get their
+# vendor from the instance-type mapping doc instead; this is the on-prem equivalent so Auto
+# mapping keeps Intel on Intel and AMD on AMD in every intake mode, not just cloud bills.
+# Order matters: Arm first, because "Ampere Altra" also carries no Intel/AMD token but a
+# Graviton string can mention "arm", and AMD before Intel so "AMD EPYC" never falls through.
+_CPU_VENDOR_PATTERNS = [
+    ("arm", re.compile(r"\b(ampere|altra|arm|aarch64|graviton|neoverse|cobalt)\b")),
+    ("amd", re.compile(r"\b(amd|epyc|opteron|ryzen|threadripper|milan|genoa|bergamo|turin|rome)\b")),
+    ("intel", re.compile(r"\b(intel|xeon|pentium|celeron|core i\d|skylake|cascade lake|ice lake|"
+                         r"sapphire rapids|emerald rapids|granite rapids|broadwell|haswell)\b")),
+]
+
+
+def detect_cpu_vendor(text):
+    """Best-effort OCI CPU vendor ('amd' | 'intel' | 'arm') from a processor description."""
+    blob = normalize(text)
+    if not blob:
+        return None
+    for vendor, pattern in _CPU_VENDOR_PATTERNS:
+        if pattern.search(blob):
+            return vendor
+    return None
+
+
 # Best Match -> equivalent-generation OCI shape for the source instance's chip era.
 # The defaults keep startup resilient, but the auditable source of truth is
 # data/processor_generation_mapping.json. Keeping the policy in data lets the shape refresh
@@ -1408,11 +1433,11 @@ def spreadsheet_cpu_label(label):
         return True
     # Ratios / rates / perf / architecture columns are NOT a CPU count (e.g. "vCPU:Core Ratio",
     # "Current vCPU:Core", "Uplift", "Target Perf") — exclude them so they aren't sized on.
-    if ":" in raw or any(term in text for term in ["chipset", "processor family", "cpu type", "architecture", "model", "vendor", "speed", "ghz", "clock", "utiliz", "percent", "ratio", "per core", "per socket", "uplift", "perf"]):
+    if ":" in raw or any(term in text for term in ["chipset", "processor family", "cpu type", "architecture", "model", "vendor", "speed", "ghz", "clock", "utiliz", "percent", "ratio", "per core", "per socket", "uplift", "perf", "factor", "licens", "licenc"]):
         return False
     if text in {"cpu", "cpus", "cores", "core", "vcpu", "vcpus"}:
         return True
-    return any(
+    if any(
         term in text
         for term in [
             "vcpu",
@@ -1428,7 +1453,16 @@ def spreadsheet_cpu_label(label):
             "cores per server",
             "core count",
         ]
-    )
+    ):
+        return True
+    # Everything above is a fixed phrase, so a header that says CPU in its own words -
+    # "Peak CPU Needed", "Physical Cores", "CPU Allocated" - read as NOT a CPU column at
+    # all. That is not just a mis-mapped column: pick_sheet() scores a sheet on whether it
+    # has a CPU column, so a workbook whose inventory sheet phrased it that way lost to a
+    # sibling sheet and was never opened. The exclusions above have already removed the
+    # ratio / type / utilization / rate headers, so a survivor carrying a standalone CPU
+    # word is a count.
+    return bool({"cpu", "cpus", "ocpu", "ocpus", "vcpu", "vcpus", "core", "cores"} & set(text.split()))
 
 
 def spreadsheet_memory_label(label):
@@ -1667,6 +1701,7 @@ def inventory_data_check(fields, rows):
                 break
         found.append({
             "key": key, "label": label, "column": col_label,
+            "columnKey": col_key,
             "populated": populated, "total": total,
             "present": bool(populated),
         })
@@ -1681,6 +1716,43 @@ def inventory_data_check(fields, rows):
         "applicationColumns": by["application"]["present"],
     }
     return {"signals": found, "capabilities": capabilities}
+
+
+# The Data Check resolves a server-name and an environment column with deliberately loose
+# needles ("name", "env"), so it reads headers the review table's phrase rules and the
+# estimate's find_key() lookups both miss - an abbreviated "Env", or a misspelled
+# "Enviornment Name". Tagging its answer onto the field makes that ONE resolution the
+# thing all three read, instead of three vocabularies disagreeing about the same column.
+# Same mechanism as cpu/memory/storageSourceLabel. Application is deliberately NOT tagged:
+# its needles match a version column ("App Version") that is not a name.
+IDENTITY_MARKER_BY_SIGNAL = {
+    "server": "machineSourceLabel",
+    "environment": "environmentSourceLabel",
+}
+
+
+def tag_identity_columns(fields, rows):
+    """Mark the server-name / environment columns the Data Check found, in place."""
+    if not fields or not rows:
+        return
+    try:
+        signals = inventory_data_check(fields, rows).get("signals") or []
+    except Exception:
+        return
+    by_key = {f.get("key"): f for f in fields if isinstance(f, dict)}
+    for signal in signals:
+        marker = IDENTITY_MARKER_BY_SIGNAL.get(signal.get("key"))
+        col_key = signal.get("columnKey")
+        if not marker or not col_key or not signal.get("present"):
+            continue
+        field = by_key.get(col_key)
+        if not field or field.get(marker):
+            continue
+        # Never re-label a column already carrying sizing duty - a header like "Server Name
+        # (cores)" must stay the CPU column.
+        if any(field.get(m) for m in ("cpuSourceLabel", "memorySourceLabel", "storageSourceLabel")):
+            continue
+        field[marker] = clean_text(field.get("sourceHeader") or field.get("label"))
 
 
 def header_unit_factor_to_gb(label):
@@ -2207,6 +2279,16 @@ def pick_sheet(excel_file):
         has_cpu = any(spreadsheet_cpu_label(c) for c in header_cells)
         has_mem = any(spreadsheet_memory_label(c) for c in header_cells)
         has_storage = any(spreadsheet_storage_label(c) for c in header_cells)
+        # A sheet that also names the applications it runs is more likely to be THE
+        # inventory than a sibling carrying only sizing - and this is usually the
+        # tie-break when a workbook holds a revised sheet next to the one it was copied
+        # from. "Application Details" is a section heading over a memory/storage block,
+        # not an application name, so it does not count.
+        if any(
+            _header_has_words(n, ["application"]) and "details" not in n
+            for n in (normalize(c) for c in header_cells)
+        ):
+            score += 4
         if has_cpu:
             score += 6
         if has_mem:
@@ -2223,6 +2305,14 @@ def pick_sheet(excel_file):
         for row_idx in range(min(80, len(raw.index))):
             numeric_cells += sum(1 for value in raw.iloc[row_idx].tolist() if to_number(value, 0))
         score += min(12, numeric_cells // 8)
+        # Tie-break toward the leftmost visible tab. When someone revises an inventory they
+        # put the revision in front of the sheet it was copied from, and the two score
+        # almost identically BECAUSE they are near-copies - so which one gets parsed comes
+        # down to noise. Deliberately small: every substantive signal above is worth more
+        # (has_cpu 6, has_mem 6, CPU+memory together 10 plus up to 40 for row count), so
+        # this settles a tie and never outvotes a sheet that carries more inventory.
+        if name == names[0]:
+            score += 3
         if score > best_score:
             best_name = name
             best_score = score
@@ -2412,9 +2502,24 @@ def looks_like_comparison_bom(sheet_names):
     return hits >= 2
 
 
-def parse_workbook_rule_based(path, full_service_beta=False):
+def resolve_sheet_choice(excel_file, sheet_override=""):
+    """The sheet to parse: the one the user picked in the Review header's sheet dropdown
+    when it names a real visible sheet, otherwise pick_sheet()'s automatic choice."""
+    wanted = clean_text(sheet_override)
+    if wanted:
+        names = visible_sheet_names(excel_file)
+        if wanted in names:
+            return wanted
+        target = normalize(wanted)
+        for name in names:
+            if normalize(name) == target:
+                return name
+    return pick_sheet(excel_file)
+
+
+def parse_workbook_rule_based(path, full_service_beta=False, sheet_override=""):
     excel_file = pd.ExcelFile(path)
-    sheet = pick_sheet(excel_file)
+    sheet = resolve_sheet_choice(excel_file, sheet_override)
     raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
     group_row, header_row, data_start = detect_header_rows(raw)
     fields = build_fields(raw, group_row, header_row)
@@ -2501,6 +2606,9 @@ def parse_workbook_rule_based(path, full_service_beta=False):
         "fileName": Path(path).name,
         "sheetName": sheet,
         "sheets": excel_file.sheet_names,
+        # Hidden sheets are excluded: the Review header's sheet dropdown only offers what
+        # the person can actually see in Excel.
+        "visibleSheets": visible_sheet_names(excel_file, path),
         "fields": fields,
         "rows": rows,
         "rateCard": build_rate_card(DEFAULT_SHAPE_KEY, full_service_beta),
@@ -2893,8 +3001,15 @@ def normalize_planned_inventory_value(key, value, mapping):
     return normalize_inventory_value(key, value)
 
 
-def parse_workbook_from_plan(path, plan, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM):
+def parse_workbook_from_plan(path, plan, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, sheet_override=""):
     excel_file = pd.ExcelFile(path)
+    # The sheet dropdown is an explicit instruction from the person reading the result, so
+    # it outranks the sheet the AI plan chose. The plan's column mappings were derived from
+    # a different sheet, but validated_column_mappings() re-checks every one of them against
+    # the sheet actually being read and drops those that no longer line up.
+    if clean_text(sheet_override):
+        plan = dict(plan)
+        plan["sheetName"] = resolve_sheet_choice(excel_file, sheet_override)
     raw = pd.read_excel(path, sheet_name=plan["sheetName"], header=None, dtype=object)
     header_rows = plan["headerRows"] or [max(1, plan["dataStartRow"] - 1)]
     mappings = validated_column_mappings(
@@ -3015,6 +3130,7 @@ def parse_workbook_from_plan(path, plan, full_service_beta=False, intake_mode=IN
         "fileName": Path(path).name,
         "sheetName": plan["sheetName"],
         "sheets": excel_file.sheet_names,
+        "visibleSheets": visible_sheet_names(excel_file, path),
         "fields": fields,
         "rows": rows,
         "rateCard": build_rate_card(DEFAULT_SHAPE_KEY, full_service_beta),
@@ -3553,6 +3669,7 @@ def parse_azure_service_mapping_table(path, sheet_name, raw, provider_hint=PROVI
         "fileName": Path(path).name,
         "sheetName": sheet_name,
         "sheets": sheet_names or [sheet_name],
+        "visibleSheets": sheet_names or [sheet_name],
         "fields": fields,
         "rows": rows,
         "rateCard": build_rate_card(DEFAULT_SHAPE_KEY, True),
@@ -3954,6 +4071,11 @@ def _apply_bare_metal_packing(priced_rows, totals, shape_key, hours):
         for r in priced_rows:
             key = ((r.get("shapeUsed") or {}).get("key")) or shape_key
             if not _selected_bare_metal(key):
+                continue
+            # A row put on bare metal by hand already bills whole servers of its own (see the
+            # bare_metal_servers block in calculate_pricing), so it is not in the shared pool -
+            # packing it again would charge its unused remainder twice.
+            if float(r.get("bareMetalServers") or 0) > 0:
                 continue
             specs = r.get("specs") or {}
             p = pools.setdefault(key, {"ocpu": 0.0, "mem": 0.0, "rows": []})
@@ -4502,17 +4624,42 @@ SHAPE_KEY_TO_OCI = {
 }
 
 
-def oci_size_check(shape_key, ocpus, memory_gb):
+def oci_size_check(shape_key, ocpus, memory_gb, vm_ocpus=None, vm_memory_gb=None):
     """Classify a single VM's size against the selected OCI shape.
 
     Returns dict: status = ok | baremetal | impossible, with the fitting shape and a message.
     'baremetal' means it overflows the selected flex shape but fits an OCI bare-metal shape;
     'impossible' means it exceeds every OCI shape for that CPU vendor.
+
+    `vm_ocpus`/`vm_memory_gb` are the LARGEST SINGLE VM on the row, which matters only for
+    bare metal: `ocpus`/`memory_gb` may be a row total covering several servers.
     """
-    # A bare-metal shape was selected for the estimate: the workload is placed on whole
-    # physical servers (as many as it needs), so there's nothing to overflow.
+    # A bare-metal shape is one dedicated physical machine. One VM runs on one box - a VM
+    # bigger than the box cannot be spread across two, so it simply does not fit. (The row
+    # total is irrelevant here: five 8-OCPU servers fit fine on five boxes; one 288-OCPU VM
+    # fits nowhere smaller than itself.)
     _bm_sel = SHAPE_LOOKUP.get(shape_key) or {}
     if _bm_sel.get("bareMetal"):
+        _o = float((vm_ocpus if vm_ocpus is not None else ocpus) or 0)
+        _m = float((vm_memory_gb if vm_memory_gb is not None else memory_gb) or 0)
+        _box_o = float(_bm_sel.get("bmOcpu") or 0)
+        _box_m = float(_bm_sel.get("bmMemoryGb") or 0)
+        if (_box_o and _o > _box_o) or (_box_m and _m > _box_m):
+            _over = []
+            if _box_o and _o > _box_o:
+                _over.append(f"{_o:g} OCPU > {_box_o:g}")
+            if _box_m and _m > _box_m:
+                _over.append(f"{_m:g} GB > {_box_m:g} GB")
+            return {
+                "status": "impossible",
+                "shape": _bm_sel.get("label"),
+                "message": (
+                    f"This workload does not fit {_bm_sel.get('label')} "
+                    f"({_box_o:g} OCPU / {_box_m:g} GB): {', '.join(_over)}. Bare metal is a "
+                    f"single physical machine - one VM cannot span two boxes. Choose a larger "
+                    f"shape, or split the workload."
+                ),
+            }
         return {"status": "ok", "shape": _bm_sel.get("label")}
     info = SHAPE_KEY_TO_OCI.get(shape_key)
     if not info:
@@ -7588,12 +7735,13 @@ def filter_bill_record_types(rows):
     return kept or rows
 
 
-def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
+def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO, sheet_override=""):
     suffix = Path(path).suffix.lower()
     if suffix == ".pdf":
         return parse_pdf_cloud_bill(path, provider_hint)
 
     candidate_tables = []
+    all_visible = []
     if suffix in {".csv", ".tsv"}:
         raw = read_bill_table(path)
         header_row = detect_cloud_header_row(raw)
@@ -7602,7 +7750,11 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
     else:
         excel_file = pd.ExcelFile(path)
         dedicated_parsed = None
-        visible_sheets = visible_sheet_names(excel_file, path)
+        all_visible = visible_sheet_names(excel_file, path)
+        # A picked sheet narrows the scan to that one sheet; otherwise every visible sheet
+        # is a candidate and the best-scoring one wins, as before.
+        picked = resolve_sheet_choice(excel_file, sheet_override) if clean_text(sheet_override) else ""
+        visible_sheets = [picked] if picked else all_visible
         for sheet in visible_sheets:
             raw = read_bill_table(path, sheet)
             if dedicated_parsed is None:
@@ -7616,6 +7768,7 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
     if not candidate_tables:
         raise ValueError("No bill rows were found.")
 
+    all_visible_for_payload = all_visible or [item[0] for item in candidate_tables]
     sheet_name, raw, header_row, headers = max(candidate_tables, key=lambda item: cloud_header_score(item[3]))
     data_start_idx = header_row + 1
     sample_values = [raw.iloc[idx].tolist() for idx in range(data_start_idx, min(len(raw.index), data_start_idx + 12))]
@@ -7693,6 +7846,7 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO):
         "fileName": Path(path).name,
         "sheetName": sheet_name,
         "sheets": [item[0] for item in candidate_tables],
+        "visibleSheets": all_visible_for_payload,
         "fields": fields,
         "rows": rows,
         "rateCard": build_rate_card(DEFAULT_SHAPE_KEY, True),
@@ -7808,9 +7962,9 @@ def _reconcile_onprem_sizing(result, baseline):
     return result
 
 
-def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, provider_hint=PROVIDER_AUTO):
+def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, provider_hint=PROVIDER_AUTO, sheet_override=""):
     if intake_mode == INTAKE_MODE_CLOUD_BILL:
-        parsed = parse_cloud_bill(path, provider_hint)
+        parsed = parse_cloud_bill(path, provider_hint, sheet_override)
         metadata = parsed.setdefault("metadata", {})
         metadata["llmBillMappingNeeded"] = bool(metadata.get("unmappedCount"))
         if not metadata["llmBillMappingNeeded"]:
@@ -7833,7 +7987,7 @@ def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PRE
     baseline = None
     baseline_error = None
     try:
-        baseline = parse_workbook_rule_based(path, full_service_beta)
+        baseline = parse_workbook_rule_based(path, full_service_beta, sheet_override)
         baseline.setdefault("metadata", {})["reviewSchema"] = list(FIXED_REVIEW_SCHEMA)
         baseline["metadata"]["aiAssisted"] = False
     except Exception as exc:
@@ -7868,7 +8022,7 @@ def parse_workbook(path, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PRE
         plan, llm_warning = call_llm_workbook_plan(path, full_service_beta)
         if plan:
             candidate = parse_workbook_from_plan(
-                path, plan, full_service_beta, intake_mode
+                path, plan, full_service_beta, intake_mode, sheet_override
             )
             result = validate_ai_inventory_scrub(candidate, baseline)
             # The AI plan sometimes maps the wrong CPU column (e.g. a raw-vCPU or vCPU:Core-ratio
@@ -8014,11 +8168,17 @@ def ocpus_for_review_value(fields, key, value):
 FRACTIONAL_OCPU_SHAPES = {"a1-standard", "a2-standard"}
 
 
-def round_ocpu_for_shape(ocpu, shape_key):
+def round_ocpu_for_shape(ocpu, shape_key, round_up=False):
     """OCI OCPU granularity rules (per VM):
       - A1 / A2 (Ampere) allow half OCPUs -> snap to the nearest 0.5.
-      - Every other shape needs whole OCPUs: anything below 1 rounds UP to 1,
-        and 1 or more rounds DOWN to the whole number (e.g. 1.5 -> 1)."""
+      - Every other shape needs whole OCPUs. Anything below 1 becomes 1 either way.
+
+    `round_up` picks the direction for the whole-OCPU case, and which is right depends on
+    what the number MEANS. An on-prem inventory figure is a requirement - 5.6 OCPU of
+    demand does not fit in 5, and flooring silently ships an under-provisioned quote (on a
+    right-sized sheet that is a ~10% shortfall per fractional row), so on-prem rounds UP,
+    which is what Oracle's own estimator does. A cloud bill's figure is consumption that
+    already happened, not a requirement, so it keeps flooring."""
     value = float(ocpu or 0)
     if value <= 0:
         return 0.0
@@ -8026,7 +8186,7 @@ def round_ocpu_for_shape(ocpu, shape_key):
         return round(value * 2) / 2
     if value < 1:
         return 1.0
-    return float(math.floor(value))
+    return float(math.ceil(round(value, 6)) if round_up else math.floor(value))
 
 
 def text_for(row, fields, contains, section=None):
@@ -8037,6 +8197,16 @@ def text_for(row, fields, contains, section=None):
 def text_for_exact(row, fields, labels):
     key = find_key_exact(fields, labels)
     return clean_text(row.get(key, "")) if key else ""
+
+
+def text_for_marker(row, fields, marker):
+    """Read the column tagged by tag_identity_columns() - see IDENTITY_MARKER_BY_SIGNAL."""
+    for field in fields or []:
+        if isinstance(field, dict) and field.get(marker):
+            value = clean_text(row.get(field.get("key"), ""))
+            if value:
+                return value
+    return ""
 
 
 def rate(sku, rate_card):
@@ -8576,10 +8746,52 @@ def full_service_line_items(row, fields, rate_card=None):
     return [line_item], mapping, []
 
 
-def detect_cpu_unit(fields):
-    """Auto-detect whether the uploaded CPU column holds vCPUs or OCPUs from its
-    original header text. Falls back to 'vcpu' (the app's default assumption) when the
-    header is ambiguous (e.g. just 'CPUs')."""
+# Named virtualization platforms. A sheet that mentions one is describing guest VMs, and a
+# guest's "CPUs" is its vCPU count (RVTools' CPUs column is exactly that) - so halving to
+# OCPUs is right THERE. Deliberately platform names only: the bare token "vm" is not a cue,
+# because a "Physical vs Virtual" column routinely carries values like "Physical/VM" meaning
+# "either", and reading that as virtualized would halve a physical server's cores.
+_VIRTUALIZATION_CUES = (
+    "vmware", "esx", "esxi", "vsphere", "vcenter", "rvtools",
+    "hyper v", "hyperv", "nutanix", "proxmox", "xenserver", "xen server",
+    "citrix hypervisor", "hypervisor", "oracle vm", "ovm", "virtual machine", "vmdk",
+    "datastore", "guest os", "vm host", "esx host",
+)
+
+
+def _mentions_virtualization(fields, rows=None):
+    """True when the sheet names a virtualization platform, in a header or in the data."""
+    def hit(text):
+        return any(_header_has_words(text, [cue]) for cue in _VIRTUALIZATION_CUES)
+
+    for f in fields or []:
+        if isinstance(f, dict) and hit(normalize(f.get("sourceHeader") or f.get("label") or "")):
+            return True
+    # Values matter as much as headers: "Physical vs Virtual" says nothing on its own, but a
+    # column of "VMware ESXi 7.0" does. Bounded scan - the cue repeats on every row.
+    for row in (rows or [])[:200]:
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            if isinstance(key, str) and key.startswith("__"):
+                continue
+            text = normalize(value)
+            if text and not text.replace(".", "").isdigit() and hit(text):
+                return True
+    return False
+
+
+def detect_cpu_unit(fields, rows=None):
+    """Auto-detect whether the uploaded CPU column holds vCPUs or OCPUs.
+
+    An explicit header wins. Otherwise: an on-prem discovery sheet counts PHYSICAL cores,
+    and 1 OCPU = 1 physical core, so an ambiguous column ("CPUs", "Peak CPU Needed") is
+    taken as OCPUs 1:1. The old fallback was vCPU, which halved every such column - and on
+    a sheet whose figures are already peak-derated or right-sized that halves a number the
+    author had ALREADY sized down, so the estate was quoted at roughly half the cores it
+    asked for. Halving is only correct when the count came from a guest VM, so it now takes
+    a positive signal: a vCPU-labelled header, or the sheet naming a hypervisor.
+    """
     for f in fields or []:
         if not isinstance(f, dict):
             continue
@@ -8595,7 +8807,9 @@ def detect_cpu_unit(fields):
         # halved like vCPUs. Only vcpu-labelled columns (above) are halved.
         if "core" in src:
             return "ocpu"
-    return "vcpu"
+    if _mentions_virtualization(fields, rows):
+        return "vcpu"
+    return "ocpu"
 
 
 def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_beta=False, intake_mode=INTAKE_MODE_ON_PREM, bom_match=False, hide_gpu_pricing=False, hide_windows_pricing=False, rightsize=False, auto=False, hours_per_month=None, source_provider=None, auto_tier="best", shape_overrides=None, cost_overrides=None, cpu_unit="auto", hours_override=False, oic_message_packs=None, hide_sql_pricing=False):
@@ -8606,7 +8820,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
     _cpu_unit = clean_text(cpu_unit).lower()
     if _cpu_unit not in ("auto", "vcpu", "ocpu"):
         _cpu_unit = "auto"
-    cpu_unit_resolved = detect_cpu_unit(fields) if _cpu_unit == "auto" else _cpu_unit
+    cpu_unit_resolved = detect_cpu_unit(fields, rows) if _cpu_unit == "auto" else _cpu_unit
     cpu_ocpu_mult = 2.0 if cpu_unit_resolved == "ocpu" else 1.0
     eff_hours = hours_per_month if (hours_per_month and hours_per_month > 0) else HOURS_PER_MONTH
     def _apply_rightsize(ocpu_value, mem_value, plan):
@@ -8697,6 +8911,14 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         "hours": find_key_any(
             fields,
             [["hours per month"], ["hours/month"], ["hours month"], ["monthly hours"], ["hours running"], ["running hours"], ["usage hours"], ["uptime hours"], ["hours"]],
+        ),
+        # Processor description, used by Auto mapping to keep an Intel workload on an Intel
+        # OCI shape (and AMD on AMD, Arm on Arm). Specific needles only: a bare "cpu" would
+        # grab the CPU-cores column, and "architecture" holds "x64", which names no vendor.
+        "chipset": find_key_any(
+            fields,
+            [["cpu name"], ["chipset"], ["processor family"], ["cpu model"], ["processor model"],
+             ["processor name"], ["cpu type"], ["processor type"], ["processor"], ["hardware family"]],
         ),
         "region": find_key_any(
             fields,
@@ -8842,7 +9064,8 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         # Source instance lookup (used for Best Match mapping, rightsize gen-gap, and
         # the source-cloud estimate). Computed once per row.
-        src_rec = lookup_cloud_shape(row_context(row, fields))
+        row_ctx = row_context(row, fields)
+        src_rec = lookup_cloud_shape(row_ctx)
 
         # Best Match (auto) maps each row to the best shape of its detected CPU vendor;
         # otherwise every row uses the selected shape. Determined up front so OCPU
@@ -8850,9 +9073,23 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         row_shape = selected_shape
         if auto:
             _v = (src_rec or {}).get("ociVendor")
+            # On-prem inventory (and any bill line that names no instance type) has no mapping-doc
+            # record, so read the CPU vendor off the row's processor column instead - otherwise
+            # Auto silently did nothing outside cloud-bill mode. When the sheet HAS a processor
+            # column, that column is the only thing trusted: scanning the whole row would let a
+            # hostname like "ARM-SRV01" decide the CPU family.
+            if _v not in BEST_SHAPE_BY_VENDOR:
+                _v = (detect_cpu_vendor(row.get(keys["chipset"])) if keys.get("chipset")
+                      else detect_cpu_vendor(row_ctx))
             if _v in BEST_SHAPE_BY_VENDOR:
-                if auto_tier == "top":
+                if auto_tier == "top" or not cloud_bill_mode or not src_rec:
                     # Top of the line: newest OCI shape for the vendor (E6 Ax / X12 Ax / A4 Ax).
+                    # Also the only honest answer off a cloud bill: generation matching keys off
+                    # the SOURCE INSTANCE TYPE, which on-prem inventory does not have. (A CMDB's
+                    # "Xeon Gold 6248R" carries a real generation, but nothing maps a Xeon SKU to
+                    # one - and lookup_cloud_shape can match a hostname by accident, which would
+                    # otherwise date a row off a coincidence.) Like-for-like on-prem therefore
+                    # means the same CPU family on OCI's current shape for it.
                     row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]]
                 else:
                     # Best match: equivalent-generation OCI shape for the source instance.
@@ -8867,8 +9104,10 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR.get(_v) or DEFAULT_SHAPE_KEY]
         # A per-row override (set from the editable results table) wins over everything.
         _override = (shape_overrides or {}).get(str(row.get("__id")))
+        _row_bm_override = False
         if _override and _override in SHAPE_LOOKUP:
             row_shape = SHAPE_LOOKUP[_override]
+            _row_bm_override = bool(row_shape.get("bareMetal"))
         row_shape_key = row_shape.get("key")
 
         # Rightsize plan: generation-gap OCPU/RAM reduction for this row's shape.
@@ -8901,11 +9140,14 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             # applied once across the whole estate (see _apply_bare_metal_packing), because one
             # physical server is shared by many workloads rather than dedicated to each row.
             ocpus, memory_gb = app_vm_ocpu, app_vm_mem
+            # A bill line is one resource, so the row is one VM of exactly this size.
+            vm_count, max_vm_ocpu, max_vm_mem = 1, app_vm_ocpu, app_vm_mem
         else:
             # OCPU: 2 vCPU = 1 OCPU, rounded per-VM; RAM floored like the BOM script.
             # Rightsize (gen-gap) reduction is then applied per VM before aggregating.
-            app_vm_ocpu = round_ocpu_for_shape(ocpus_for_review_value(fields, keys["app_cpu"], app_cpu), row_shape_key) if app_cpu else 0.0
-            db_vm_ocpu = round_ocpu_for_shape(ocpus_for_review_value(fields, keys["db_cpu"], db_cpu), row_shape_key) if db_cpu else 0.0
+            # round_up: an inventory figure is demand to be met, not usage already spent.
+            app_vm_ocpu = round_ocpu_for_shape(ocpus_for_review_value(fields, keys["app_cpu"], app_cpu), row_shape_key, round_up=True) if app_cpu else 0.0
+            db_vm_ocpu = round_ocpu_for_shape(ocpus_for_review_value(fields, keys["db_cpu"], db_cpu), row_shape_key, round_up=True) if db_cpu else 0.0
             app_vm_mem = math.floor(app_memory) if app_memory else 0.0
             db_vm_mem = math.floor(db_memory) if db_memory else 0.0
             original_ocpus = (app_servers * app_vm_ocpu if app_servers else 0.0) + (db_servers * db_vm_ocpu if db_servers else 0.0)
@@ -8919,6 +9161,45 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             db_ocpus = db_servers * db_vm_ocpu if db_servers else 0.0
             ocpus = app_ocpus + db_ocpus
             memory_gb = (app_servers * app_vm_mem if app_servers else 0.0) + (db_servers * db_vm_mem if db_servers else 0.0)
+            # An inventory row can stand for SEVERAL servers ("Number of Servers"), so bare
+            # metal needs the count of machines and the size of the biggest one - not the
+            # row total, which is the sum of them all.
+            vm_count = ((app_servers or 0) if (app_vm_ocpu or app_vm_mem) else 0) \
+                + ((db_servers or 0) if (db_vm_ocpu or db_vm_mem) else 0)
+            max_vm_ocpu = max(app_vm_ocpu or 0.0, db_vm_ocpu or 0.0)
+            max_vm_mem = max(app_vm_mem or 0.0, db_vm_mem or 0.0)
+
+        # Bare metal picked for THIS row (the OCI Shape dropdown on the results table) means the
+        # workload lands on dedicated physical machines. The size shown and the price charged
+        # become the BOX's fixed size - a bare-metal shape has one size, the one printed on its
+        # card - and the spec'd size is kept so the table can show it as "(was N)".
+        #
+        # ONE VM PER BOX. A row that stands for five servers gets five boxes; a single VM never
+        # gets two. A physical machine is not a cluster: a 288-OCPU VM cannot be spread across
+        # two 192-OCPU servers, so that combination is flagged impossible by oci_size_check
+        # rather than quietly rounded up into a number nobody can buy.
+        #
+        # A bare-metal shape selected GLOBALLY is deliberately left alone here: one box is shared
+        # by many workloads, so it is packed once across the estate in _apply_bare_metal_packing.
+        # Inflating every row there would multiply the estimate (a single t3a.large bill line
+        # would become a whole 192-OCPU server).
+        spec_ocpus, spec_memory_gb = ocpus, memory_gb
+        bare_metal_servers = 0
+        if _row_bm_override and (ocpus > 0 or memory_gb > 0):
+            _bm = _selected_bare_metal(row_shape_key)
+            if _bm:
+                _bm_ocpu, _bm_mem = _bm
+                bare_metal_servers = max(1, int(round(vm_count or 1)))
+                ocpus = bare_metal_servers * _bm_ocpu
+                memory_gb = bare_metal_servers * _bm_mem
+        bm_note = ""
+        if bare_metal_servers:
+            _each = f"{_bm_ocpu:g} OCPU / {_bm_mem:g} GB"
+            bm_note = (
+                f" Mapped to {bare_metal_servers} x {row_shape.get('label')} ({_each}"
+                f"{' each' if bare_metal_servers > 1 else ''}): bare metal is a dedicated "
+                f"physical machine billed at its full fixed size, one per server on this row, "
+                f"whatever the {spec_ocpus:g} OCPU / {spec_memory_gb:g} GB spec'd asks for.")
 
         # Per-server running hours: use an "hours running"/"hours per month" column if present,
         # otherwise the global hours setting (default 730).
@@ -8938,7 +9219,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 line_items,
                 ocpus,
                 memory_gb,
-                f"Spreadsheet CPU values are assumed to be vCPUs, shown in review as OCPUs using 2 vCPUs = 1 OCPU, then multiplied by {row_hours:g} monthly hours.",
+                (
+                    f"Spreadsheet CPU values are read as vCPUs and converted to OCPUs using 2 vCPUs = 1 OCPU, then multiplied by {row_hours:g} monthly hours.{bm_note}"
+                    if cpu_unit_resolved == "vcpu"
+                    else f"Spreadsheet CPU values are read as physical cores / OCPUs (1:1, not halved), rounded up to whole OCPUs, then multiplied by {row_hours:g} monthly hours.{bm_note}"
+                ),
                 row_hours,
                 shape=row_shape,
             )
@@ -9435,7 +9720,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     line_items,
                     0 if "OCPU-hour" in existing_units else ocpus,
                     0 if "GB-hour" in existing_units else memory_gb,
-                    "Cloud bill CPU/vCPU usage was normalized to OCPUs and priced using source usage hours when present.",
+                    "Cloud bill CPU/vCPU usage was normalized to OCPUs and priced using source usage hours when present." + bm_note,
                     usage_hours,
                     shape=row_shape,
                 )
@@ -9638,16 +9923,27 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         machine_name = (
             text_for(row, fields, ["machine name"])
             or text_for_exact(row, fields, ["name", "server name", "host name", "hostname", "vm name", "instance name"])
+            or text_for_marker(row, fields, "machineSourceLabel")
         )
+        # Machine name first. A row IS a machine, and one application routinely spans the
+        # whole estate - a 27-row discovery sheet for a single app named every workload,
+        # every Top Workloads bar and every diagram node "EBS", which identifies nothing.
+        # The machine name is the column that tells two rows apart; application_name is
+        # still emitted separately (and groups the architecture spokes), so nothing is lost.
         name = (
-            application_name
-            or machine_name
+            machine_name
+            or application_name
             or text_for(row, fields, ["database name"])
             or clean_text(row.get("source_service"))
             or clean_text(row.get("source_product"))
             or fallback_name
         )
-        environment = text_for(row, fields, ["environment"]) or clean_text(row.get("source_account")) or clean_text(row.get("source_region"))
+        environment = (
+            text_for(row, fields, ["environment"])
+            or text_for_marker(row, fields, "environmentSourceLabel")
+            or clean_text(row.get("source_account"))
+            or clean_text(row.get("source_region"))
+        )
         region = ""
         if keys.get("region"):
             region = clean_text(row.get(keys["region"], ""))
@@ -9669,7 +9965,10 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
 
         # Feasibility against the selected OCI shape, evaluated on the SAME total shown in the
         # row (specs.ocpus / specs.memoryGb) so the flag message matches the displayed size.
-        size_check = oci_size_check(row_shape_key, float(ocpus or 0), float(memory_gb or 0))
+        # Checked against the workload's OWN demand, not a bare-metal box sized around it. The
+        # per-VM figures are what a bare-metal shape is judged on - one machine holds one VM.
+        size_check = oci_size_check(row_shape_key, float(spec_ocpus or 0), float(spec_memory_gb or 0),
+                                    float(max_vm_ocpu or 0), float(max_vm_mem or 0))
         if size_check["status"] == "impossible":
             totals["impossibleRows"] += 1
         elif size_check["status"] == "baremetal":
@@ -9755,7 +10054,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "sqlLicenseMonthly": sql_license_monthly,
             "osDetected": "windows" if is_windows_row else "linux",
             "sourceCloudEstimate": source_cloud_estimate,
-            "rightsized": bool(rightsize and ((original_memory_gb and memory_gb != original_memory_gb) or (original_ocpus and ocpus != original_ocpus))),
+            "rightsized": bool(rightsize and ((original_memory_gb and spec_memory_gb != original_memory_gb) or (original_ocpus and spec_ocpus != original_ocpus))),
+            # > 0 when this row was explicitly put on bare metal and is billed as whole servers.
+            "bareMetalServers": bare_metal_servers,
             "originalMemoryGb": round(original_memory_gb, 4),
             "originalOcpus": round(original_ocpus, 4),
             "hoursPerMonth": row_hours,
@@ -9782,6 +10083,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 "memoryGb": round(memory_gb, 4),
                 "blockStorageGb": round(block_storage_gb, 4),
                 "fileStorageGb": round(file_storage_gb, 4),
+                # The size the workload actually asked for, before a bare-metal box was rounded
+                # up around it. Equal to ocpus/memoryGb unless this row is on bare metal; the
+                # results table shows the difference as "(was N)".
+                "specOcpus": round(spec_ocpus, 4),
+                "specMemoryGb": round(spec_memory_gb, 4),
             },
             "fullServiceMapping": full_service_mapping,
             "lineItems": line_items,
@@ -11250,6 +11556,10 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 self.headers.get("X-Provider-Hint")
                 or (query.get("providerHint") or [""])[0]
             )
+            sheet_override = clean_text(
+                unquote(self.headers.get("X-Sheet-Name") or "")
+                or (query.get("sheetName") or [""])[0]
+            )
             full_service_beta = (
                 intake_mode == INTAKE_MODE_CLOUD_BILL
                 or clean_text(
@@ -11300,6 +11610,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             file_item = form["file"]
             intake_mode = normalize_intake_mode(form.getvalue("intakeMode"))
             provider_hint = normalize_provider_hint(form.getvalue("providerHint"))
+            sheet_override = clean_text(form.getvalue("sheetName"))
             full_service_beta = (
                 intake_mode == INTAKE_MODE_CLOUD_BILL
                 or clean_text(form.getvalue("fullServiceBeta")).lower()
@@ -11349,7 +11660,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
         effective_hint = provider_hint if provider_hint != PROVIDER_AUTO else filename_guess
 
         try:
-            parsed = parse_workbook(saved_path, full_service_beta, intake_mode, effective_hint)
+            parsed = parse_workbook(saved_path, full_service_beta, intake_mode, effective_hint, sheet_override)
             parsed["fileName"] = filename
             parsed["uploadedPath"] = str(saved_path)
             # Warn when an already-built comparison/BOM workbook is dropped into cloud-bill
@@ -11365,6 +11676,9 @@ class IntakeHandler(BaseHTTPRequestHandler):
             # Quick pre-flight on every upload: what does this file actually contain?
             # Drives what the app will build vs. leave blank (never fabricate).
             if intake_mode != INTAKE_MODE_CLOUD_BILL:
+                # Tag first: the markers make the review table and the estimate read the
+                # same server-name / environment column the Data Check reports below.
+                tag_identity_columns(parsed.get("fields"), parsed.get("rows"))
                 try:
                     parsed["dataCheck"] = inventory_data_check(parsed.get("fields"), parsed.get("rows"))
                 except Exception:
