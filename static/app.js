@@ -1449,7 +1449,9 @@ function syncModeUi() {
   }
   // Cloud bill accepts several formats; Chrome can grey out CSV/TSV even when listed,
   // so don't filter at all here - the backend validates the file type on upload.
-  els.fileInput.accept = cloudBill ? "" : otherBill ? ".xlsx,.xls,.csv,.tsv,.json" : ".xlsx,.xls";
+  // On-prem inventories also come as CSV/TSV exports (discovery tools, CMDB dumps), and
+  // the backend parses those through the same header heuristics as an Excel sheet.
+  els.fileInput.accept = cloudBill ? "" : otherBill ? ".xlsx,.xls,.csv,.tsv,.json" : ".xlsx,.xls,.csv,.tsv";
   els.modeEyebrow.textContent = cloudBill ? "Cloud Bill" : otherBill ? "Other OCI Bill" : "On-Prem Inventory";
   els.uploadHeading.textContent = cloudBill
     ? "Upload Cloud Bill"

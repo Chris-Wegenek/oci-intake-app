@@ -2765,12 +2765,28 @@ def parse_workbook_rule_based(path, full_service_beta=False, sheet_override=""):
     # (vInfo or a compact extract carrying VM/Powerstate/CPUs/Memory), so sheet_override still
     # governs every other workbook. The Review sheet picker is hidden for RVTools files rather
     # than left there doing nothing - see renderSheetPicker() in static/app.js.
-    rvtools = parse_rvtools_workbook(path, full_service_beta)
-    if rvtools:
-        return rvtools
-    excel_file = pd.ExcelFile(path)
-    sheet = resolve_sheet_choice(excel_file, sheet_override)
-    raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
+    suffix = Path(str(path)).suffix.lower()
+    if suffix in {".csv", ".tsv"}:
+        # A CSV/TSV inventory is one sheet with no workbook around it - only the reader
+        # differs; header detection and the field heuristics below are shared with Excel.
+        # sep=None sniffs the delimiter for .csv (comma vs semicolon exports).
+        raw = pd.read_csv(path, header=None, dtype=object,
+                          sep="\t" if suffix == ".tsv" else None,
+                          engine="python", skip_blank_lines=False)
+        # The saved upload is prefixed with a timestamp (1787002241_quadgraphics.csv);
+        # strip it so the Review header shows the name the user actually uploaded.
+        sheet = re.sub(r"^\d{9,}_", "", Path(str(path)).stem)
+        sheet_names = [sheet]
+        visible_sheets = []  # nothing to pick - the Review sheet dropdown stays hidden
+    else:
+        rvtools = parse_rvtools_workbook(path, full_service_beta)
+        if rvtools:
+            return rvtools
+        excel_file = pd.ExcelFile(path)
+        sheet = resolve_sheet_choice(excel_file, sheet_override)
+        raw = pd.read_excel(path, sheet_name=sheet, header=None, dtype=object)
+        sheet_names = excel_file.sheet_names
+        visible_sheets = visible_sheet_names(excel_file, path)
     group_row, header_row, data_start = detect_header_rows(raw)
     fields = build_fields(raw, group_row, header_row)
     cpu_field_keys = set()
@@ -2855,10 +2871,10 @@ def parse_workbook_rule_based(path, full_service_beta=False, sheet_override=""):
     return {
         "fileName": Path(path).name,
         "sheetName": sheet,
-        "sheets": excel_file.sheet_names,
+        "sheets": sheet_names,
         # Hidden sheets are excluded: the Review header's sheet dropdown only offers what
-        # the person can actually see in Excel.
-        "visibleSheets": visible_sheet_names(excel_file, path),
+        # the person can actually see in Excel. Empty for CSV/TSV - there is nothing to pick.
+        "visibleSheets": visible_sheets,
         "fields": fields,
         "rows": rows,
         "rateCard": build_rate_card(DEFAULT_SHAPE_KEY, full_service_beta),
@@ -6720,14 +6736,23 @@ def normalize_azure_storage_units(row):
     """Azure managed-disk lines bill in disk-months; convert to provisioned GB
     (disk-months x tier GB, e.g. 29 P10 disks x 128 GB) so the OCI Block Volume
     pricer sees the real capacity. Snapshots already bill in GB, and disk-operation
-    lines are request counts - both are left untouched."""
+    lines are request counts - both are left untouched.
+
+    The tier code usually sits in MeterName ("P10 Disks"), but EA/MCA usage exports can
+    put a generic "Storage" there and carry the tier only in the Product string
+    ("Standard SSD Managed Disks - E4 - LRS - Disk"), so the product text is the
+    fallback - gated on "managed disks" so a VM size like E4s never reads as a disk."""
     meter = clean_text(row.get("__meterName"))
-    if not meter:
+    product_txt = " ".join(filter(None, [clean_text(row.get("source_service")),
+                                         clean_text(row.get("source_product"))]))
+    blob = f"{meter} {product_txt}".lower()
+    if not blob.strip():
         return
-    low = meter.lower()
-    if "operation" in low or "snapshot" in low or "transaction" in low or "disk" not in low:
+    if "operation" in blob or "snapshot" in blob or "transaction" in blob or "disk" not in blob:
         return
     gb = azure_disk_gb(meter)
+    if gb <= 0 and "managed disks" in blob:
+        gb = azure_disk_gb(product_txt)
     qty = to_number(row.get("usage_quantity"), 0)
     if gb <= 0 or qty <= 0:
         return
@@ -7021,7 +7046,29 @@ def block_perf_units_per_gb(*texts):
     return BLOCK_PERFORMANCE_UNITS_PER_GB
 
 
-def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, region="", usagetype="", perf_units_per_gb=None):
+def _count_meter_not_capacity(usage_unit, meter_text):
+    """True when a bill line is an operations/request COUNT that must not be priced as
+    storage capacity. Two signals, either suffices: the meter text says operations /
+    transactions with no byte-sized unit, or the unit of measure is a bare count bundle
+    ('10K', '1M', '10,000') - a capacity quantity always names bytes somewhere."""
+    unit_only = normalize(clean_text(usage_unit))
+    blob = normalize(clean_text(meter_text))
+    if "data stored" in blob:
+        return False
+    # Per-GB fee/volume meters are not stored capacity either: a GB written, read, or
+    # deleted early is a one-time event, not a GB held for a month. (Writes are free on
+    # OCI storage; retrieval/early-delete costs carry at source via the auto-carry rule.)
+    if re.search(r"data write|data read|data retrieval|early delete|data scanned", blob):
+        return True
+    byte_unit = re.search(r"\bgb\b|\bgib\b|\btb\b|\btib\b|\bmb\b|\bmib\b|byte", unit_only)
+    if byte_unit:
+        return False
+    if re.match(r"^[\d,\.]+\s*[km]?$", unit_only.replace(" ", "")):
+        return True
+    return bool(re.search(r"\boperations?\b|\btransactions?\b", blob))
+
+
+def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, region="", usagetype="", perf_units_per_gb=None, usage_unit="", meter_text=""):
     """Re-price a source-cloud usage quantity on the equivalent OCI service
     (same quantity x OCI rate). Returns a list of priced line items, or [].
 
@@ -7038,6 +7085,14 @@ def oci_service_usage_items(oci_product, usage_quantity, transfer_pools=None, re
     if svc and svc.get("basis") in ("waf", "logging", "dns", "reference"):
         return []
     if not svc or qty <= 0 or not svc.get("rate"):
+        return []
+    # A per-GB-month target fed an operations COUNT books each 10K-op bundle as a
+    # gigabyte-month ($12.61 of Azure disk operations became $1,072 of Block Volume).
+    # OCI does not bill storage per operation: price nothing here and let the auto-carry
+    # rule keep the source cost instead.
+    _svc_unit = normalize(svc.get("unit", ""))
+    if "month" in _svc_unit and re.search(r"\bgb\b|\btb\b", _svc_unit) \
+            and _count_meter_not_capacity(usage_unit, meter_text):
         return []
     chargeable = qty
     rate = svc["rate"]
@@ -8022,6 +8077,62 @@ def filter_bill_record_types(rows):
     return kept or rows
 
 
+# A bill this size is a daily export: the same meter shows up once per day, so a month is
+# ~31 identical lines per meter and a 400k-line file is really a few thousand meters. Below
+# this row count a bill passes through line-for-line, exactly as before.
+CLOUD_BILL_AGGREGATE_MIN_ROWS = 20000
+
+
+def aggregate_daily_bill_lines(bill_lines, headers, mappings):
+    """Collapse a daily-granularity bill to one line per unique meter.
+
+    Grouping identity is every column EXCEPT: the mapped quantity/cost columns (summed),
+    and date/time/price columns (first value kept - a per-day date would defeat the whole
+    point, and a tiered price that wobbles a fraction of a cent between days would split
+    groups). Sums are exact: total quantity and total cost are preserved to the input, so
+    hour-based pricing (computeUsageHours) sees the same monthly hours it would have seen
+    adding the daily lines one by one.
+
+    Returns (frame, first_source_index_list, line_count_list) - or (bill_lines, None, None)
+    when the table has no summable columns to aggregate on.
+    """
+    width = min(len(headers), bill_lines.shape[1])
+    norm = [normalize(clean_text(h)).replace(" ", "") for h in headers[:width]]
+    sum_idx = set()
+    for key in ("usage_quantity", "source_monthly_cost"):
+        m = mappings.get(key)
+        if m:
+            ci = m["sourceColumn"] - 1
+            if 0 <= ci < width:
+                sum_idx.add(ci)
+    if not sum_idx:
+        return bill_lines, None, None
+    first_idx = {
+        i for i, h in enumerate(norm)
+        if ("date" in h or "time" in h or "price" in h or "rate" in h)
+    } - sum_idx
+    key_idx = [i for i in range(width) if i not in sum_idx and i not in first_idx]
+    if not key_idx:
+        return bill_lines, None, None
+    df = bill_lines.iloc[:, :width].copy()
+    df["__origIdx"] = bill_lines.index
+    for ci in sum_idx:
+        df[ci] = pd.to_numeric(df[ci], errors="coerce").fillna(0.0)
+    # Blank cells must group together (dropna=False alone leaves NaN != NaN traps in
+    # object columns coming out of Excel), so normalize key columns to strings.
+    for ci in key_idx:
+        df[ci] = df[ci].map(clean_text)
+    grouped = df.groupby(key_idx, dropna=False, sort=False, as_index=False)
+    agg_map = {ci: "sum" for ci in sum_idx}
+    agg_map.update({ci: "first" for ci in first_idx})
+    agg_map["__origIdx"] = "min"
+    out = grouped.agg(agg_map)
+    counts = grouped.size()["size"].tolist()
+    orig_rows = out["__origIdx"].astype(int).tolist()
+    out = out[[i for i in range(width)]]
+    return out, orig_rows, counts
+
+
 def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO, sheet_override=""):
     suffix = Path(path).suffix.lower()
     if suffix == ".pdf":
@@ -8088,11 +8199,19 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO, sheet_override=""):
     rows = []
     rate_card = build_rate_card(DEFAULT_SHAPE_KEY, True)
     provider_label = detected_provider if detected_provider != "Unknown" else ""
-    for raw_idx in range(data_start_idx, len(raw.index)):
-        values = raw.iloc[raw_idx].tolist()
+    bill_lines = raw.iloc[data_start_idx:]
+    source_line_count = len(bill_lines.index)
+    agg_first_rows, agg_counts = None, None
+    if source_line_count >= CLOUD_BILL_AGGREGATE_MIN_ROWS:
+        bill_lines, agg_first_rows, agg_counts = aggregate_daily_bill_lines(bill_lines, headers, mappings)
+    for _pos in range(len(bill_lines.index)):
+        values = bill_lines.iloc[_pos].tolist()
         if not any(clean_text(value) for value in values):
             continue
+        raw_idx = agg_first_rows[_pos] if agg_first_rows else bill_lines.index[_pos]
         row = {"__id": f"bill-row-{raw_idx + 1}", "__sourceRow": raw_idx + 1, "__approved": True}
+        if agg_counts:
+            row["__aggregatedLines"] = agg_counts[_pos]
         for field in fields:
             mapping = mappings.get(field["key"])
             value = ""
@@ -8156,6 +8275,13 @@ def parse_cloud_bill(path, provider_hint=PROVIDER_AUTO, sheet_override=""):
             "columnCount": len(fields),
         },
     }
+    if agg_counts:
+        parsed["metadata"]["aggregatedFromLines"] = source_line_count
+        parsed["metadata"].setdefault("extractionNotes", []).append(
+            f"This bill is a daily export: {source_line_count:,} lines were aggregated into "
+            f"{len(rows):,} unique meter lines. Quantities and costs are the exact sums of "
+            f"the daily lines, so totals and hour-based pricing are unchanged."
+        )
     return parsed
 
 
@@ -8882,6 +9008,36 @@ def source_only_context(row):
     )
 
 
+def time_unit_hours_factor(unit_text):
+    """Hours per billed unit for a time-metered line, or None when the unit is not time.
+
+    Azure meters serverless compute in SECONDS ('1 Second' for Container Apps vCPU,
+    '1 GiB Second' for its memory). Priced as if the quantity were hours, that is a
+    3,600x overbilling - on a real bill $37/mo of vCPU-seconds priced as $85,519 of
+    OCPU-hours. The leading number is a bundle multiplier ('10 Seconds' = 10 s/unit)."""
+    u = normalize(clean_text(unit_text))
+    if not u:
+        return None
+    mult = 1.0
+    m = re.match(r"^([0-9][\d,\.]*)\s*(k|m)?\b", u)
+    if m:
+        try:
+            mult = float(m.group(1).replace(",", ""))
+        except ValueError:
+            mult = 1.0
+        if m.group(2) == "k":
+            mult *= 1_000
+        elif m.group(2) == "m":
+            mult *= 1_000_000
+    if re.search(r"\bsecs?\b|\bseconds?\b", u):
+        return mult / 3600.0
+    if re.search(r"\bmins?\b|\bminutes?\b", u):
+        return mult / 60.0
+    if re.search(r"\bhrs?\b|\bhours?\b", u):
+        return mult
+    return None
+
+
 def quantity_for_full_service_item(item, quantity_text, unit_text, context, row=None):
     if not clean_text(quantity_text):
         return 0.0
@@ -8897,6 +9053,12 @@ def quantity_for_full_service_item(item, quantity_text, unit_text, context, row=
         is_vcpu = not re.search(r"\bocpus?\b", unit_context) and bool(
             re.search(r"\bvcpus?\b|\bv cpu\b|\bvcores?\b|\bv core\b|\bcpus?\b|\bcores?\b", unit_context)
         )
+        # The bill's OWN unit of measure wins: a seconds/minutes-metered quantity
+        # (Azure Container Apps, Functions) converts to hours before OCPU pricing.
+        _tf = time_unit_hours_factor(unit_text)
+        if _tf is not None:
+            quantity = to_number(quantity_text, 0) * _tf
+            return quantity / 2 if is_vcpu else quantity
         if re.search(r"\bhrs?\b|\bhours?\b", unit_context):
             quantity = to_number(quantity_text, 0)
             return quantity / 2 if is_vcpu else quantity
@@ -8905,6 +9067,10 @@ def quantity_for_full_service_item(item, quantity_text, unit_text, context, row=
         resource_memory_gb = to_number(row.get("resource_memory_gb"), 0) if row else 0
         if resource_memory_gb and usage_quantity_is_hours(quantity_text, unit_text, context, row):
             return to_number(quantity_text, 0) * resource_memory_gb
+        # '1 GiB Second' (Container Apps memory) and friends: convert to GB-hours.
+        _tf = time_unit_hours_factor(unit_text)
+        if _tf is not None:
+            return to_number(quantity_text, 0) * _tf
         return meter_capacity_quantity(quantity_text, unit_context)
     if item["unit"] == "GB-month":
         return storage_gb_month_quantity(quantity_text, unit_text, context)
@@ -8983,6 +9149,18 @@ def full_service_line_items(row, fields, rate_card=None):
                         "monitor", "inventory", "replication", "apicall", "api call"]
         is_capacity = any(k in ut for k in ["timedstorage", "bytehrs", "storage", "gb-mo", "gbmo", "volumeusage", "snapshotusage"])
         if not is_capacity and any(k in ut for k in non_capacity):
+            quantity = 0
+    # Azure has no usageType column - its meter NAME carries the story ("All Other
+    # Operations", "Disk Operations", "Protocol Operations", unit "10K"). An operations /
+    # transactions meter is a COUNT: priced as GB-month it books each 10K-op bundle as a
+    # gigabyte-month ($12.61 of S4 disk operations became $1,072 of Block Volume on a real
+    # bill). OCI does not bill storage per operation, so these price $0 here and the
+    # source cost is carried by the auto-carry rule instead.
+    if quantity > 0 and "month" in normalize(item.get("unit")):
+        _meter_txt = " ".join(filter(None, [
+            service, product, clean_text(row.get("__meterName")), clean_text(row.get("__meterSub")),
+        ]))
+        if _count_meter_not_capacity(unit_text, _meter_txt):
             quantity = 0
     if quantity <= 0:
         note = f"{item['description']} was inferred, but no usable usage quantity was present for OCI pricing."
@@ -10018,7 +10196,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     })
                 elif is_capacity:
                     _perf = block_perf_units_per_gb(row.get("__usageType"), row.get("source_product"), row.get("__meterName"))
-                    line_items.extend(oci_service_usage_items(base, row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType"), _perf))
+                    line_items.extend(oci_service_usage_items(
+                        base, row.get("usage_quantity"), oci_transfer_pools,
+                        row.get("source_region"), row.get("__usageType"), _perf,
+                        usage_unit=row.get("usage_unit"),
+                        meter_text=" ".join(filter(None, [clean_text(row.get("source_service")), clean_text(row.get("source_product")), clean_text(row.get("__meterName")), clean_text(row.get("__meterSub"))]))))
                 sc = to_number(row.get("source_monthly_cost"), 0)
                 # Label every line of this service with its single OCI product so the
                 # results page always shows e.g. S3 -> OCI Object Storage.
@@ -10105,7 +10287,11 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             # rate) when nothing else priced this row (e.g. S3 GB -> OCI Object Storage GB).
             if cloud_bill_mode and sum(li.get("monthly", 0) for li in line_items) == 0:
                 _perf2 = block_perf_units_per_gb(row.get("__usageType"), row.get("source_product"))
-                line_items.extend(oci_service_usage_items(row.get("oci_product"), row.get("usage_quantity"), oci_transfer_pools, row.get("source_region"), row.get("__usageType"), _perf2))
+                line_items.extend(oci_service_usage_items(
+                    row.get("oci_product"), row.get("usage_quantity"), oci_transfer_pools,
+                    row.get("source_region"), row.get("__usageType"), _perf2,
+                    usage_unit=row.get("usage_unit"),
+                    meter_text=" ".join(filter(None, [clean_text(row.get("source_service")), clean_text(row.get("source_product")), clean_text(row.get("__meterName")), clean_text(row.get("__meterSub"))]))))
             fallback_items = line_items[fallback_start:]
             source_cost_value = full_service_mapping.get("sourceMonthlyCost", 0) if full_service_mapping else 0
             totals["sourceMonthlyCost"] += source_cost_value
@@ -11997,9 +12183,9 @@ class IntakeHandler(BaseHTTPRequestHandler):
             )
             return
 
-        allowed_suffixes = (".xlsx", ".xls", ".csv", ".tsv", ".pdf") if intake_mode == INTAKE_MODE_CLOUD_BILL else (".xlsx", ".xls")
+        allowed_suffixes = (".xlsx", ".xls", ".csv", ".tsv", ".pdf") if intake_mode == INTAKE_MODE_CLOUD_BILL else (".xlsx", ".xls", ".csv", ".tsv")
         if not filename.lower().endswith(allowed_suffixes):
-            message = "Please upload a PDF, CSV, TSV, or Excel bill export." if intake_mode == INTAKE_MODE_CLOUD_BILL else "Please upload an Excel workbook."
+            message = "Please upload a PDF, CSV, TSV, or Excel bill export." if intake_mode == INTAKE_MODE_CLOUD_BILL else "Please upload an Excel workbook or a CSV/TSV inventory export."
             self.send_error_json(400, message)
             return
 
