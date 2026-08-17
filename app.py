@@ -80,7 +80,18 @@ PROVIDER_AUTO = "auto"
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 OPENAI_DISABLED_MESSAGE = "OpenAI API calls are temporarily disabled."
 OPENAI_ACTIVE_FEATURES = ("inventory_scrub", "cloud_bill_mapping", "architecture", "other_oci_bill")
-MAX_DECOMPRESSED_UPLOAD_BYTES = 128 * 1024 * 1024
+# Decompression-bomb guard: the largest a request may inflate to. Everything is parsed in
+# memory, so this is a RAM ceiling, not just a wire limit - expect parsing to use several
+# times the file size. Locally it defaults to 512 MB and OIA_MAX_UPLOAD_MB overrides it
+# (e.g. OIA_MAX_UPLOAD_MB=1024 python app.py); on Vercel it stays at 128 MB, where the
+# platform's ~4.5 MB request gateway makes anything bigger unreachable anyway.
+_default_upload_mb = 128 if os.environ.get("VERCEL") else 512
+try:
+    _upload_mb = int(os.environ.get("OIA_MAX_UPLOAD_MB", "") or _default_upload_mb)
+except ValueError:
+    _upload_mb = _default_upload_mb
+MAX_DECOMPRESSED_UPLOAD_BYTES = max(1, _upload_mb) * 1024 * 1024
+MAX_UPLOAD_MB_LABEL = f"{MAX_DECOMPRESSED_UPLOAD_BYTES // (1024 * 1024)} MB"
 
 
 def openai_api_enabled():
@@ -2199,6 +2210,10 @@ def shape_payload(shape_key=None, full_service_beta=False):
         "bareMetal": bool(shape.get("bareMetal")),
         "bmOcpu": shape.get("bmOcpu"),
         "bmMemoryGb": shape.get("bmMemoryGb"),
+        # Flex shapes carry their hard per-VM ceiling so the client can cap a converted
+        # compute row the same way the server does. None for bare-metal shapes.
+        "maxOcpu": (_flex_shape_max(shape["key"]) or (None, None))[0],
+        "maxMemGb": (_flex_shape_max(shape["key"]) or (None, None))[1],
         "hoursPerMonth": HOURS_PER_MONTH,
         "rateCard": build_rate_card(shape["key"], full_service_beta),
     }
@@ -4972,6 +4987,43 @@ def _selected_bare_metal(shape_key):
     if s.get("bareMetal") and s.get("bmOcpu"):
         return float(s["bmOcpu"]), float(s.get("bmMemoryGb") or 0)
     return None
+
+
+def _flex_shape_max(shape_key):
+    """The selected FLEX shape's hard per-VM ceiling as (max_ocpu, max_mem_gb), or None for a
+    bare-metal shape / unknown key. Same source as oci_size_check: SHAPE_KEY_TO_OCI first,
+    then the vendor's flex tier for shapes without an explicit entry (the Ampere shapes)."""
+    s = SHAPE_LOOKUP.get(shape_key) or {}
+    if s.get("bareMetal"):
+        return None
+    info = SHAPE_KEY_TO_OCI.get(shape_key)
+    if info:
+        return float(info[1]), float(info[2])
+    vendor = s.get("processorVendor")
+    flex_tier = next((t for t in OCI_VENDOR_TIERS.get(vendor, []) if t.get("tier") == "flex"), None)
+    if flex_tier:
+        return float(flex_tier["maxOcpu"]), float(flex_tier["maxMem"])
+    return None
+
+
+def _fits_any_flex(vendor, vm_ocpu, vm_mem):
+    """True when a single VM of this size fits at least one of the vendor's flex shapes."""
+    for _sh, _mo, _mm, _vend in SHAPE_KEY_TO_OCI.values():
+        if _vend == vendor and vm_ocpu <= _mo and vm_mem <= _mm:
+            return True
+    return False
+
+
+def _smallest_fitting_bare_metal(vendor, vm_ocpu, vm_mem):
+    """The vendor's smallest bare-metal shape whose box holds ONE VM of this size, or None."""
+    fits = [
+        s for s in SHAPE_DEFINITIONS
+        if s.get("bareMetal") and s.get("processorVendor") == vendor
+        and float(s.get("bmOcpu") or 0) >= vm_ocpu and float(s.get("bmMemoryGb") or 0) >= vm_mem
+    ]
+    if not fits:
+        return None
+    return min(fits, key=lambda s: (float(s["bmOcpu"]), float(s.get("bmMemoryGb") or 0)))
 
 
 def _billed_bm_size(shape_key, vm_ocpu, vm_mem):
@@ -9337,9 +9389,10 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     _gen = _instance_generation(_prov, (src_rec or {}).get("instance"))
                     _key = equivalent_gen_shape_key(_prov, _v, _gen)
                     row_shape = SHAPE_LOOKUP.get(_key, SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR[_v]])
-            # Bare metal is never an automatic mapping target - a whole physical server is a
-            # deliberate choice, not a default. It's still SUGGESTED on the row when the sizing
-            # overflows every flex shape (see oci_size_check), and remains selectable by hand.
+            # Bare metal is never the DEFAULT automatic mapping target - a whole physical
+            # server is a last resort, not a starting point. Auto only lands a row on bare
+            # metal further down (the _auto_bm block), once its sizing proves the VM overflows
+            # every flex shape for the vendor; it remains selectable by hand everywhere.
             if row_shape.get("bareMetal"):
                 row_shape = SHAPE_LOOKUP[BEST_SHAPE_BY_VENDOR.get(_v) or DEFAULT_SHAPE_KEY]
         # A per-row override (set from the editable results table) wins over everything.
@@ -9423,9 +9476,29 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
         # by many workloads, so it is packed once across the estate in _apply_bare_metal_packing.
         # Inflating every row there would multiply the estimate (a single t3a.large bill line
         # would become a whole 192-OCPU server).
+        # AUTO MODE PICKS BARE METAL when nothing else can hold the VM. Auto (like-for-like)
+        # mapping chooses a flex shape per vendor, but a VM that overflows EVERY flex shape
+        # for its vendor has exactly one home: a dedicated physical machine. Map it onto the
+        # smallest bare-metal box that holds it, billed like a per-row bare-metal override
+        # (whole boxes, one VM per box), so the BARE METAL badge only ever appears on rows
+        # actually ON bare metal. A row that merely fits a LARGER flex shape is left alone -
+        # bare metal is the last resort, not an upgrade path. A manual per-row shape choice
+        # (any _override) always wins over this, and cloud-bill rows are excluded (their
+        # compute may re-price as a GPU shape later, which replaces flex line items).
+        _auto_bm = False
+        if (auto and not cloud_bill_mode and not _override and not row_shape.get("bareMetal")
+                and (max_vm_ocpu > 0 or max_vm_mem > 0)):
+            _vend = row_shape.get("processorVendor")
+            if not _fits_any_flex(_vend, max_vm_ocpu, max_vm_mem):
+                _bm_pick = _smallest_fitting_bare_metal(_vend, max_vm_ocpu, max_vm_mem)
+                if _bm_pick:
+                    row_shape = _bm_pick
+                    row_shape_key = _bm_pick["key"]
+                    _auto_bm = True
+
         spec_ocpus, spec_memory_gb = ocpus, memory_gb
         bare_metal_servers = 0
-        if _row_bm_override and (ocpus > 0 or memory_gb > 0):
+        if (_row_bm_override or _auto_bm) and (ocpus > 0 or memory_gb > 0):
             _bm = _selected_bare_metal(row_shape_key)
             if _bm:
                 _bm_ocpu, _bm_mem = _bm
@@ -9440,6 +9513,49 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 f"{' each' if bare_metal_servers > 1 else ''}): bare metal is a dedicated "
                 f"physical machine billed at its full fixed size, one per server on this row, "
                 f"whatever the {spec_ocpus:g} OCPU / {spec_memory_gb:g} GB spec'd asks for.")
+            if _auto_bm:
+                bm_note += (
+                    " Auto mapping chose bare metal because this VM exceeds every "
+                    f"{row_shape.get('processorVendor', '').upper()} flex shape.")
+
+        # A flex shape has a hard per-VM ceiling (VM.Standard.E6.Ax.Flex tops out at 94 OCPU /
+        # 712 GB), and a VM cannot be provisioned past it - billing 288 OCPU on a 94-OCPU shape
+        # is a number nobody can buy. Cap each VM at the shape's maximum and bill the capped
+        # size; the spec'd size is kept in specOcpus/specMemoryGb so the table shows "(was N)",
+        # the same treatment a bare-metal override gets. oci_size_check still runs on the
+        # SPEC'D size below, so the LARGER SHAPE / OVERSIZED badge stays on the row until a
+        # shape that actually fits is chosen - the cap changes what is billed, not the flag.
+        size_cap = None
+        cap_note = ""
+        if not bare_metal_servers and not row_shape.get("bareMetal") and (ocpus > 0 or memory_gb > 0):
+            _fx = _flex_shape_max(row_shape_key)
+            if _fx:
+                _fx_o, _fx_m = _fx
+                if cloud_bill_mode:
+                    # A bill line is one VM.
+                    _cap_o = min(ocpus, _fx_o) if _fx_o else ocpus
+                    _cap_m = min(memory_gb, _fx_m) if _fx_m else memory_gb
+                else:
+                    # An inventory row can stand for several servers: cap each VM, then
+                    # rebuild the row total - N servers x a capped VM, never a capped total.
+                    _c_app_o = min(app_vm_ocpu, _fx_o) if _fx_o else app_vm_ocpu
+                    _c_db_o = min(db_vm_ocpu, _fx_o) if _fx_o else db_vm_ocpu
+                    _c_app_m = min(app_vm_mem, _fx_m) if _fx_m else app_vm_mem
+                    _c_db_m = min(db_vm_mem, _fx_m) if _fx_m else db_vm_mem
+                    _cap_o = (app_servers * _c_app_o if app_servers else 0.0) + (db_servers * _c_db_o if db_servers else 0.0)
+                    _cap_m = (app_servers * _c_app_m if app_servers else 0.0) + (db_servers * _c_db_m if db_servers else 0.0)
+                if _cap_o < ocpus - 1e-9 or _cap_m < memory_gb - 1e-9:
+                    ocpus, memory_gb = _cap_o, _cap_m
+                    size_cap = {"maxOcpu": _fx_o, "maxMemGb": _fx_m}
+                    cap_note = (
+                        f" Capped at {row_shape.get('label')}'s maximum ({_fx_o:g} OCPU / "
+                        f"{_fx_m:g} GB per VM): a flex VM cannot be provisioned past its "
+                        f"shape's limit, so the spec'd {spec_ocpus:g} OCPU / {spec_memory_gb:g} GB "
+                        f"is billed at the capped size. Pick a larger shape (or bare metal) to "
+                        f"fit the full size.")
+        # At most one of these is ever non-empty: the cap only applies to flex shapes, the
+        # bare-metal note only to a bare-metal override.
+        size_note = bm_note or cap_note
 
         # Per-server running hours: use an "hours running"/"hours per month" column if present,
         # otherwise the global hours setting (default 730).
@@ -9460,9 +9576,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                 ocpus,
                 memory_gb,
                 (
-                    f"Spreadsheet CPU values are read as vCPUs and converted to OCPUs using 2 vCPUs = 1 OCPU, then multiplied by {row_hours:g} monthly hours.{bm_note}"
+                    f"Spreadsheet CPU values are read as vCPUs and converted to OCPUs using 2 vCPUs = 1 OCPU, then multiplied by {row_hours:g} monthly hours.{size_note}"
                     if cpu_unit_resolved == "vcpu"
-                    else f"Spreadsheet CPU values are read as physical cores / OCPUs (1:1, not halved), rounded up to whole OCPUs, then multiplied by {row_hours:g} monthly hours.{bm_note}"
+                    else f"Spreadsheet CPU values are read as physical cores / OCPUs (1:1, not halved), rounded up to whole OCPUs, then multiplied by {row_hours:g} monthly hours.{size_note}"
                 ),
                 row_hours,
                 shape=row_shape,
@@ -9960,7 +10076,7 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
                     line_items,
                     0 if "OCPU-hour" in existing_units else ocpus,
                     0 if "GB-hour" in existing_units else memory_gb,
-                    "Cloud bill CPU/vCPU usage was normalized to OCPUs and priced using source usage hours when present." + bm_note,
+                    "Cloud bill CPU/vCPU usage was normalized to OCPUs and priced using source usage hours when present." + size_note,
                     usage_hours,
                     shape=row_shape,
                 )
@@ -10297,6 +10413,9 @@ def calculate_pricing(fields, rows, shape_key=DEFAULT_SHAPE_KEY, full_service_be
             "rightsized": bool(rightsize and ((original_memory_gb and spec_memory_gb != original_memory_gb) or (original_ocpus and spec_ocpus != original_ocpus))),
             # > 0 when this row was explicitly put on bare metal and is billed as whole servers.
             "bareMetalServers": bare_metal_servers,
+            # Set when the billed size was capped at the flex shape's per-VM maximum; carries
+            # {maxOcpu, maxMemGb} so the table can explain the "(was N)" note.
+            "sizeCapped": size_cap,
             "originalMemoryGb": round(original_memory_gb, 4),
             "originalOcpus": round(original_ocpus, 4),
             "hoursPerMonth": row_hours,
@@ -11533,7 +11652,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 self.send_error_json(400, "The compressed JSON request could not be read.")
                 return None
             if len(raw_body) > MAX_DECOMPRESSED_UPLOAD_BYTES:
-                self.send_error_json(413, "The decompressed JSON request exceeds 128 MB.")
+                self.send_error_json(413, f"The decompressed JSON request exceeds {MAX_UPLOAD_MB_LABEL}.")
                 return None
         try:
             payload = json.loads(raw_body.decode("utf-8"))
@@ -11563,6 +11682,19 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "build": APP_BUILD_TAG,
+                    # What the browser may send. On Vercel the platform gateway rejects
+                    # request bodies over ~4.5 MB before they reach this code, so the
+                    # frontend must keep compressed uploads under 4 MB there. Anywhere else
+                    # (a local `python app.py`) the only real ceiling is the decompression
+                    # guard (512 MB by default, OIA_MAX_UPLOAD_MB overrides), so the same
+                    # file that fails on the deployed app uploads fine locally. The frontend
+                    # falls back to the Vercel-safe 4 MB when this field is missing.
+                    "uploadLimits": {
+                        "maxCompressedBytes": (4 * 1000 * 1000 if os.environ.get("VERCEL")
+                                               else MAX_DECOMPRESSED_UPLOAD_BYTES),
+                        "maxDecompressedBytes": MAX_DECOMPRESSED_UPLOAD_BYTES,
+                        "gateway": "vercel" if os.environ.get("VERCEL") else "local",
+                    },
                     "bareMetalShapes": {
                         _v: [t for t in _tiers if t.get("tier") == "baremetal"]
                         for _v, _tiers in OCI_VENDOR_TIERS.items()
@@ -11832,7 +11964,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 self.send_error_json(400, "The compressed upload could not be read.")
                 return
             if len(uploaded_bytes) > MAX_DECOMPRESSED_UPLOAD_BYTES:
-                self.send_error_json(413, "The decompressed upload exceeds 128 MB.")
+                self.send_error_json(413, f"The decompressed upload exceeds {MAX_UPLOAD_MB_LABEL}. Raise it with OIA_MAX_UPLOAD_MB (e.g. OIA_MAX_UPLOAD_MB=1024) and restart, if this machine has the memory for it.")
                 return
         elif content_type.startswith("multipart/form-data"):
             form = cgi.FieldStorage(

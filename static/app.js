@@ -2417,7 +2417,27 @@ function startCellFill(event) {
 
 const PROVIDER_NAME_TO_VALUE = { aws: "aws", azure: "azure", gcp: "gcp" };
 const COMPRESSED_UPLOAD_THRESHOLD = 3.5 * 1024 * 1024;
+// Vercel's request gateway rejects bodies over ~4.5 MB, so this is the safe default until
+// /api/health reports what the server actually accepts. A local `python app.py` has no
+// gateway in front of it and advertises its decompression guard instead (512 MB by
+// default, OIA_MAX_UPLOAD_MB overrides) - the limits are the SERVER'S facts, not the
+// browser's; never hardcode a bigger number here.
 const MAX_COMPRESSED_UPLOAD_BYTES = 4 * 1000 * 1000;
+
+function maxCompressedUploadBytes() {
+  return Number(state.uploadLimits?.maxCompressedBytes) || MAX_COMPRESSED_UPLOAD_BYTES;
+}
+
+function maxDecompressedUploadBytes() {
+  return Number(state.uploadLimits?.maxDecompressedBytes) || 0;
+}
+
+function uploadLimitAdvice() {
+  // On the deployed app the ceiling is the platform gateway; running locally lifts it.
+  return (state.uploadLimits?.gateway || "vercel") === "vercel"
+    ? " Reduce the export to the columns and date range you need, or run the app locally (python app.py), which accepts much larger files (512 MB by default, OIA_MAX_UPLOAD_MB to raise it)."
+    : ` This server accepts up to ${Math.round(maxCompressedUploadBytes() / 1e6)} MB - reduce the file or split it.`;
+}
 
 async function jsonRequestOptions(payload) {
   const serialized = JSON.stringify(payload);
@@ -2436,9 +2456,10 @@ async function jsonRequestOptions(payload) {
   }
   const compressedStream = body.stream().pipeThrough(new CompressionStream("gzip"));
   const compressedBody = await new Response(compressedStream).blob();
-  if (compressedBody.size > MAX_COMPRESSED_UPLOAD_BYTES) {
+  if (compressedBody.size > maxCompressedUploadBytes()) {
     throw new Error(
-      "This workflow remains too large after compression. Reduce the bill date range and try again.",
+      `This workflow is still ${(compressedBody.size / 1e6).toFixed(1)} MB after compression.`
+      + uploadLimitAdvice(),
     );
   }
   return {
@@ -2455,11 +2476,18 @@ async function compressedUploadRequest(file, sheetOverride = "") {
   ) {
     return null;
   }
+  if (maxDecompressedUploadBytes() && file.size > maxDecompressedUploadBytes()) {
+    throw new Error(
+      `This file is ${(file.size / 1e6).toFixed(0)} MB; the server's hard limit is `
+      + `${Math.round(maxDecompressedUploadBytes() / 1e6)} MB. Split the file or trim it down.`,
+    );
+  }
   const compressedStream = file.stream().pipeThrough(new CompressionStream("gzip"));
   const compressedBody = await new Response(compressedStream).blob();
-  if (compressedBody.size > MAX_COMPRESSED_UPLOAD_BYTES) {
+  if (compressedBody.size > maxCompressedUploadBytes()) {
     throw new Error(
-      "This file remains too large after compression. Reduce the export to the billing columns and date range you need, then upload it again.",
+      `This file is still ${(compressedBody.size / 1e6).toFixed(1)} MB after compression.`
+      + uploadLimitAdvice(),
     );
   }
   return {
@@ -2518,10 +2546,13 @@ async function uploadFile(file, sheetOverride = "") {
         body,
       },
     };
+    // A big inventory takes longer to ship and parse than the old fixed 100 s: allow
+    // ~4 s per MB on top, so a 100 MB local upload doesn't die as a fake timeout.
+    const uploadTimeoutMs = 100000 + Math.ceil((file.size / 1e6) * 4000);
     const { response, payload } = await fetchJson(
       request.url,
       request.options,
-      100000,
+      uploadTimeoutMs,
     );
     if (!response.ok) {
       throw new Error(payload.error || "Upload failed.");
@@ -4962,6 +4993,18 @@ function applyShapeToVm(row, shape) {
     mem = bmMem;
     overflows = specOcpu > bmOcpu || (bmMem > 0 && specMem > bmMem);
   }
+  // A flex shape has a hard per-VM ceiling, and a VM cannot be provisioned past it - billing
+  // 288 OCPU on a 94-OCPU shape is a number nobody can buy. Cap the billed size at the
+  // shape's maximum (mirror of the server's cap) and keep the spec'd size for the "(was N)"
+  // note. The size flag below still judges the SPEC'D size, so the row stays flagged until a
+  // shape that actually fits is chosen.
+  let capped = false;
+  const fxOcpu = Number(shape.maxOcpu || 0);
+  const fxMem = Number(shape.maxMemGb || 0);
+  if (!shape.bareMetal && (specOcpu > 0 || specMem > 0)) {
+    if (fxOcpu > 0 && ocpu > fxOcpu) { ocpu = fxOcpu; capped = true; }
+    if (fxMem > 0 && mem > fxMem) { mem = fxMem; capped = true; }
+  }
   const cRate = Number(shape.computeRate || 0);
   const mRate = Number(shape.memoryRate || 0);
   const ocpuMonthly = round2(ocpu * hours * cRate);
@@ -4975,13 +5018,20 @@ function applyShapeToVm(row, shape) {
         ? ` This VM does NOT fit the box - a VM cannot span two machines. Choose a larger shape or split it.`
         : "")
     : "";
+  const capNote = capped
+    ? ` Capped at ${shape.label}'s maximum (${fxOcpu} OCPU / ${fxMem} GB per VM): a flex VM `
+      + `cannot be provisioned past its shape's limit, so the spec'd ${specOcpu} OCPU / `
+      + `${specMem} GB is billed at the capped size. Pick a larger shape (or bare metal) to `
+      + `fit the full size.`
+    : "";
+  const sizeNote = bmNote || capNote;
   row.lineItems = [
     { sku: shape.computeSku || "", description: `OCI Compute ${lbl} - OCPU`, quantity: ocpu,
       unit: "OCPU Per Hour", rate: cRate, monthly: ocpuMonthly,
-      mapping: `Re-mapped to ${shape.label}: ${ocpu} OCPU x ${hours} hrs x $${cRate}/OCPU-hr.${bmNote}` },
+      mapping: `Re-mapped to ${shape.label}: ${ocpu} OCPU x ${hours} hrs x $${cRate}/OCPU-hr.${sizeNote}` },
     { sku: shape.memorySku || "", description: `OCI Compute ${lbl} - Memory`, quantity: mem,
       unit: "Gigabyte Per Hour", rate: mRate, monthly: memMonthly,
-      mapping: `Re-mapped to ${shape.label}: ${mem} GB x ${hours} hrs x $${mRate}/GB-hr.${bmNote}` },
+      mapping: `Re-mapped to ${shape.label}: ${mem} GB x ${hours} hrs x $${mRate}/GB-hr.${sizeNote}` },
   ];
   row.monthly = round2(ocpuMonthly + memMonthly);
   row.annual = round2(row.monthly * 12);
@@ -4991,6 +5041,7 @@ function applyShapeToVm(row, shape) {
   row.specs.specOcpus = specOcpu;
   row.specs.specMemoryGb = specMem;
   row.bareMetalServers = servers;
+  row.sizeCapped = capped ? { maxOcpu: fxOcpu, maxMemGb: fxMem } : null;
   // Mirror the server's oci_size_check: a VM larger than the box is an impossible mapping, and
   // the results table pins impossible rows to the top until they are dealt with.
   if (servers) {
@@ -5000,6 +5051,30 @@ function applyShapeToVm(row, shape) {
             + `Bare metal is a single physical machine - one VM cannot span two boxes. `
             + `Choose a larger shape, or split the workload.` }
       : { status: "ok", shape: shape.label };
+  } else if (capped) {
+    // Flex overflow, judged on the SPEC'D size (the cap changes what is billed, not the
+    // flag): a larger flex shape that fits keeps the LARGER SHAPE badge, a bare-metal box
+    // that fits keeps BARE METAL, and a VM too big for every shape is impossible.
+    const flexAlt = (state.rateCards || []).find((s) =>
+      !s.bareMetal && s.key !== shape.key && s.processorVendor === shape.processorVendor
+      && Number(s.maxOcpu || 0) >= specOcpu && Number(s.maxMemGb || 0) >= specMem);
+    const bmAlt = (state.rateCards || []).find((s) =>
+      s.bareMetal && s.processorVendor === shape.processorVendor
+      && Number(s.bmOcpu || 0) >= specOcpu && Number(s.bmMemoryGb || 0) >= specMem);
+    row.sizeCheck = (bmAlt || flexAlt)
+      ? { status: "baremetal", shape: bmAlt ? bmAlt.label : null,
+          flexAlt: flexAlt
+            ? { shape: flexAlt.label, maxOcpu: Number(flexAlt.maxOcpu || 0), maxMem: Number(flexAlt.maxMemGb || 0) }
+            : null,
+          message: `${specOcpu} OCPU / ${specMem} GB exceeds ${shape.label} `
+            + `(${fxOcpu} OCPU / ${fxMem} GB) and is billed at the cap.`
+            + (flexAlt ? ` It fits the larger flex shape ${flexAlt.label} (${flexAlt.maxOcpu} OCPU / ${flexAlt.maxMemGb} GB).` : "")
+            + (bmAlt ? ` Bare metal ${bmAlt.label} (${bmAlt.bmOcpu} OCPU / ${bmAlt.bmMemoryGb} GB) also fits.` : "") }
+      : { status: "impossible", shape: shape.label,
+          message: `${specOcpu} OCPU / ${specMem} GB exceeds ${shape.label} and every OCI shape `
+            + `for this CPU vendor. Split the workload.` };
+  } else {
+    row.sizeCheck = { status: "ok", shape: shape.label };
   }
   row.ociProduct = servers
     ? `OCI Bare Metal - ${lbl} (${ocpu} OCPU / ${mem} GB)`
@@ -5070,10 +5145,13 @@ function computeShapeBadge(row) {
   const servers = Number(row.bareMetalServers || 0);
   const label = servers > 1 ? `${servers} x ${shape}` : shape;
   const badge = ` <span class="shape-map-badge" title="OCI shape mapped for this compute line">${escapeHtml(label)}</span>`;
-  if (!servers) return badge;
+  const cap = row.sizeCapped;
+  if (!servers && !cap) return badge;
   const spec = Number(row.specs?.specOcpus || 0);
   const size = `${formatNumber(ocpus)} OCPU billed${spec && spec !== ocpus ? ` (was ${formatNumber(spec)})` : ""}`;
-  const why = `Bare metal is billed as a whole physical server: ${servers} x ${row.shapeUsed?.label || shape}.`;
+  const why = servers
+    ? `Bare metal is billed as a whole physical server: ${servers} x ${row.shapeUsed?.label || shape}.`
+    : `Capped at the maximum of ${row.shapeUsed?.label || shape} (${formatNumber(cap.maxOcpu)} OCPU / ${formatNumber(cap.maxMemGb)} GB per VM) - a flex VM cannot be provisioned past its shape's limit. Pick a larger shape (or bare metal) to fit the full size.`;
   return `${badge} <span class="spec-was" title="${escapeHtml(why)}">${escapeHtml(size)}</span>`;
 }
 
@@ -5125,21 +5203,31 @@ function wasNote(row, billedKey, specKey, unit = "") {
   if (Math.abs(spec - billed) < 0.0001) return "";
   const servers = Number(row.bareMetalServers || 0);
   const box = row.shapeUsed?.label || "bare metal";
+  const cap = row.sizeCapped;
   const why = servers
     ? `Billed at the full fixed size of ${servers > 1 ? `${servers} x ` : ""}${box} - bare metal is a dedicated physical machine. Spec'd size was ${formatNumber(spec)}${unit}.`
-    : `Spec'd size was ${formatNumber(spec)}${unit}.`;
+    : cap
+      ? `Capped at the maximum of ${box} (${formatNumber(cap.maxOcpu)} OCPU / ${formatNumber(cap.maxMemGb)} GB per VM) - a flex VM cannot be provisioned past its shape's limit. Spec'd size was ${formatNumber(spec)}${unit}. Pick a larger shape (or bare metal) to fit the full size.`
+      : `Spec'd size was ${formatNumber(spec)}${unit}.`;
   return ` <span class="spec-was" title="${escapeHtml(why)}">(was ${formatNumber(spec)}${unit})</span>`;
 }
 
 function sizeFlagBadge(row) {
   const badges = [];
   const check = row.sizeCheck || {};
+  const servers = Number(row.bareMetalServers || 0);
   if (check.status === "impossible") {
     badges.push(` <span class="size-flag size-flag-impossible" title="${escapeHtml(check.message || "")}">IMPOSSIBLE</span>`);
+  } else if (servers > 0) {
+    // "BARE METAL" means the row IS on bare metal - mapped there by hand or by Auto mode and
+    // billed as whole physical boxes - never a suggestion about where it might need to go.
+    const box = row.shapeUsed?.label || "bare metal";
+    const why = `Mapped to ${servers > 1 ? `${servers} x ` : ""}${box} - a dedicated physical server per VM, billed at its full fixed size.`;
+    badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(why)}">BARE METAL</span>`);
   } else if (check.status === "baremetal") {
-    // A workload that fits a larger flex shape isn't truly bare metal - label it so, and reserve
-    // the "BARE METAL" badge (which now bills a full physical server) for genuine overflow.
-    const label = check.flexAlt ? "LARGER SHAPE" : "BARE METAL";
+    // Not mapped to bare metal - the row overflows its selected flex shape and is billed at
+    // the cap. LARGER SHAPE: a bigger flex shape fits it. OVERSIZED: only bare metal would.
+    const label = check.flexAlt ? "LARGER SHAPE" : "OVERSIZED";
     badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">${label}</span>`);
   }
   if (Array.isArray(row.lineItems) && row.lineItems.some((li) => li && li.isGpu)) {
@@ -7265,6 +7353,7 @@ fetch("/api/health")
   .then((payload) => {
     state.rateCards = payload.rateCards || [];
     state.bareMetalShapes = payload.bareMetalShapes || {};
+    state.uploadLimits = payload.uploadLimits || null;
     state.fullServiceCatalog = payload.fullServiceCatalog || [];
     state.openaiApiEnabled = Boolean(payload.openaiApiEnabled);
     state.openaiApiConfigured = Boolean(payload.openaiApiConfigured);
