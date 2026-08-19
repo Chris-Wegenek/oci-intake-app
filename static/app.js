@@ -55,6 +55,10 @@ const state = {
   awsDevOverrides: {},
   fwPathOverrides: {},
   redisPathOverrides: {},
+  pgPathOverrides: {},
+  mysqlPathOverrides: {},
+  appsvcPathOverrides: {},
+  regPathOverrides: {},
   approvedFlags: {},
   flagMenuRow: null,
   hiddenSources: {},
@@ -1478,6 +1482,35 @@ function syncModeUi() {
     : "or drag the workbook onto this upload area";
 }
 
+// An obvious cloud bill dropped into On-prem mode: ask before parsing it as
+// servers (Chris's ruling 2026-08-19). "Yes" switches to Cloud Bill mode and
+// re-parses the same file; "No" (red) keeps the on-prem parse.
+function maybeWarnCloudBillInOnPrem(payload) {
+  const provider = payload?.metadata?.cloudBillSuspected;
+  if (!provider || state.intakeMode !== "on_prem") return;
+  document.getElementById("cloudBillSuspectOverlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "cloudBillSuspectOverlay";
+  overlay.className = "cloudbill-suspect-overlay";
+  overlay.innerHTML = `
+    <div class="cloudbill-suspect-dialog" role="alertdialog" aria-modal="true">
+      <h3>Are you sure this isn't a cloud bill?</h3>
+      <p>This file looks like ${escapeHtml(provider === "Cloud" ? "a cloud" : `an ${provider}`)} bill export
+      (billing meters, not a server inventory). Parsing it in On-prem mode will treat bill lines as servers.</p>
+      <div class="cloudbill-suspect-actions">
+        <button type="button" class="cloudbill-suspect-yes" id="cloudBillSuspectYes">Yes — use Cloud Bill mode</button>
+        <button type="button" class="cloudbill-suspect-no" id="cloudBillSuspectNo">No</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById("cloudBillSuspectYes").addEventListener("click", () => {
+    overlay.remove();
+    setIntakeMode("cloud_bill");
+    if (state.lastUploadFile) uploadFile(state.lastUploadFile);
+  });
+  document.getElementById("cloudBillSuspectNo").addEventListener("click", () => overlay.remove());
+}
+
 function setIntakeMode(mode) {
   state.intakeMode = normalizeIntakeMode(mode);
   state.providerHint = state.intakeMode === "cloud_bill" ? state.providerHint : "auto";
@@ -1856,7 +1889,8 @@ function removeReviewRow(row) {
   if (id) {
     [state.selectedRows, state.approvedFlags, state.shapeOverrides, state.costOverrides,
      state.sqlPathOverrides, state.ghPathOverrides, state.awsDevOverrides,
-     state.fwPathOverrides, state.redisPathOverrides]
+     state.fwPathOverrides, state.redisPathOverrides, state.pgPathOverrides,
+     state.mysqlPathOverrides, state.appsvcPathOverrides, state.regPathOverrides]
       .forEach((map) => { if (map && typeof map === "object") delete map[id]; });
   }
   // Sizing changed - invalidate the estimate so Price re-runs on the reduced set.
@@ -2598,6 +2632,7 @@ async function uploadFile(file, sheetOverride = "") {
       : "On-prem inventory";
     showSelectedDoc(payload.fileName, `${formatNumber(payload.rows.length)} rows · ${docModeLabel}`);
     if (els.inventoryNotice) els.inventoryNotice.hidden = !payload.metadata?.inventorySuspected;
+    maybeWarnCloudBillInOnPrem(payload);
     // Warn if a finished comparison/BOM workbook was dropped into cloud-bill mode.
     const cmpNotice = document.getElementById("comparisonBomNotice");
     if (cmpNotice) {
@@ -3084,6 +3119,10 @@ function collectWorkflowState() {
     awsDevOverrides: state.awsDevOverrides,
     fwPathOverrides: state.fwPathOverrides,
     redisPathOverrides: state.redisPathOverrides,
+    pgPathOverrides: state.pgPathOverrides,
+    mysqlPathOverrides: state.mysqlPathOverrides,
+    appsvcPathOverrides: state.appsvcPathOverrides,
+    regPathOverrides: state.regPathOverrides,
     approvedFlags: state.approvedFlags,
     hiddenSources: state.hiddenSources,
     selectedRows: state.selectedRows,
@@ -3145,6 +3184,10 @@ async function applyWorkflowState(wf) {
     awsDevOverrides: {},
     fwPathOverrides: {},
     redisPathOverrides: {},
+    pgPathOverrides: {},
+    mysqlPathOverrides: {},
+    appsvcPathOverrides: {},
+    regPathOverrides: {},
     approvedFlags: {},
     hiddenSources: {},
     selectedRows: {},
@@ -3165,7 +3208,7 @@ async function applyWorkflowState(wf) {
     "workflowMaxUnlockedStep",
     "showMissingOnly", "extraServices", "fields", "rows",
     "shapeOverrides", "costOverrides", "sqlPathOverrides", "ghPathOverrides", "awsDevOverrides",
-    "fwPathOverrides", "redisPathOverrides",
+    "fwPathOverrides", "redisPathOverrides", "pgPathOverrides", "mysqlPathOverrides", "appsvcPathOverrides", "regPathOverrides",
     "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs", "resultSort",
   ];
   assign.forEach((k) => { if (wf[k] !== undefined) state[k] = wf[k]; });
@@ -3212,7 +3255,7 @@ async function applyWorkflowState(wf) {
       : {};
   [
     "shapeOverrides", "costOverrides", "sqlPathOverrides", "ghPathOverrides", "awsDevOverrides",
-    "fwPathOverrides", "redisPathOverrides", "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs",
+    "fwPathOverrides", "redisPathOverrides", "pgPathOverrides", "mysqlPathOverrides", "appsvcPathOverrides", "regPathOverrides", "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs",
   ].forEach((key) => {
     if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
       state[key] = {};
@@ -4057,6 +4100,10 @@ function pricingInputs() {
     awsDevOverrides: state.awsDevOverrides,
     fwPathOverrides: state.fwPathOverrides,
     redisPathOverrides: state.redisPathOverrides,
+    pgPathOverrides: state.pgPathOverrides,
+    mysqlPathOverrides: state.mysqlPathOverrides,
+    appsvcPathOverrides: state.appsvcPathOverrides,
+    regPathOverrides: state.regPathOverrides,
     hoursPerMonth: state.hoursPerMonth,
     hoursOverride: state.hoursOverride,
     oicMessagePacks: state.oicMessagePacks,
@@ -4708,9 +4755,22 @@ function serviceSourceLabel(mapping) {
   return [mapping.sourceProvider, mapping.sourceService || mapping.sourceProduct].filter(Boolean).join(" / ") || "-";
 }
 
+// Azure units arrive as billing bundles ("1 GB/Month", "1 Hour", "1/Month",
+// "10 Hours"): shown after a quantity they read as a stray number ("64 1 Hour").
+// Strip a leading "1" bundle token for DISPLAY only ("1/Month" -> "per Month");
+// leave compact per-unit codes like "1M"/"10M" alone (the 1 is part of the code).
+function displayUsageUnit(unit) {
+  const u = String(unit || "").trim();
+  const slash = u.match(/^1\s*\/\s*(.+)$/);      // "1/Month" -> "per Month"
+  if (slash) return `per ${slash[1].trim()}`;
+  const bundle = u.match(/^1\s+(.+)$/);           // "1 GB/Month" -> "GB/Month"
+  if (bundle) return bundle[1].trim();
+  return u;
+}
+
 function serviceQuantityLabel(mapping, row) {
   if (mapping?.quantity) {
-    return `${formatNumber(mapping.quantity)} ${mapping.unit || ""}`.trim();
+    return `${formatNumber(mapping.quantity)} ${displayUsageUnit(mapping.unit)}`.trim();
   }
   const specs = row?.specs || {};
   const storage = Number(specs.blockStorageGb || 0) + Number(specs.fileStorageGb || 0);
@@ -5080,6 +5140,69 @@ const AZ_REDIS_PATH_OPTIONS = [
   ["redis_single", "OCI Cache (single node, no HA)"],
   ["redis_carry", "Carry over source cost"],
 ];
+// Azure PostgreSQL -> OCI Database with PostgreSQL: 2:1 consolidation default /
+// boundary-preserving 1:1 / carry last. Storage rows are automatic (no dropdown).
+const AZ_PG_PATH_OPTIONS = [
+  ["pg_2to1", "OCI PostgreSQL (2:1 vCore consolidation)"],
+  ["pg_boundary", "OCI PostgreSQL (1 OCPU per vCore)"],
+  ["pg_carry", "Carry over source cost"],
+];
+function azPgPathSelectHtml(row) {
+  if (row.azPgKind !== "pg_compute") return "";
+  const cur = state.pgPathOverrides[row.rowId] || row.azPgPath || "pg_2to1";
+  const opts = AZ_PG_PATH_OPTIONS
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select az-pg-path-select" data-az-pg-path-row="${escapeHtml(String(row.rowId))}" title="OCI PostgreSQL mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
+// Remaining-services register (doc #13): ONE generic dropdown; options by kind.
+const AZ_REG_PATH_OPTIONS = {
+  reg_appgw_fixed: [["appgw_convert", "OCI Flexible LB + WAF (approx.)"], ["appgw_carry", "Carry over source cost"]],
+  reg_appgw_cu: [["appgw_convert", "OCI Flexible LB + WAF (approx.)"], ["appgw_carry", "Carry over source cost"]],
+  reg_eh_tu: [["eh_streaming", "OCI Streaming (approx., 1 KB/event)"], ["eh_carry", "Carry over source cost"]],
+  reg_eh_ingress: [["eh_streaming", "OCI Streaming (approx., 1 KB/event)"], ["eh_carry", "Carry over source cost"]],
+  reg_fdry: [["fdry_genai", "OCI Generative AI (per-meter)"], ["fdry_carry", "Carry over source cost"]],
+  reg_lb_rules: [["lb_convert", "OCI Flexible LB (approx.)"], ["lb_carry", "Carry over source cost"]],
+  reg_lb_data: [["lb_convert", "OCI Flexible LB (approx.)"], ["lb_carry", "Carry over source cost"]],
+};
+function azRegPathSelectHtml(row) {
+  const options = AZ_REG_PATH_OPTIONS[row.azRegKind];
+  if (!options) return "";
+  const cur = state.regPathOverrides[row.rowId] || row.azRegPath || options[options.length - 1][0];
+  const opts = options
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select az-reg-path-select" data-az-reg-path-row="${escapeHtml(String(row.rowId))}" title="Register mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
+const AZ_APPSVC_PATH_OPTIONS = [
+  ["appsvc_ci", "OCI Container Instances + LB (approx. sizing)"],
+  ["appsvc_carry", "Carry over source cost"],
+];
+function azAppSvcPathSelectHtml(row) {
+  if (row.azAppSvcKind !== "appsvc_linux_plan") return "";
+  const cur = state.appsvcPathOverrides[row.rowId] || row.azAppSvcPath || "appsvc_carry";
+  const opts = AZ_APPSVC_PATH_OPTIONS
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select az-appsvc-path-select" data-az-appsvc-path-row="${escapeHtml(String(row.rowId))}" title="App Service mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
+const AZ_MYSQL_PATH_OPTIONS = [
+  ["mysql_std", "OCI MySQL (standalone, per-server shape)"],
+  ["mysql_ha", "OCI MySQL (HA - 3 instances/system)"],
+  ["mysql_carry", "Carry over source cost"],
+];
+function azMysqlPathSelectHtml(row) {
+  if (row.azMysqlKind !== "mysql_compute") return "";
+  const cur = state.mysqlPathOverrides[row.rowId] || row.azMysqlPath || "mysql_std";
+  const opts = AZ_MYSQL_PATH_OPTIONS
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select az-mysql-path-select" data-az-mysql-path-row="${escapeHtml(String(row.rowId))}" title="OCI MySQL mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
 function azRedisPathSelectHtml(row) {
   if (!row.azRedisPath) return "";
   const cur = state.redisPathOverrides[row.rowId] || row.azRedisPath;
@@ -5222,6 +5345,7 @@ function applyShapeToVm(row, shape) {
       && Number(s.bmOcpu || 0) >= specOcpu && Number(s.bmMemoryGb || 0) >= specMem);
     row.sizeCheck = (bmAlt || flexAlt)
       ? { status: "baremetal", shape: bmAlt ? bmAlt.label : null,
+          severe: specOcpu > fxOcpu * 1.2 || specMem > fxMem * 1.2,
           flexAlt: flexAlt
             ? { shape: flexAlt.label, maxOcpu: Number(flexAlt.maxOcpu || 0), maxMem: Number(flexAlt.maxMemGb || 0) }
             : null,
@@ -5325,7 +5449,9 @@ function mappingFlagBadge(row) {
     return ` <span class="size-flag size-flag-approved" title="Mapping approved">✓ approved</span>`;
   }
   if (row.mappingFlag) {
-    let html = ` <span class="size-flag size-flag-review flag-clickable" data-flag-row="${escapeHtml(String(row.rowId))}" title="Click to approve this mapping">⚠ ${escapeHtml(row.mappingFlag)}</span>`;
+    const sev = row.mappingFlagLevel === "red" ? " size-flag-review-red"
+      : row.mappingFlagLevel === "orange" ? " size-flag-review-orange" : "";
+    let html = ` <span class="size-flag size-flag-review${sev} flag-clickable" data-flag-row="${escapeHtml(String(row.rowId))}" title="Click to approve this mapping">⚠ ${escapeHtml(row.mappingFlag)}</span>`;
     if (String(state.flagMenuRow) === String(row.rowId)) {
       html += ` <button type="button" class="flag-approve-btn" data-approve-row="${escapeHtml(String(row.rowId))}">Approve mapping</button>`;
     }
@@ -5386,8 +5512,10 @@ function sizeFlagBadge(row) {
   } else if (check.status === "baremetal") {
     // Not mapped to bare metal - the row overflows its selected flex shape and is billed at
     // the cap. LARGER SHAPE: a bigger flex shape fits it. OVERSIZED: only bare metal would.
+    // Badly mis-sized (>20% over the shape's max CPU or RAM) renders RED, not amber.
     const label = check.flexAlt ? "LARGER SHAPE" : "OVERSIZED";
-    badges.push(` <span class="size-flag size-flag-baremetal" title="${escapeHtml(check.message || "")}">${label}</span>`);
+    const cls = check.severe ? "size-flag-impossible" : "size-flag-baremetal";
+    badges.push(` <span class="size-flag ${cls}" title="${escapeHtml(check.message || "")}">${label}</span>`);
   }
   if (Array.isArray(row.lineItems) && row.lineItems.some((li) => li && li.isGpu)) {
     badges.push(` <span class="size-flag size-flag-gpu" title="Mapped to an OCI GPU shape">GPU</span>`);
@@ -5426,7 +5554,7 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false, co
         key: "ociTarget",
         label: "OCI Target",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
-        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + computeShapeBadge(row) + mappingFlagBadge(row) + sqlPathSelectHtml(row) + ghPathSelectHtml(row) + awsDevPathSelectHtml(row) + azFwPathSelectHtml(row) + azRedisPathSelectHtml(row),
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + computeShapeBadge(row) + mappingFlagBadge(row) + sqlPathSelectHtml(row) + ghPathSelectHtml(row) + awsDevPathSelectHtml(row) + azFwPathSelectHtml(row) + azRedisPathSelectHtml(row) + azPgPathSelectHtml(row) + azMysqlPathSelectHtml(row) + azAppSvcPathSelectHtml(row) + azRegPathSelectHtml(row),
       },
       {
         key: "shape",
@@ -5695,6 +5823,30 @@ if (els.resultsTable) {
       return;
     }
     // AWS developer-services mapping dropdown -> per-row override and re-price.
+    const azPgSel = event.target.closest("select[data-az-pg-path-row]");
+    if (azPgSel) {
+      state.pgPathOverrides[azPgSel.dataset.azPgPathRow] = azPgSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    const azRegSel = event.target.closest("select[data-az-reg-path-row]");
+    if (azRegSel) {
+      state.regPathOverrides[azRegSel.dataset.azRegPathRow] = azRegSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    const azAppSvcSel = event.target.closest("select[data-az-appsvc-path-row]");
+    if (azAppSvcSel) {
+      state.appsvcPathOverrides[azAppSvcSel.dataset.azAppsvcPathRow] = azAppSvcSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    const azMysqlSel = event.target.closest("select[data-az-mysql-path-row]");
+    if (azMysqlSel) {
+      state.mysqlPathOverrides[azMysqlSel.dataset.azMysqlPathRow] = azMysqlSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
     const azRedisSel = event.target.closest("select[data-az-redis-path-row]");
     if (azRedisSel) {
       state.redisPathOverrides[azRedisSel.dataset.azRedisPathRow] = azRedisSel.value;
