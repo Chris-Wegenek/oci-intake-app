@@ -50,6 +50,11 @@ const state = {
   catalog: { groups: [], results: [], group: "", query: "", groupsOpen: {} },
   shapeOverrides: {},
   costOverrides: {},
+  sqlPathOverrides: {},
+  ghPathOverrides: {},
+  awsDevOverrides: {},
+  fwPathOverrides: {},
+  redisPathOverrides: {},
   approvedFlags: {},
   flagMenuRow: null,
   hiddenSources: {},
@@ -1849,7 +1854,9 @@ function removeReviewRow(row) {
   state.rows.splice(idx, 1);
   // Drop any per-row state keyed by this row's id so it doesn't linger.
   if (id) {
-    [state.selectedRows, state.approvedFlags, state.shapeOverrides, state.costOverrides]
+    [state.selectedRows, state.approvedFlags, state.shapeOverrides, state.costOverrides,
+     state.sqlPathOverrides, state.ghPathOverrides, state.awsDevOverrides,
+     state.fwPathOverrides, state.redisPathOverrides]
       .forEach((map) => { if (map && typeof map === "object") delete map[id]; });
   }
   // Sizing changed - invalidate the estimate so Price re-runs on the reduced set.
@@ -3072,6 +3079,11 @@ function collectWorkflowState() {
     convertedPricing: state.pricing?.converted ? state.pricing : null,
     shapeOverrides: state.shapeOverrides,
     costOverrides: state.costOverrides,
+    sqlPathOverrides: state.sqlPathOverrides,
+    ghPathOverrides: state.ghPathOverrides,
+    awsDevOverrides: state.awsDevOverrides,
+    fwPathOverrides: state.fwPathOverrides,
+    redisPathOverrides: state.redisPathOverrides,
     approvedFlags: state.approvedFlags,
     hiddenSources: state.hiddenSources,
     selectedRows: state.selectedRows,
@@ -3128,6 +3140,11 @@ async function applyWorkflowState(wf) {
     pricing: null,
     shapeOverrides: {},
     costOverrides: {},
+    sqlPathOverrides: {},
+    ghPathOverrides: {},
+    awsDevOverrides: {},
+    fwPathOverrides: {},
+    redisPathOverrides: {},
     approvedFlags: {},
     hiddenSources: {},
     selectedRows: {},
@@ -3147,7 +3164,8 @@ async function applyWorkflowState(wf) {
     "selectedVendor", "lastShapeByVendor", "crossCloudTopTier", "uploadMetadata",
     "workflowMaxUnlockedStep",
     "showMissingOnly", "extraServices", "fields", "rows",
-    "shapeOverrides", "costOverrides",
+    "shapeOverrides", "costOverrides", "sqlPathOverrides", "ghPathOverrides", "awsDevOverrides",
+    "fwPathOverrides", "redisPathOverrides",
     "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs", "resultSort",
   ];
   assign.forEach((k) => { if (wf[k] !== undefined) state[k] = wf[k]; });
@@ -3193,8 +3211,8 @@ async function applyWorkflowState(wf) {
       ? state.lastShapeByVendor
       : {};
   [
-    "shapeOverrides", "costOverrides", "approvedFlags", "hiddenSources",
-    "selectedRows", "columnPrefs",
+    "shapeOverrides", "costOverrides", "sqlPathOverrides", "ghPathOverrides", "awsDevOverrides",
+    "fwPathOverrides", "redisPathOverrides", "approvedFlags", "hiddenSources", "selectedRows", "columnPrefs",
   ].forEach((key) => {
     if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
       state[key] = {};
@@ -4034,6 +4052,11 @@ function pricingInputs() {
     cpuUnit: state.cpuUnit,
     shapeOverrides: state.shapeOverrides,
     costOverrides: state.costOverrides,
+    sqlPathOverrides: state.sqlPathOverrides,
+    ghPathOverrides: state.ghPathOverrides,
+    awsDevOverrides: state.awsDevOverrides,
+    fwPathOverrides: state.fwPathOverrides,
+    redisPathOverrides: state.redisPathOverrides,
     hoursPerMonth: state.hoursPerMonth,
     hoursOverride: state.hoursOverride,
     oicMessagePacks: state.oicMessagePacks,
@@ -4951,6 +4974,140 @@ function convertedShapeSelectHtml(row) {
   return ` <select class="cell-select converted-shape-select" data-converted-shape="${escapeHtml(String(row.rowId))}" title="Re-map this server's VM to a different OCI shape (re-prices its compute)">${opts}</select>`;
 }
 
+// Azure SQL DTU rows: pooled-conversion path dropdown. Default is SQL Server on
+// OCI VMs license-included; BYOL drops the license line; the ATP paths replatform
+// onto consolidated Autonomous. Same formatting as the per-row shape selects.
+// Carry-over-source-cost is ALWAYS the last option in every mapping dropdown
+// (VM shape selectors excluded by design).
+const SQL_DTU_PATH_OPTIONS = [
+  ["sql_vm_li", "SQL Server DB on OCI (license-included)"],
+  ["sql_vm_byol", "SQL Server DB on OCI (BYOL)"],
+  ["atp_list", "Autonomous ATP (list)"],
+  ["atp_byol", "Autonomous ATP (BYOL)"],
+  ["sql_carry", "Carry over source cost"],
+];
+// vCore-model SQL rows: real cores (no DTU proxy). License-meter rows only choose
+// between absorbed-into-conversion and carry.
+const SQL_VCORE_PATH_OPTIONS = [
+  ["sqlv_vm_li", "SQL Server DB on OCI (license-included)"],
+  ["sqlv_vm_byol", "SQL Server DB on OCI (BYOL)"],
+  ["sqlv_atp_list", "Autonomous ATP (list)"],
+  ["sqlv_atp_byol", "Autonomous ATP (BYOL)"],
+  ["sqlv_carry", "Carry over source cost"],
+];
+function sqlPathSelectHtml(row) {
+  let options = null;
+  let cur = null;
+  let title = "";
+  if (row.sqlDtuPath) {
+    options = SQL_DTU_PATH_OPTIONS;
+    cur = state.sqlPathOverrides[row.rowId] || row.sqlDtuPath;
+    title = "Pooled DTU conversion target for this row (re-prices it)";
+  } else if (row.sqlVcorePath && row.sqlVcoreKind !== "license") {
+    // License-meter rows are automatic (absorbed into the compute row's license
+    // line, or auto-carried when every compute row is carried) - no dropdown.
+    options = SQL_VCORE_PATH_OPTIONS;
+    cur = state.sqlPathOverrides[row.rowId] || row.sqlVcorePath;
+    title = "vCore SQL conversion target for this row (re-prices it)";
+  } else {
+    return "";
+  }
+  const opts = options
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select sql-path-select" data-sql-path-row="${escapeHtml(String(row.rowId))}" title="${title}">${opts}</select>`;
+}
+
+// Direct-GitHub migration rows: per-kind option dropdown (security scope, base plan,
+// artifacts home). Kinds with a single path (Copilot, AI credits) get no dropdown.
+const GH_PATH_OPTIONS = {
+  security: [
+    ["gh_sec_both", "Code Security + Secret Protection (both)"],
+    ["gh_sec_code", "Code Security only"],
+    ["gh_sec_secret", "Secret Protection only"],
+  ],
+  base: [
+    ["gh_base_team", "GitHub Team (base)"],
+    ["gh_base_enterprise", "GitHub Enterprise Cloud"],
+  ],
+  artifacts: [
+    ["gh_art_packages", "GitHub Packages"],
+    ["gh_art_oci", "OCI Artifact Registry"],
+  ],
+  ai_credits: [
+    ["gh_ai_pooled", "Included Copilot seat pool"],
+    ["gh_ai_passthrough", "Azure-rate pass-through"],
+  ],
+};
+// Carry over source cost is appended LAST to every GitHub mapping dropdown.
+Object.values(GH_PATH_OPTIONS).forEach((list) => list.push(["gh_carry", "Carry over source cost"]));
+function ghPathSelectHtml(row) {
+  const options = GH_PATH_OPTIONS[row.ghPathKind];
+  if (!options) return "";
+  const cur = state.ghPathOverrides[row.rowId] || row.ghPath || options[0][0];
+  const opts = options
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select gh-path-select" data-gh-path-row="${escapeHtml(String(row.rowId))}" title="Direct-GitHub mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
+// AWS developer-services rows: per-kind mapping dropdown, only where a REAL choice
+// exists (build compute, artifact storage, artifact egress). Absorbed-$0 meters and
+// decision/vendor carries are automatic - no dropdown.
+const AWS_DEV_PATH_OPTIONS = {
+  build: [["awsdev_build", "OCI DevOps Managed Build"]],
+  artifact_storage: [["awsdev_art_storage", "OCI Artifact Registry"]],
+  artifact_egress: [["awsdev_egress", "OCI Outbound Data Transfer"]],
+  // Storage Gateway throughput meters: upload = free OCI ingest, download = egress.
+  sgw_upload: [["awsdev_sgw_ingress", "OCI ingest (free inbound)"]],
+  sgw_download: [["awsdev_egress", "OCI Outbound Data Transfer"]],
+};
+// Carry over source cost is appended LAST to every AWS dev-services dropdown.
+Object.values(AWS_DEV_PATH_OPTIONS).forEach((list) => list.push(["awsdev_carry", "Carry over source cost"]));
+// Carry over source cost is appended LAST to every AWS dev-services mapping dropdown.
+Object.values(AWS_DEV_PATH_OPTIONS).forEach((list) => list.push(["awsdev_carry", "Carry over source cost"]));
+// Azure Firewall -> OCI Network Firewall: one-regional (default, built-in HA) /
+// two independent firewalls / carry last. Data-processing rows are automatic.
+const AZ_FW_PATH_OPTIONS = [
+  ["fw_one_regional", "OCI Network Firewall (one regional, HA built-in)"],
+  ["fw_two", "OCI Network Firewall (two independent)"],
+  ["fw_carry", "Carry over source cost"],
+];
+// Azure Redis -> OCI Cache: 3-node HA default / single-node (explicit exception) /
+// carry last.
+const AZ_REDIS_PATH_OPTIONS = [
+  ["redis_ha", "OCI Cache (3-node HA)"],
+  ["redis_single", "OCI Cache (single node, no HA)"],
+  ["redis_carry", "Carry over source cost"],
+];
+function azRedisPathSelectHtml(row) {
+  if (!row.azRedisPath) return "";
+  const cur = state.redisPathOverrides[row.rowId] || row.azRedisPath;
+  const opts = AZ_REDIS_PATH_OPTIONS
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select az-redis-path-select" data-az-redis-path-row="${escapeHtml(String(row.rowId))}" title="OCI Cache mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
+function azFwPathSelectHtml(row) {
+  if (row.azFwKind !== "azfw_deployment") return "";
+  const cur = state.fwPathOverrides[row.rowId] || row.azFwPath || "fw_one_regional";
+  const opts = AZ_FW_PATH_OPTIONS
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select az-fw-path-select" data-az-fw-path-row="${escapeHtml(String(row.rowId))}" title="Network Firewall mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
+function awsDevPathSelectHtml(row) {
+  const options = AWS_DEV_PATH_OPTIONS[row.awsDevKind];
+  if (!options) return "";
+  const cur = state.awsDevOverrides[row.rowId] || row.awsDevPath || options[0][0];
+  const opts = options
+    .map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${escapeHtml(l)}</option>`)
+    .join("");
+  return ` <select class="cell-select aws-dev-path-select" data-aws-dev-path-row="${escapeHtml(String(row.rowId))}" title="AWS developer-services mapping option for this row (re-prices it)">${opts}</select>`;
+}
+
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
@@ -5162,7 +5319,7 @@ function mappingFlagBadge(row) {
     return ` <span class="size-flag size-flag-removed" title="Removed from both sides of the BOM">REMOVED</span>`;
   }
   if (row.costAction === "carry") {
-    return ` <span class="size-flag size-flag-carried" title="OCI cost set equal to the source AWS cost">CARRIED OVER</span>`;
+    return ` <span class="size-flag size-flag-carried" title="OCI cost set equal to the source ${escapeHtml(cloudDisplayName())} cost">CARRIED OVER</span>`;
   }
   if (state.approvedFlags[row.rowId]) {
     return ` <span class="size-flag size-flag-approved" title="Mapping approved">✓ approved</span>`;
@@ -5181,7 +5338,7 @@ function costActionSelectHtml(row) {
   const cur = row.costAction || "estimate";
   const opts = [
     ["estimate", "Use OCI estimate"],
-    ["carry", "Carry over AWS cost"],
+    ["carry", `Carry over ${cloudDisplayName()} cost`],
     ["remove", "Remove from BOM"],
   ].map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`).join("");
   return `<select class="cell-select cost-action-select" data-cost-row="${escapeHtml(String(row.rowId))}">${opts}</select>`;
@@ -5269,7 +5426,16 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false, co
         key: "ociTarget",
         label: "OCI Target",
         sortValue: (row) => row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review",
-        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + computeShapeBadge(row) + mappingFlagBadge(row),
+        render: (row) => escapeHtml(row.fullServiceMapping?.ociProduct || row.lineItems?.[0]?.description || "Needs review") + computeShapeBadge(row) + mappingFlagBadge(row) + sqlPathSelectHtml(row) + ghPathSelectHtml(row) + awsDevPathSelectHtml(row) + azFwPathSelectHtml(row) + azRedisPathSelectHtml(row),
+      },
+      {
+        key: "shape",
+        label: "OCI Shape",
+        sortValue: (row) => row.shapeUsed?.label || "",
+        // Same per-row shape alteration as on-prem mode, for rows priced as VMs.
+        render: (row) => (row.shapeUsed && Number(row.specs?.ocpus || 0) > 0)
+          ? `${familySelectHtml(row)} ${shapeSelectHtml(row)}`
+          : "-",
       },
       {
         key: "usage",
@@ -5316,15 +5482,28 @@ function renderResultsTable(rows, fullServiceBeta = false, cloudBill = false, co
     // Left-sidebar source-service filter (built from ALL rows so you can re-check).
     renderSourceFilter(rows);
     const filtered = rows.filter((r) => !state.hiddenSources[rowSourceName(r)]);
-    // Default order: flagged ("may not be optimal") rows on top, then everything
-    // by total cost on the bill (source cost) descending.
+    // Default order: flagged-for-review rows on top, GROUPED by source service;
+    // groups ordered by their total cost on the bill (source cost) descending,
+    // rows within a group by source cost descending. Unflagged rows follow, by
+    // source cost descending.
     const billCost = (r) => Number(r.sourceMonthlyCost || 0);
-    const ordered = filtered.slice().sort((a, b) => {
-      const fa = flagActive(a) ? 1 : 0;
-      const fb = flagActive(b) ? 1 : 0;
-      if (fa !== fb) return fb - fa;
+    const flagged = filtered.filter((r) => flagActive(r));
+    const unflagged = filtered.filter((r) => !flagActive(r));
+    const groupTotals = new Map();
+    flagged.forEach((r) => {
+      const g = rowSourceName(r);
+      groupTotals.set(g, (groupTotals.get(g) || 0) + billCost(r));
+    });
+    flagged.sort((a, b) => {
+      const ga = rowSourceName(a);
+      const gb = rowSourceName(b);
+      if (ga !== gb) {
+        return (groupTotals.get(gb) || 0) - (groupTotals.get(ga) || 0) || ga.localeCompare(gb);
+      }
       return billCost(b) - billCost(a);
     });
+    unflagged.sort((a, b) => billCost(b) - billCost(a));
+    const ordered = flagged.concat(unflagged);
     renderResultTableFromColumns(ordered, columns);
     syncBulkBar();
     return;
@@ -5499,6 +5678,39 @@ if (els.resultsTable) {
     const costSel = event.target.closest("select[data-cost-row]");
     if (costSel) {
       applyCostOverride(costSel.dataset.costRow, costSel.value);
+      return;
+    }
+    // Azure SQL DTU conversion-path dropdown -> per-row override and re-price.
+    const sqlSel = event.target.closest("select[data-sql-path-row]");
+    if (sqlSel) {
+      state.sqlPathOverrides[sqlSel.dataset.sqlPathRow] = sqlSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    // Direct-GitHub mapping dropdown -> per-row override and re-price.
+    const ghSel = event.target.closest("select[data-gh-path-row]");
+    if (ghSel) {
+      state.ghPathOverrides[ghSel.dataset.ghPathRow] = ghSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    // AWS developer-services mapping dropdown -> per-row override and re-price.
+    const azRedisSel = event.target.closest("select[data-az-redis-path-row]");
+    if (azRedisSel) {
+      state.redisPathOverrides[azRedisSel.dataset.azRedisPathRow] = azRedisSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    const azFwSel = event.target.closest("select[data-az-fw-path-row]");
+    if (azFwSel) {
+      state.fwPathOverrides[azFwSel.dataset.azFwPathRow] = azFwSel.value;
+      priceRows({ keepView: true });
+      return;
+    }
+    const awsDevSel = event.target.closest("select[data-aws-dev-path-row]");
+    if (awsDevSel) {
+      state.awsDevOverrides[awsDevSel.dataset.awsDevPathRow] = awsDevSel.value;
+      priceRows({ keepView: true });
       return;
     }
     // Per-row selection checkbox.

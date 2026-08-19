@@ -987,6 +987,13 @@
       ],
       "category": "Observability and Management",
       "ociProduct": "OCI Resource Manager"
+    },
+    {
+      "keywords": [
+        "standard data transfer out"
+      ],
+      "category": "Networking",
+      "ociProduct": "OCI Outbound Data Transfer"
     }
   ]
 }
